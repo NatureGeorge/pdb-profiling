@@ -1,5 +1,5 @@
 # pdb-profiling
-
+![cover](docs/figs/cover.png)
 Profiling Protein Structures from Protein Data Bank and integrate various resources.
 
 ## Goal
