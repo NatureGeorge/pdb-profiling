@@ -25,11 +25,14 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
 
 ## Architecture Design
 
-* Processer
+* Processers
 * Scheduler
 * Fethcer
 * Pipelines
 * Engine
+* Middlewares
+  * Fetcher Middlewares
+  * Processer Middlewares
 
 ![Software Architecture](docs/figs/Software_Architecture.png)
 
@@ -60,6 +63,13 @@ Processer -> Scheduler -> Fetcher -> Processer/Pipelines -> Scheduler
     * in the process
   * Deliver results to the `engine` (towards the `pipelines`)
 
+#### Learn from `Apache Airflow`
+
+* Job Schedular
+  * Multiple tasks
+* Directed Acyclic Grapg (DAG)
+* DAG Definition File
+
 ### Scheduler
 
 It collects requests to be sent to `fetcher`.
@@ -72,6 +82,7 @@ It collects requests to be sent to `fetcher`.
 
 ### Fethcer
 
+* Acceot requests from the `engine` (from the `scheduler`)
 * Fetch data via Internet (RESTful API) or local DataBase as defined by requests
 * Deliver results to the `engine` (towards the `processer`)
 
@@ -86,6 +97,36 @@ It collects requests to be sent to `fetcher`.
 * Output results
   * database
   * file system
+
+### Middlewares
+
+#### Fetcher Middlewares
+
+`Fetcher middlewares` are specific hooks that sit between the `Engine` and the `fetcher` and process requests when they pass from the `Engine` to the `fetcher`, and responses that pass from `fetcher` to the `Engine`.
+
+* process a request just before it is sent to the `fetcher`
+  * i.e., lowercase letter 
+* silently drop some requests
+  * i.e., drop invalid ids
+* change received response before passing it to a `processer`
+  * i.e., re-format?
+* send a new Request instead of passing received response to a `processer`
+  * i.e., 505 error...
+* pass response to a `processer` without fetching data
+  * i.e., none/nan/empty data
+
+#### Processer Middlewares
+
+`Processer middlewares` are specific hooks that sit between the `Engine` and the `processers` and are able to process `processer` input (responses) and output (items and requests).
+
+Use a `processer middleware` if you need to:
+
+* post-process output of `processer` callbacks - change/add/remove requests or items
+* post-process start_requests
+* handle spider exceptions
+* call errback instead of callback for some of the requests based on response content
+
+![running example](docs/figs/Running_Example_1.png)
 
 ## Copyright Notice
 
