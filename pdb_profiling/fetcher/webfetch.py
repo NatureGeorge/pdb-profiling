@@ -33,7 +33,10 @@ class UnsyncFetch(Abclog):
       the response data could be a large file
     * Parameters of `tenacity.retry` is built-in
     
-    Reference (following packages provide me with a lot of insights and inspiration)
+    following packages provide me with a lot of insights and inspiration
+
+    Reference 
+    ---------
 
         `aiohttp`
 
