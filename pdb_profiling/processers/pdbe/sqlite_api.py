@@ -1,0 +1,306 @@
+# @Created Date: 2020-05-26 08:02:13 pm
+# @Filename: sqlite_api.py
+# @Email:  1730416009@stu.suda.edu.cn
+# @Author: ZeFeng Zhu
+# @Last Modified: 2020-05-26 08:02:16 pm
+# @Copyright (c) 2020 MinghuiGroup, Soochow University
+import asyncio
+import databases
+import orm
+import sqlalchemy
+from time import perf_counter
+import pandas as pd
+from unsync import unsync
+from typing import Dict, Iterable
+
+converters = {
+    "pdb_id": str,
+    "entity_id": str,
+    "chain_id": str,
+    "PDB_REV_DATE_ORIGINAL": str,
+    "FIRST_REV_DATE": str,
+    "PDB_REV_DATE": str,
+    "REVISION_DATE": str,
+    "resolution": float,
+    "METHOD_CLASS": str,
+    "BOUND_LIGAND_COUNT": int,
+    "BOUND_MOL_COUNT": int,
+    "nucleotides_entity_type": str,
+    "has_hybrid_nucleotides": bool,
+    # SEQRES_Info
+    "SEQRES_COUNT": int,
+    "AVG_OBS_RATIO": float,
+    "AVG_OBS_OBS_RATIO": float,
+    "NON_INDEX": str,
+    "UNK_INDEX": str,
+    "MIS_INDEX": str,
+    "UNK_COUNT": int,
+    "PURE_SEQRES_COUNT": int,
+    "OBS_RECORD_COUNT": int,
+    "OBS_UNK_COUNT": int,
+    "ATOM_RECORD_COUNT": int,
+    # SIFTS_Info
+    "UniProt": str,
+    "identity": float,
+    "pdb_range": str,
+    "unp_range": str,
+    "group_info": int,
+    "pdb_gap_list": str,
+    "unp_gap_list": str,
+    "var_list": str,
+    "repeated": bool,
+    "var_0_count": int,
+    "unp_gap_0_count": int,
+    "unp_pdb_var": int,
+    "sifts_range_tag": str,
+    "new_unp_range": str,
+    "new_pdb_range": str,
+    # Res_Info
+    "residue_number": int,
+    "residue_name": str,
+    "obs_ratio": float,
+    "author_residue_number": int,
+    "author_insertion_code": str}
+
+
+class Sqlite_API(object):
+
+    metadata = sqlalchemy.MetaData()
+    database = None
+
+    def init_table_model(self):
+        class Entry_Info(orm.Model):
+            __tablename__ = 'entry_info'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            PDB_REV_DATE_ORIGINAL = orm.String(max_length=19)
+            FIRST_REV_DATE = orm.String(max_length=19)
+            PDB_REV_DATE = orm.String(max_length=19)
+            REVISION_DATE = orm.String(max_length=19)
+            resolution = orm.Float()
+            METHOD_CLASS = orm.String(max_length=5)
+            BOUND_LIGAND_COUNT = orm.Integer()
+            BOUND_MOL_COUNT = orm.Integer()
+            nucleotides_entity_type = orm.String(
+                max_length=100, allow_blank=True, default='')
+            has_hybrid_nucleotides = orm.Boolean()
+
+        class SEQRES_Info(orm.Model):
+            __tablename__ = 'seqres_info'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.String(max_length=4, primary_key=True)
+            chain_id = orm.String(max_length=4, primary_key=True)
+            SEQRES_COUNT = orm.Integer()
+            AVG_OBS_RATIO = orm.Float()
+            AVG_OBS_OBS_RATIO = orm.Float()
+            NON_INDEX = orm.Text(allow_blank=True, default='')
+            UNK_INDEX = orm.Text(allow_blank=True, default='')
+            MIS_INDEX = orm.Text(allow_blank=True, default='')
+            UNK_COUNT = orm.Integer()
+            PURE_SEQRES_COUNT = orm.Integer()
+            OBS_RECORD_COUNT = orm.Integer()
+            OBS_UNK_COUNT = orm.Integer()
+            ATOM_RECORD_COUNT = orm.Integer()
+
+        class SIFTS_Info(orm.Model):
+            __tablename__ = 'sifts_info'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=20, primary_key=True)
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.String(max_length=4, primary_key=True)
+            chain_id = orm.String(max_length=4, primary_key=True)
+            identity = orm.Float()
+            pdb_range = orm.Text()
+            unp_range = orm.Text()
+            group_info = orm.Integer()
+            pdb_gap_list = orm.Text()
+            unp_gap_list = orm.Text()
+            var_list = orm.Text()
+            repeated = orm.Boolean()
+            var_0_count = orm.Integer()
+            unp_gap_0_count = orm.Integer()
+            unp_pdb_var = orm.Integer()
+            sifts_range_tag = orm.String(max_length=25)
+            new_unp_range = orm.Text()
+            new_pdb_range = orm.Text()
+
+        class PDBRes_Info(orm.Model):
+            __tablename__ = 'pdbres_info'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.String(max_length=4, primary_key=True)
+            chain_id = orm.String(max_length=4, primary_key=True)
+            residue_number = orm.Integer(primary_key=True)
+            residue_name = orm.String(max_length=10)
+            obs_ratio = orm.Float()
+            author_residue_number = orm.Integer()
+            author_insertion_code = orm.String(
+                max_length=4, allow_blank=True, default='')
+    
+        self.Entry_Info = Entry_Info
+        self.SEQRES_Info = SEQRES_Info
+        self.SIFTS_Info = SIFTS_Info
+        self.PDBRes_Info = PDBRes_Info
+
+    def __init__(self, url: str, drop_all: bool=False):
+        self.database = databases.Database(url)
+        self.engine = sqlalchemy.create_engine(url)
+        self.init_table_model()
+        if drop_all:
+            self.metadata.drop_all(self.engine, checkfirst=True)
+        self.metadata.create_all(self.engine, checkfirst=True)
+
+    def sync_insert(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE"):
+        self.engine.execute(
+            table.__table__.insert().prefix_with(prefix_with),
+            values)
+    
+    @unsync
+    async def async_insert(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE"):
+        await self.database.execute_many(
+            query=table.__table__.insert().prefix_with(prefix_with),
+            values=values)
+
+
+
+
+# Create the database
+# start = perf_counter()
+# engine = sqlalchemy.create_engine(str(database.url))
+# metadata.drop_all(engine, checkfirst=True)
+# metadata.create_all(engine, checkfirst=True)
+# print('init db: {:.5f}s'.format(perf_counter()-start))
+
+
+@unsync
+async def main():
+    start = perf_counter()
+    sqlite_api = Sqlite_API("sqlite:///../../../test/db/orm_db_test.db")
+    print('init db: {:.5f}s'.format(perf_counter()-start))
+    '''
+    for index, (Info, file) in enumerate(zip((sqlite_api.Entry_Info, sqlite_api.SEQRES_Info, sqlite_api.SIFTS_Info, sqlite_api.PDBRes_Info), (  #
+            "C:/Download/20200525/LHY/entry_info.tsv",
+            "C:/Download/20200525/LHY/seqres_info.tsv",
+            "C:/Download/20200525/LHY/sifts_mapping.tsv",
+            "C:/Download/20200525/LHY/pdbres_info.tsv"))):
+        if index:
+            start = perf_counter()
+            values = pd.read_csv(file, sep="\t",
+                             converters=converters).drop_duplicates().to_dict('records')
+        else:
+            start = perf_counter()
+            values = pd.read_csv(file, sep="\t",
+                                 converters=converters).drop_duplicates(subset=['pdb_id'], keep='last').to_dict('records')
+        print('init read_csv: {:.5f}s'.format(perf_counter()-start))
+        # query = Info.__table__.insert().prefix_with("OR IGNORE")
+        start = perf_counter()
+        # await database.execute_many(query=query, values=values)
+        # engine.execute(query, values)
+        sqlite_api.sync_insert(Info, values)
+        print('init insert: {:.5f}s'.format(perf_counter()-start))
+    '''
+    # .all()
+    # entries = await Entry_Info.objects.all()
+    # print(entries)
+    # entries = await SEQRES_Info.objects.all()
+    # print(entries)
+    start = perf_counter()
+    # entries = await SIFTS_Info.objects.all()
+    # example = await SIFTS_Info.objects.get(UniProt='Q92793')
+    # example = await Entry_Info.objects.filter(pdb_id__in=('4u7t', '6g6j')).all()
+    # example = await SEQRES_Info.objects.filter(pdb_id__in=('4u7t', '6g6j')).all()
+    # example = await SIFTS_Info.objects.filter(UniProt__in=('P12270', 'Q14980')).all()
+    # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
+    # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
+    example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).limit(100).all()
+    print('init select: {:.5f}s'.format(perf_counter()-start))
+    res = pd.DataFrame(example)
+    print(res)
+    print(len(res), len(res.drop_duplicates()))
+
+    # TODO: Batch Insert [Sync]✅
+    # TODO: Check the existence of specificed data set [Async]✅
+
+
+# asyncio.get_event_loop().run_until_complete(main())
+main().result()
+
+'''
+    await Entry_Info.objects.create(
+        pdb_id="5qqe",
+        PDB_REV_DATE_ORIGINAL="2019-05-03 00:00:00",
+        FIRST_REV_DATE="2019-12-18 00:00:00",
+        PDB_REV_DATE="2019-12-18 00:00:00",
+        REVISION_DATE="2019-12-18 00:00:00",
+        resolution=1.95,
+        METHOD_CLASS="x-ray",
+        BOUND_LIGAND_COUNT=2,
+        BOUND_MOL_COUNT=2,
+        nucleotides_entity_type="{}",
+        has_hybrid_nucleotides=False)
+    await Entry_Info.objects.create(
+        pdb_id="1m6b",
+        PDB_REV_DATE_ORIGINAL="2002-07-15 00:00:00",
+        FIRST_REV_DATE="2002-08-02 00:00:00",
+        PDB_REV_DATE="2011-07-13 00:00:00",
+        REVISION_DATE="2011-07-13 00:00:00",
+        resolution=2.6,
+        METHOD_CLASS="x-ray",
+        BOUND_LIGAND_COUNT=9,
+        BOUND_MOL_COUNT=8,
+        nucleotides_entity_type="{}",
+        has_hybrid_nucleotides=False)
+    await Entry_Info.objects.create(
+        pdb_id="6gj7",
+        PDB_REV_DATE_ORIGINAL="2018-05-16 00:00:00",
+        FIRST_REV_DATE="2019-07-31 00:00:00",
+        PDB_REV_DATE="2019-08-14 00:00:00",
+        REVISION_DATE="2019-08-14 00:00:00",
+        resolution=1.67,
+        METHOD_CLASS="x-ray",
+        BOUND_LIGAND_COUNT=3,
+        BOUND_MOL_COUNT=2,
+        nucleotides_entity_type="{}",
+        has_hybrid_nucleotides=False)
+
+    await SEQRES_Info.objects.create(
+        pdb_id="5qqe",
+        entity_id="2",
+        chain_id="B",
+        SEQRES_COUNT=182,
+        AVG_OBS_RATIO=0.954521978,
+        AVG_OBS_OBS_RATIO=0.970519553,
+        NON_INDEX="[[1,2],[182,182]]",
+        UNK_INDEX="[]",
+        MIS_INDEX="[]",
+        UNK_COUNT=0,
+        PURE_SEQRES_COUNT=182,
+        OBS_RECORD_COUNT=179,
+        OBS_UNK_COUNT=0,
+        ATOM_RECORD_COUNT=179)
+
+    await SIFTS_Info.objects.create(
+        UniProt="Q9Y6V0",
+        pdb_id="1ujd",
+        entity_id="1",
+        chain_id="A",
+        identity=1,
+        pdb_range="[[8,111]]",
+        unp_range="[[4489,4592]]",
+        group_info=1,
+        pdb_gap_list="[]",
+        unp_gap_list="[]",
+        var_list="[0]",
+        repeated=False,
+        var_0_count=1,
+        unp_gap_0_count=0,
+        unp_pdb_var=0,
+        sifts_range_tag="Safe",
+        new_unp_range="[[4489,4592]]",
+        new_pdb_range="[[8,111]]")
+'''
