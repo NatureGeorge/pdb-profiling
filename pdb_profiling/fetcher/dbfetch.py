@@ -1,5 +1,11 @@
+# @Created Date: 2020-05-25 10:21:37 pm
+# @Filename: dbfetch.py
+# @Email:  1730416009@stu.suda.edu.cn
+# @Author: ZeFeng Zhu
+# @Last Modified: 2020-05-26 12:17:51 am
+# @Copyright (c) 2020 MinghuiGroup, Soochow University
 import asyncio
-from unsync import unsync
+from unsync import unsync, Unfuture
 from neo4j import GraphDatabase, basic_auth, READ_ACCESS
 from neo4j.exceptions import ServiceUnavailable
 from typing import Callable, List, Optional
@@ -9,7 +15,7 @@ from pandas import DataFrame, concat
 Currently support DB:
 
 * Neo4j
-* ...
+* Sqlite
 """
 
 
@@ -27,13 +33,13 @@ class Neo4j:
     # How long to wait after each successive failure.
     RETRY_WAITS: List = [0, 1, 4]
 
-    def __init__(self, config, concur_req: int = 100, log_func: Callable = print):
+    def __init__(self, config, concur_req: int = 200, log_func: Callable = print):
         self._config = config
         self._semaphore = asyncio.Semaphore(concur_req)
         self.log_func = log_func
     
     @unsync
-    async def connnect(self):
+    async def connnect(self) -> Unfuture:
         for retry_wait in self.RETRY_WAITS:
             try:
                 await self.init_driver()
@@ -45,7 +51,8 @@ class Neo4j:
                     self.log_func(f'!!!: retrying to Init DB; err: {e}')
                     # wait for 0, 1, 3... seconds.
                     await asyncio.sleep(retry_wait)
-    
+        return self
+
     @unsync
     def init_driver(self):
         self.log_func("Init Neo4j DataBase Driver")
@@ -80,15 +87,18 @@ class Neo4j:
 
 
 if __name__ == "__main__":
-    config = {}
+    import sys
+    sys.path.append("C:/GitWorks/pdb-profiling/pdb_profiling/processers/pdbe")
+    from neo4j_api import Entry
+    config = {'user': 'neo4j', 'pass': 'p1he/pr2o/ile3',
+              'url': 'bolt://10.20.212.153:7687'}
     queries = [
-        "MATCH(entry: Entry{ID: '5akd'})-[:HAS_ENTITY] -> (entity: Entity{POLYMER_TYPE: 'P'})-[:HAS_RESIDUE_CONFLICT] -> (resCon: ResidueConflict) RETURN entry.ID, entity.ID, resCon.DETAILS, resCon.ID",
-        "MATCH(entry: Entry{ID: '1a01'})-[:HAS_ENTITY] -> (entity: Entity{POLYMER_TYPE: 'P'})-[:HAS_RESIDUE_CONFLICT] -> (resCon: ResidueConflict) RETURN entry.ID, entity.ID, resCon.DETAILS, resCon.ID",
-        "MATCH(entry: Entry{ID: '2xyn'})-[:HAS_ENTITY] -> (entity: Entity{POLYMER_TYPE: 'P'})-[:HAS_RESIDUE_CONFLICT] -> (resCon: ResidueConflict) RETURN entry.ID, entity.ID, resCon.DETAILS, resCon.ID"
+        Entry.get_residues('1a01', '1', 'A', observed_only=True),
+        Entry.get_residues('2xyn', '1', 'A', observed_only=True),
+        Entry.get_residues('1z8g', '1', 'A', observed_only=True)
         ]
-    demo = Neo4j(config)
-    demo.connnect().result()
-    ress = [demo.afetch(query).result() for query in queries]
+    demo = Neo4j(config).connnect().result()
+    ress = [demo.afetch(query, **kwargs).result() for query, kwargs in queries]
     result = concat((DataFrame(dict(i) for i in res) for res in ress), ignore_index=True, sort=False)
     print(result)
     demo.close()

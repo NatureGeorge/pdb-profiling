@@ -66,7 +66,6 @@ converters = {
 class Sqlite_API(object):
 
     metadata = sqlalchemy.MetaData()
-    database = None
 
     def init_table_model(self):
         class Entry_Info(orm.Model):
@@ -167,16 +166,6 @@ class Sqlite_API(object):
             values=values)
 
 
-
-
-# Create the database
-# start = perf_counter()
-# engine = sqlalchemy.create_engine(str(database.url))
-# metadata.drop_all(engine, checkfirst=True)
-# metadata.create_all(engine, checkfirst=True)
-# print('init db: {:.5f}s'.format(perf_counter()-start))
-
-
 @unsync
 async def main():
     start = perf_counter()
@@ -204,11 +193,6 @@ async def main():
         sqlite_api.sync_insert(Info, values)
         print('init insert: {:.5f}s'.format(perf_counter()-start))
     '''
-    # .all()
-    # entries = await Entry_Info.objects.all()
-    # print(entries)
-    # entries = await SEQRES_Info.objects.all()
-    # print(entries)
     start = perf_counter()
     # entries = await SIFTS_Info.objects.all()
     # example = await SIFTS_Info.objects.get(UniProt='Q92793')
@@ -217,90 +201,15 @@ async def main():
     # example = await SIFTS_Info.objects.filter(UniProt__in=('P12270', 'Q14980')).all()
     # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
-    example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).limit(100).all()
+    # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).limit(100).all()
+    example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
+    # .filter(obs_ratio__lt=1).
     print('init select: {:.5f}s'.format(perf_counter()-start))
     res = pd.DataFrame(example)
     print(res)
     print(len(res), len(res.drop_duplicates()))
-
-    # TODO: Batch Insert [Sync]✅
-    # TODO: Check the existence of specificed data set [Async]✅
+    # sqlite_api.sync_insert(sqlite_api.PDBRes_Info, [])
 
 
-# asyncio.get_event_loop().run_until_complete(main())
-main().result()
-
-'''
-    await Entry_Info.objects.create(
-        pdb_id="5qqe",
-        PDB_REV_DATE_ORIGINAL="2019-05-03 00:00:00",
-        FIRST_REV_DATE="2019-12-18 00:00:00",
-        PDB_REV_DATE="2019-12-18 00:00:00",
-        REVISION_DATE="2019-12-18 00:00:00",
-        resolution=1.95,
-        METHOD_CLASS="x-ray",
-        BOUND_LIGAND_COUNT=2,
-        BOUND_MOL_COUNT=2,
-        nucleotides_entity_type="{}",
-        has_hybrid_nucleotides=False)
-    await Entry_Info.objects.create(
-        pdb_id="1m6b",
-        PDB_REV_DATE_ORIGINAL="2002-07-15 00:00:00",
-        FIRST_REV_DATE="2002-08-02 00:00:00",
-        PDB_REV_DATE="2011-07-13 00:00:00",
-        REVISION_DATE="2011-07-13 00:00:00",
-        resolution=2.6,
-        METHOD_CLASS="x-ray",
-        BOUND_LIGAND_COUNT=9,
-        BOUND_MOL_COUNT=8,
-        nucleotides_entity_type="{}",
-        has_hybrid_nucleotides=False)
-    await Entry_Info.objects.create(
-        pdb_id="6gj7",
-        PDB_REV_DATE_ORIGINAL="2018-05-16 00:00:00",
-        FIRST_REV_DATE="2019-07-31 00:00:00",
-        PDB_REV_DATE="2019-08-14 00:00:00",
-        REVISION_DATE="2019-08-14 00:00:00",
-        resolution=1.67,
-        METHOD_CLASS="x-ray",
-        BOUND_LIGAND_COUNT=3,
-        BOUND_MOL_COUNT=2,
-        nucleotides_entity_type="{}",
-        has_hybrid_nucleotides=False)
-
-    await SEQRES_Info.objects.create(
-        pdb_id="5qqe",
-        entity_id="2",
-        chain_id="B",
-        SEQRES_COUNT=182,
-        AVG_OBS_RATIO=0.954521978,
-        AVG_OBS_OBS_RATIO=0.970519553,
-        NON_INDEX="[[1,2],[182,182]]",
-        UNK_INDEX="[]",
-        MIS_INDEX="[]",
-        UNK_COUNT=0,
-        PURE_SEQRES_COUNT=182,
-        OBS_RECORD_COUNT=179,
-        OBS_UNK_COUNT=0,
-        ATOM_RECORD_COUNT=179)
-
-    await SIFTS_Info.objects.create(
-        UniProt="Q9Y6V0",
-        pdb_id="1ujd",
-        entity_id="1",
-        chain_id="A",
-        identity=1,
-        pdb_range="[[8,111]]",
-        unp_range="[[4489,4592]]",
-        group_info=1,
-        pdb_gap_list="[]",
-        unp_gap_list="[]",
-        var_list="[0]",
-        repeated=False,
-        var_0_count=1,
-        unp_gap_0_count=0,
-        unp_pdb_var=0,
-        sifts_range_tag="Safe",
-        new_unp_range="[[4489,4592]]",
-        new_pdb_range="[[8,111]]")
-'''
+if __name__ == '__main__':
+    main().result()
