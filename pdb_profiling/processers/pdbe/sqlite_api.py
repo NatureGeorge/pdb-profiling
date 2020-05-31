@@ -60,7 +60,13 @@ converters = {
     "residue_name": str,
     "obs_ratio": float,
     "author_residue_number": int,
-    "author_insertion_code": str}
+    "author_insertion_code": str,
+    # Site_Info
+    "from_id": str,
+    "Ref": str,
+    "Pos": int,
+    "Alt": str
+    }
 
 
 class Sqlite_API(object):
@@ -140,11 +146,22 @@ class Sqlite_API(object):
             author_residue_number = orm.Integer()
             author_insertion_code = orm.String(
                 max_length=4, allow_blank=True, default='')
+            
+        class Site_Info(orm.Model):
+            __tablename__ = 'site_info'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            from_id = orm.String(max_length=20, primary_key=True)
+            Ref = orm.String(max_length=3, primary_key=True)
+            Pos = orm.Integer(primary_key=True)
+            Alt = orm.String(max_length=3, primary_key=True)
+            # code = orm.String(max_length=3, primary_key=True, allow_blank=True, allow_null=True, default='')
     
         self.Entry_Info = Entry_Info
         self.SEQRES_Info = SEQRES_Info
         self.SIFTS_Info = SIFTS_Info
         self.PDBRes_Info = PDBRes_Info
+        self.Site_Info = Site_Info
 
     def __init__(self, url: str, drop_all: bool=False):
         self.database = databases.Database(url)
@@ -193,6 +210,11 @@ async def main():
         sqlite_api.sync_insert(Info, values)
         print('init insert: {:.5f}s'.format(perf_counter()-start))
     '''
+    site_df = pd.read_csv(
+        r'C:\Download\20200525\LHY\site_info_demo.tsv', sep='\t', converters=converters)
+    start = perf_counter()
+    sqlite_api.sync_insert(sqlite_api.Site_Info, site_df.to_dict('records'))
+    print('init insert: {:.5f}s'.format(perf_counter()-start))
     start = perf_counter()
     # entries = await SIFTS_Info.objects.all()
     # example = await SIFTS_Info.objects.get(UniProt='Q92793')
@@ -202,7 +224,8 @@ async def main():
     # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
     # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).limit(100).all()
-    example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
+    # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
+    example = await sqlite_api.Site_Info.objects.limit(50).all()
     # .filter(obs_ratio__lt=1).
     print('init select: {:.5f}s'.format(perf_counter()-start))
     res = pd.DataFrame(example)

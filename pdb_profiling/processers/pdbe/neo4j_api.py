@@ -18,6 +18,7 @@ from Bio import Align
 from Bio.SubsMat import MatrixInfo as matlist
 from unsync import unsync, Unfuture
 import asyncio
+import traceback
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
@@ -207,6 +208,24 @@ def tidy_na(dfrm: pd.DataFrame, colName: str, fill, astype):
     dfrm[colName] = dfrm[colName].fillna(fill).apply(astype)
 
 
+def slice_series(se: Iterable) -> Dict:
+    '''
+    For Sorted Series
+    '''
+    data = {}
+    cur = next(iter(se))
+    start = 0
+    for index, i in enumerate(se):
+        if i != cur:
+            assert cur not in data, "Invalid Series"
+            data[cur] = (start, index)
+            cur = i
+            start = index
+    assert cur not in data, "Invalid Series"
+    data[cur] = (start, index+1)
+    return data
+
+
 class Entry(object):
 
     session = None
@@ -297,12 +316,14 @@ class Entry(object):
             dfrm = cls.to_data_frame(res)
         if len(dfrm) == 0:
             return None
-        dfrm['polymer_type'] = dfrm.apply(lambda x: cls.get_polymer_type(x['DNA_COUNT'], x['RNA_COUNT']), axis=1)
+        # dfrm['polymer_type'] = dfrm.apply(lambda x: cls.get_polymer_type(x['DNA_COUNT'], x['RNA_COUNT']), axis=1)
+        dfrm['polymer_type'] = [cls.get_polymer_type(x, y) for x, y in zip(dfrm['DNA_COUNT'], dfrm['RNA_COUNT'])]
         res = pd.DataFrame(
             ((pdb_id, json.dumps(dict(zip(data.entity_id, data.polymer_type))))
              for pdb_id, data in dfrm.groupby('pdb_id')),
             columns=('pdb_id', 'nucleotides_entity_type'))
-        res['has_hybrid_nucleotides'] = res.nucleotides_entity_type.apply(lambda x: 'D\/R' in x)
+        # res['has_hybrid_nucleotides'] = res.nucleotides_entity_type.apply(lambda x: 'D\/R' in x)
+        res['has_hybrid_nucleotides'] = ['D\/R' in x for x in res.nucleotides_entity_type.values]
         return res
 
     @classmethod
@@ -351,9 +372,9 @@ class Entry(object):
         dfrm['UNK_COUNT'] = dfrm.UNK_INDEX.apply(len)
         dfrm['PURE_SEQRES_COUNT'] = dfrm.SEQRES_COUNT - dfrm.NON_INDEX.apply(len)
         dfrm['OBS_RECORD_COUNT'] = dfrm.SEQRES_COUNT - dfrm.MIS_INDEX.apply(len)
-        dfrm.NON_INDEX = dfrm.NON_INDEX.apply(index2range)
-        dfrm.UNK_INDEX = dfrm.UNK_INDEX.apply(index2range)
-        dfrm.MIS_INDEX = dfrm.MIS_INDEX.apply(index2range)
+        dfrm.NON_INDEX = [index2range(x) for x in dfrm.NON_INDEX]
+        dfrm.UNK_INDEX = [index2range(x) for x in dfrm.UNK_INDEX]
+        dfrm.MIS_INDEX = [index2range(x) for x in dfrm.MIS_INDEX]
         dfrm[['OBS_UNK_COUNT', 'ATOM_RECORD_COUNT']] = dfrm.apply(lambda x: get_obs_rel_count(
             x['SEQRES_COUNT'], x['MIS_INDEX'], x['UNK_INDEX'], x['NON_INDEX']), axis=1, result_type='expand')
         return dfrm
@@ -859,10 +880,25 @@ class SeqPairwiseAlign(object):
         return segments1, segments2
 
 
+@lru_cache()
+def convert_index(lrange_str: str, rrange_str: str, site: int):
+    lrange = json.loads(lrange_str)
+    rrange = json.loads(rrange_str)
+    for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+        assert (lend - lstart) == (rend-rstart)
+        if (site >= rstart) and (site <= rend):
+            return int(site + lstart - rstart)
+        else:
+            continue
+    return -1
+
+
 class Neo4j_API(Abclog):
     
+    output_kwargs = {'sep': '\t', 'index': False, 'header': False, 'mode': 'a'}
     db = None
     sqlite_api = None
+    unpmap_filter:Dict = None
     sifts_filter:Dict = None
     entry_filter:Dict = None
     entry_info_all = ('method', 'ligand', 'nucleotides')
@@ -878,7 +914,7 @@ class Neo4j_API(Abclog):
 
     @classmethod
     @unsync
-    async def process(cls, lyst: Union[Iterable, Unfuture]):
+    async def filtered_sifts(cls, lyst: Union[Iterable, Unfuture]):
         '''
         Map from unp to pdb [DB]
         
@@ -988,6 +1024,70 @@ class Neo4j_API(Abclog):
             else:
                 return None
 
+    @classmethod
+    @unsync
+    async def amap_to_pdb(cls, site_df: pd.DataFrame, unp:str, pdb_id: str, entity_id: str, chain_id: str, pdb_range: str, unp_range: str):
+        sqlite_api = cls.sqlite_api
+        sites = [convert_index(pdb_range, unp_range, x) for x in site_df.Pos]
+        site_df['residue_number'] = sites
+        sites = list(set(sites) | set({1}))
+        res = await sqlite_api.Site_Info.objects.filter(
+            pdb_id=pdb_id, entity_id=entity_id,
+            chain_id=chain_id, residue_number__in=sites)
+        if not res:
+            res = await cls.db.afetch(*Entry.get_residues(
+                pdb_id, entity_id,
+                chain_id, sites))
+            res = Entry.to_data_frame(res)
+            if len(res) > 0:
+                sqlite_api.sync_insert(
+                    sqlite_api.Site_Info, res.to_dict('records'))
+            else:
+                return None
+        else:
+            res = pd.DataFrame(res)
+        # try:
+        # except ValueError:
+        # return None
+        merge_df = pd.merge(site_df, res)
+        merge_df['UniProt'] = unp
+        return merge_df
+
+    @classmethod
+    @unsync
+    async def map_to_unp(cls, unp_map_df: pd.DataFrame, sifts_df: pd.DataFrame, path: Union[str, Path]):
+        sqlite_api = cls.sqlite_api
+        focus_cols = ['pdb_id', 'entity_id', 'chain_id',
+                      'new_pdb_range', 'new_unp_range']
+        sifts_nda = sifts_df[focus_cols].to_numpy()
+        yourlist = unp_map_df.yourlist.to_numpy()
+        unp_map_i_dict = slice_series(unp_map_df.UniProt.to_numpy())
+        for unp, (start, end) in slice_series(sifts_df.UniProt.to_numpy()).items():
+            focus_sifts_nda = sifts_nda[start:end]
+            start, end = unp_map_i_dict[unp]
+            from_lyst = np.unique(yourlist[start:end])
+            site_df = await sqlite_api.Site_Info.objects.filter(from_id__in=from_lyst).all()
+            site_df = pd.DataFrame(site_df)
+            try:
+                '''
+                TODO: make it async
+                async with aiofiles.open(cls.outpath, 'a') as fileOb:
+                    for i in (cls.amap_to_pdb(site_df, unp, *record) for record in focus_sifts_nda):
+                        res = await i
+                        pass
+                '''
+                res_map = pd.concat((cls.amap_to_pdb(site_df, unp, *record) for record in focus_sifts_nda), sort=False, ignore_index=True)
+                res_map.to_csv(path, **cls.output_kwargs)
+            except Exception:
+                traceback.print_exc()
+        return path
+
+    @classmethod
+    @unsync
+    async def process(cls, unp_map_df: pd.DataFrame):
+        related_unp = unp_map_df.UniProt.unique()
+        sifts_df = await cls.filtered_sifts(related_unp)
+        return cls.map_to_unp(unp_map_df, sifts_df, '---')
 
 '''
 TODO: 

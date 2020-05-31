@@ -13,18 +13,21 @@ from numpy import nan
 from pathlib import Path
 from typing import Iterator
 from unsync import Unfuture
+import ujson as json
 import sys; sys.path.append("C:/GitWorks/pdb-profiling")
-from pdb_profiling.processers.uniprot.retrieve import MapUniProtID, UniProtFASTA
+from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
+from pdb_profiling.processers.pdbe.neo4j_api import Neo4j_API
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.log import Abclog
+from pdb_profiling.utils import related_dataframe
 
 
 if "\\" in __file__:
     # Windows
-    sep = "\\"
+    _SEP = "\\"
 else:
     # Linux
-    sep = "/"
+    _SEP = "/"
 
 
 def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
@@ -32,13 +35,15 @@ def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
 
 
 @click.group(chain=True, invoke_without_command=False)
-@click.option("--folder", default="./", help="The file folder of new files.", type=click.Path())
+@click.option("--folder", default="", help="The file folder of new files.", type=click.Path())
 @click.option("--loggingpath", default=None, help="The file path of logging.", type=click.Path())
 @click.option('--concurReq', type=int, help="the number of concurent requests", default=100)
 @click.option('--concurRate', type=float, help="the rate of concurent requests", default=1.5)
 @click.option('--useexisting/--no-useexisting', help="whether to use existing result files", default=False, is_flag=True)
 @click.pass_context
-def UniProt(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
+def Interface(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
+    if not folder:
+        return
     click.echo(colorClick("Folder"))
     folder = Path(folder)
     ctx.ensure_object(dict)
@@ -55,7 +60,7 @@ def UniProt(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
     UnsyncFetch.use_existing = useexisting
     
 
-@UniProt.resultcallback()
+@Interface.resultcallback()
 @click.pass_context
 def process_pipeline(ctx, processors, folder, loggingpath, concurreq, concurrate, useexisting):
     iterator = ctx.obj.get('iterator', None)
@@ -67,7 +72,7 @@ def process_pipeline(ctx, processors, folder, loggingpath, concurreq, concurrate
     UnsyncFetch.unsync_tasks(list(iterator)).result()
 
 
-@UniProt.command("idMapping")
+@Interface.command("UniProt.id-mapping")
 @click.option("--input", 
               default="",
               help="The reference file of IDs that need to map via UniProt RESTful API.", 
@@ -98,7 +103,7 @@ def process_pipeline(ctx, processors, folder, loggingpath, concurreq, concurrate
 @click.option('--skiprows', type=int, help="the skiprows parameter of pandas.read_csv", default=None)
 @click.option('--outname', type=str, help="the filename stem of output files", default="unp_yourlist")
 @click.pass_context
-def idMapping(ctx, input, sep, idcol, idtype, usecols, genecol, querychunk, readchunk, nrows, skiprows, outname):
+def idMappingViaUnpApi(ctx, input, sep, idcol, idtype, usecols, genecol, querychunk, readchunk, nrows, skiprows, outname):
     def yieldTasks(df):
         for dfrm in df:
             demo = MapUniProtID(id_col=idcol,
@@ -124,18 +129,18 @@ def idMapping(ctx, input, sep, idcol, idtype, usecols, genecol, querychunk, read
     df = read_csv(input, sep=sep, chunksize=readchunk, nrows=nrows, skiprows=skiprows)
     if isinstance(df, DataFrame):
         df = (df,)
+    click.echo(colorClick("Set Task Iterator", "%s"))
     ctx.obj['iterator'] = yieldTasks(df)
     return processor
     
 
-
-@UniProt.command("downloadSeq")
+@Interface.command("UniProt.download-seq")
 @click.option("--input", default="", help="the file of UniProt IDs", type=click.Path())
 @click.option("--idCol", default=None, help="the column name of UniProt IDs (If not specified, use the first col)", type=str)
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)
 @click.option("--include", default="no", help="whether to include isoform sequences in one single fasta file", type=click.Choice(['yes', 'no']))
 @click.pass_context
-def downloadSeq(ctx, input, idcol, sep, include):
+def downloadUnpSeq(ctx, input, idcol, sep, include):
     def processor(iterator: Iterator[Unfuture]):
         '''Continuations for Retrieving UniProt Fasta Sequence'''
         for task in iterator:
@@ -159,5 +164,26 @@ def downloadSeq(ctx, input, idcol, sep, include):
         return processor
 
 
+@Interface.command("PDB.SIFTS")
+@click.option("--input", default="", help="the file of UniProt Mapping result", type=click.Path())
+@click.option("--sep", default="\t", help="the seperator of input file", type=str)
+@click.option("--filter",
+              default='{"Mapping_status":["eq","Yes"],"Organism":["eq","Homo sapiens (Human)"]}',
+              help="the filter(JSON-Format Dict) of UniProt Mapping result", type=str)
+@click.pass_context
+def sifts(ctx, input, sep, filter):
+    def processor(iterator: Iterator[Unfuture]):
+        '''Continuations for Retrieving UniProt Fasta Sequence'''
+        for task in iterator:
+            yield task.then(Neo4j_API.process)
+
+    filter = json.loads(filter)
+    if input:
+        unp_map_df = read_csv(input, sep, filter)
+    else:
+        pass
+    unp_map_df = related_dataframe(filter, unp_map_df)
+
+
 if __name__ == '__main__':
-    UniProt(obj={})
+    Interface(obj={})

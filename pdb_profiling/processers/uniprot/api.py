@@ -70,7 +70,7 @@ class MapUniProtID(Abclog):
 
         self.init_logger(self.__class__.__name__, logger)
         if dfrm is not None:
-            self.dfrm = dfrm
+            self.dfrm = dfrm.drop_duplicates().reset_index(drop=True)
         else:
             '''
             the length of dataframe is based on:
