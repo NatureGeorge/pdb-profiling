@@ -1,0 +1,16 @@
+aiohttp
+aiofiles
+unsync
+tenacity
+furl
+ujson
+pyexcel
+tablib
+pandas
+numpy
+textdistance
+biopython
+databases
+neo4j
+tqdm
+orm
