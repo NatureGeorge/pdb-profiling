@@ -222,12 +222,10 @@ class MapUniProtID(Abclog):
 
         """
         self.gene_status_col = colName
-        if self.id_col != 'GENENAME':
-
+        if self.id_type != 'GENENAME':
             if self.gene_col is None:
                 handled_df[colName] = True
                 return None
-
             gene_map = self.dfrm[[self.id_col,
                                   self.gene_col]].drop_duplicates()
             gene_map = gene_map.groupby(self.id_col)[self.gene_col].apply(
@@ -356,8 +354,9 @@ class MapUniProtID(Abclog):
         varLyst = [lvs[variable] for variable in variables if variable in lvs]
         final_df = pd.concat(varLyst, sort=False).reset_index(drop=True)
         cano_index = final_df[final_df["canonical_isoform"].notnull()].index
-        final_df.loc[cano_index, "UniProt"] = final_df.loc[cano_index, ].apply(
-            lambda x: x["Entry"] if x["UniProt"] in x["canonical_isoform"] else x["UniProt"], axis=1)
+        if len(cano_index) > 0:
+            final_df.loc[cano_index, "UniProt"] = final_df.loc[cano_index, ].apply(
+                lambda x: x["Entry"] if x["UniProt"] in x["canonical_isoform"] else x["UniProt"], axis=1)
 
         # Add Gene Status
         self.getGeneStatus(final_df)

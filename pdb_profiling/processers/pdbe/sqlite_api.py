@@ -88,7 +88,7 @@ class Sqlite_API(object):
             BOUND_LIGAND_COUNT = orm.Integer()
             BOUND_MOL_COUNT = orm.Integer()
             nucleotides_entity_type = orm.String(
-                max_length=100, allow_blank=True, default='')
+                max_length=100, allow_null=True, allow_blank=True, default='')
             has_hybrid_nucleotides = orm.Boolean()
 
         class SEQRES_Info(orm.Model):
@@ -101,9 +101,9 @@ class Sqlite_API(object):
             SEQRES_COUNT = orm.Integer()
             AVG_OBS_RATIO = orm.Float()
             AVG_OBS_OBS_RATIO = orm.Float()
-            NON_INDEX = orm.Text(allow_blank=True, default='')
-            UNK_INDEX = orm.Text(allow_blank=True, default='')
-            MIS_INDEX = orm.Text(allow_blank=True, default='')
+            NON_INDEX = orm.Text(allow_null=True, allow_blank=True, default='')
+            UNK_INDEX = orm.Text(allow_null=True, allow_blank=True, default='')
+            MIS_INDEX = orm.Text(allow_null=True, allow_blank=True, default='')
             UNK_COUNT = orm.Integer()
             PURE_SEQRES_COUNT = orm.Integer()
             OBS_RECORD_COUNT = orm.Integer()
@@ -134,6 +134,16 @@ class Sqlite_API(object):
             new_pdb_range = orm.Text()
 
         class PDBRes_Info(orm.Model):
+            '''
+            entry.ID as pdb_id, 
+            entity.ID as entity_id, 
+            chain.AUTH_ASYM_ID as chain_id, 
+            res.CHEM_COMP_ID as residue_name, 
+            toInteger(res.ID) as residue_number, 
+            tofloat(inChain.OBSERVED_RATIO) as obs_ratio, 
+            toInteger(inChain.AUTH_SEQ_ID) as author_residue_number, 
+            inChain.PDB_INS_CODE as author_insertion_code ORDER BY residue_number
+            '''
             __tablename__ = 'pdbres_info'
             __metadata__ = self.metadata
             __database__ = self.database
@@ -145,7 +155,7 @@ class Sqlite_API(object):
             obs_ratio = orm.Float()
             author_residue_number = orm.Integer()
             author_insertion_code = orm.String(
-                max_length=4, allow_blank=True, default='')
+                max_length=4, allow_null=True, allow_blank=True, default='')
             
         class Site_Info(orm.Model):
             __tablename__ = 'site_info'
@@ -178,15 +188,21 @@ class Sqlite_API(object):
     
     @unsync
     async def async_insert(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE"):
+        '''
+        # BAD CODE
         await self.database.execute_many(
             query=table.__table__.insert().prefix_with(prefix_with),
             values=values)
+        '''
+        query = table.__table__.insert().values(values).prefix_with(prefix_with)
+        await self.database.execute(query)
 
 
 @unsync
 async def main():
     start = perf_counter()
-    sqlite_api = Sqlite_API("sqlite:///../../../test/db/orm_db_test.db")
+    # sqlite_api = Sqlite_API("sqlite:///../../../test/db/orm_db_test.db")
+    sqlite_api = Sqlite_API("sqlite:///C:\\Download\\20200601\\DB\\local_sqlite_demo.db")
     print('init db: {:.5f}s'.format(perf_counter()-start))
     '''
     for index, (Info, file) in enumerate(zip((sqlite_api.Entry_Info, sqlite_api.SEQRES_Info, sqlite_api.SIFTS_Info, sqlite_api.PDBRes_Info), (  #
@@ -210,11 +226,13 @@ async def main():
         sqlite_api.sync_insert(Info, values)
         print('init insert: {:.5f}s'.format(perf_counter()-start))
     '''
+    '''
     site_df = pd.read_csv(
         r'C:\Download\20200525\LHY\site_info_demo.tsv', sep='\t', converters=converters)
     start = perf_counter()
     sqlite_api.sync_insert(sqlite_api.Site_Info, site_df.to_dict('records'))
     print('init insert: {:.5f}s'.format(perf_counter()-start))
+    '''
     start = perf_counter()
     # entries = await SIFTS_Info.objects.all()
     # example = await SIFTS_Info.objects.get(UniProt='Q92793')
@@ -223,9 +241,10 @@ async def main():
     # example = await SIFTS_Info.objects.filter(UniProt__in=('P12270', 'Q14980')).all()
     # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
-    # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).limit(100).all()
+    # filter(pdb_id__in=['3wwq', '5v8w'])
+    example = await sqlite_api.Entry_Info.objects.limit(1000).all()
     # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
-    example = await sqlite_api.Site_Info.objects.limit(50).all()
+    # example = await sqlite_api.Site_Info.objects.filter(from_id__in=('ENST00000379410', 'ENST00000379409')).all()
     # .filter(obs_ratio__lt=1).
     print('init select: {:.5f}s'.format(perf_counter()-start))
     res = pd.DataFrame(example)
