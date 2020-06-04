@@ -7,12 +7,13 @@
 from typing import Iterable, Iterator, Optional, Union, Generator, Dict, List
 import re
 from time import perf_counter
-import ujson as json
 import pandas as pd
 import numpy as np
 import logging
 from pathlib import Path
+import asyncio
 from unsync import unsync, Unfuture
+from copy import deepcopy
 from collections import Counter
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
@@ -127,7 +128,7 @@ class MapUniProtID(Abclog):
         fileName = self.outputPath.stem
         for i in range(0, len(lyst), chunksize):
             cur_fileName = f'{fileName}+{i}'
-            cur_params = PARAMS.copy()
+            cur_params = deepcopy(PARAMS)
             cur_params['query'] = sep.join(lyst[i:i+chunksize]) # self.outputPath.suffix
             yield ('get', {'url': f'{BASE_URL}/uploadlists/', 'params': cur_params}, str(Path(self.outputPath.parent, cur_fileName+'.tsv')))
 
@@ -137,7 +138,8 @@ class MapUniProtID(Abclog):
                        chunksize: int = 100, 
                        concur_req: int = 20, 
                        rate: float = 1.5,
-                       run_tasks: bool = True):
+                       run_tasks: bool = True,
+                       semaphore = None):
         finish_id = list()
         self.outputPath = Path(outputPath)
         self.result_cols = [COLUMNS_DICT.get(
@@ -182,7 +184,8 @@ class MapUniProtID(Abclog):
             concur_req=concur_req, 
             rate=rate, 
             logger=self.logger,
-            run_tasks=run_tasks)
+            run_tasks=run_tasks,
+            semaphore=semaphore)
         return res
 
     def getCanonicalInfo(self, dfrm: pd.DataFrame):
@@ -266,10 +269,10 @@ class MapUniProtID(Abclog):
         dfrm.loc[err_index, colName] = 'Error'
 
     @unsync
-    def process(self, path: Union[str, Path, Unfuture], sep: str = '\t'):
+    async def process(self, path: Union[str, Path, Unfuture], sep: str = '\t'):
         self.logger.debug("Start to handle id mapping result")
         if not isinstance(path, (Path, str)):
-            path = path.result()
+            path = await path  # .result()
         if not Path(path).stat().st_size:
             return None
         self.altSeqPath, self.altProPath = ExtractIsoAlt.main(path=path)
@@ -379,7 +382,7 @@ class UniProtFASTA(Abclog):
     @unsync
     async def process(cls, path: Union[str, Path, Unfuture]):
         if not isinstance(path, (Path, str)):
-            path = path.result()
+            path = await path  # .result()
         path = Path(path)
         if not path.stat().st_size:
             return None
@@ -388,7 +391,8 @@ class UniProtFASTA(Abclog):
             kwargs = {'run_tasks': False}
         else:
             folder = cls.obj['fasta_folder']
-            kwargs = {'concur_req': cls.obj['concurreq'], 'rate': cls.obj['concurrate'], 'run_tasks': False}
+            kwargs = {'concur_req': cls.obj['unp_concurreq'], 'rate': cls.obj['unp_concurrate'],
+                      'run_tasks': False, 'semaphore': cls.obj['semaphore']}
         unps = pd.read_csv(path, sep='\t', usecols=['UniProt']).UniProt.drop_duplicates()
         for fob in cls.retrieve(unps, folder, **kwargs):
             await fob
@@ -402,10 +406,11 @@ class UniProtFASTA(Abclog):
             yield ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': cls.params}, cur_filePath)
 
     @classmethod
-    def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, run_tasks: bool = True):
+    def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, run_tasks: bool = True, semaphore=None):
         return UnsyncFetch.multi_tasks(
             cls.yieldTasks(lyst, folder), 
             concur_req=concur_req, 
             rate=rate, 
             logger=cls.logger,
-            run_tasks=run_tasks)
+            run_tasks=run_tasks,
+            semaphore=semaphore)

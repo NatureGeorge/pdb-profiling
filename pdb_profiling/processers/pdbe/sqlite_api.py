@@ -8,10 +8,13 @@ import asyncio
 import databases
 import orm
 import sqlalchemy
+from sqlite3 import OperationalError
 from time import perf_counter
 import pandas as pd
 from unsync import unsync
 from typing import Dict, Iterable
+import logging
+# logging.basicConfig(level=logging.INFO)
 
 converters = {
     "pdb_id": str,
@@ -194,8 +197,14 @@ class Sqlite_API(object):
             query=table.__table__.insert().prefix_with(prefix_with),
             values=values)
         '''
-        query = table.__table__.insert().values(values).prefix_with(prefix_with)
-        await self.database.execute(query)
+        while True:
+            try:
+                query = table.__table__.insert().values(values).prefix_with(prefix_with)
+                await self.database.execute(query)
+                break
+            except OperationalError as e:
+                logging.error(f"{e}, sleep and try again")
+                await asyncio.sleep(.1)
 
 
 @unsync

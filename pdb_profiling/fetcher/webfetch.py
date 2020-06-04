@@ -139,13 +139,18 @@ class UnsyncFetch(Abclog):
               to_do_func: Optional[Callable] = None,
               concur_req: int = 4, rate: float = 1.5,
               logger: Optional[logging.Logger] = None,
-              run_tasks: bool = True):
+              run_tasks: bool = True,
+              semaphore = None
+              ):
 
         cls.init_logger(cls.__name__, logger)
         cls.retry_kwargs['after'] = after_log(cls.logger, logging.WARNING)
         cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
         cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
-        semaphore = asyncio.Semaphore(concur_req)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(concur_req)
+        else:
+            cls.logger.info(f'{cls.multi_tasks.__qualname__}: pass asyncio.Semaphore')
         if to_do_func is None:
             tasks = [cls.fetch_file(semaphore, method, info, path, rate)
                      for method, info, path in tasks]

@@ -18,10 +18,14 @@ from Bio import Align
 from Bio.SubsMat import MatrixInfo as matlist
 from unsync import unsync, Unfuture
 import asyncio
+import aiofiles
+from tablib import Dataset
 import traceback
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
+import logging
+# logging.basicConfig(level=logging.INFO)
 
 
 SEQ_DICT = {
@@ -215,14 +219,18 @@ def slice_series(se: Iterable) -> Dict:
     data = {}
     cur = next(iter(se))
     start = 0
-    for index, i in enumerate(se):
-        if i != cur:
-            assert cur not in data, "Invalid Series"
-            data[cur] = (start, index)
-            cur = i
-            start = index
-    assert cur not in data, "Invalid Series"
-    data[cur] = (start, index+1)
+    try:
+        for index, i in enumerate(se):
+            if i != cur:
+                assert cur not in data, "Invalid Series"
+                data[cur] = (start, index)
+                cur = i
+                start = index
+        assert cur not in data, "Invalid Series"
+        data[cur] = (start, index+1)
+    except AssertionError as e:
+        logging.error(e)
+        raise e
     return data
 
 
@@ -424,7 +432,7 @@ class Entry(object):
         query = '''
             MATCH (entry:Entry)-[:HAS_ENTITY]->(entity:Entity)-[:CONTAINS_CHAIN]->(chain:Chain)-[inChain:IS_IN_CHAIN]-(res:PDBResidue)
             WHERE entry.ID = $pdb_id AND entity.ID = $entity_id AND chain.AUTH_ASYM_ID = $chain_id {}
-            RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, res.CHEM_COMP_ID as residue_name, toInteger(res.ID) as residue_number, tofloat(inChain.OBSERVED_RATIO) as obs_ratio, inChain.AUTH_SEQ_ID as author_residue_number, inChain.PDB_INS_CODE as author_insertion_code ORDER BY residue_number
+            RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, res.CHEM_COMP_ID as residue_name, toInteger(res.ID) as residue_number, tofloat(inChain.OBSERVED_RATIO) as obs_ratio, toInteger(inChain.AUTH_SEQ_ID) as author_residue_number, inChain.PDB_INS_CODE as author_insertion_code ORDER BY residue_number
         '''
         if res_ids is None:
             if observed_only:
@@ -630,16 +638,19 @@ class SIFTS(Entry):
             return query, dict(lyst=list(lyst))
     
     @classmethod
-    def deal_mapping(cls, res):
+    @unsync
+    async def deal_mapping(cls, res, neo4j_api):
         dfrm = cls.to_data_frame(res)
+        if len(dfrm) == 0:
+            return
         dfrm = cls.deal_InDe(dfrm)
         dfrm.pdb_range = dfrm.pdb_range.apply(json.dumps)
         dfrm.unp_range = dfrm.unp_range.apply(json.dumps)
-        dfrm = cls.update_range(dfrm)
+        dfrm = await cls.update_range(dfrm, neo4j_api)
         return dfrm
 
     @classmethod
-    def extra_mapping(cls, entity_uniqids, unps, session=None) -> pd.DataFrame:
+    def extra_mapping(cls, entity_uniqids, unps) -> pd.DataFrame:
         '''
         TODO: Different behavior
         '''
@@ -648,17 +659,19 @@ class SIFTS(Entry):
             WHERE entity.UNIQID IN $entity_uniqids AND unp.ACCESSION IN $unps
             RETURN unp.ACCESSION as UniProt, entry.ID as pdb_id, entity.ID as entity_id, seg.AUTH_ASYM_ID as chain_id, tofloat(seg.IDENTITY) as identity, COLLECT([toInteger(seg.PDB_START), toInteger(seg.PDB_END)]) as pdb_range, COLLECT([toInteger(seg.UNP_START), toInteger(seg.UNP_END)]) as unp_range
         '''
+        '''
         if session is None:
             if cls.session is not None:
                 session = cls.session
         try:
+            # TODO: this part of code is wrong right now, need to be fix
             res = session.run(query,
                               entity_uniqids=list(entity_uniqids),
                               unps=list(unps))
             return cls.deal_mapping(res)
         except AttributeError:
-            return query, dict(entity_uniqids=list(entity_uniqids),
-                               unps=list(unps))
+        '''
+        return query, dict(entity_uniqids=list(entity_uniqids), unps=list(unps))
 
     @staticmethod
     def sort_2_range(unp_range: List, pdb_range: List):
@@ -722,17 +735,26 @@ class SIFTS(Entry):
         return dfrm
 
     @classmethod
-    def update_range(cls, dfrm: pd.DataFrame) -> pd.DataFrame:
+    @unsync
+    async def update_range(cls, dfrm: pd.DataFrame, neo4j_api) -> pd.DataFrame:
         new_unp_range, new_pdb_range = 'new_unp_range', 'new_pdb_range'
-        focus_index = dfrm[
+        focus_df = dfrm[
             (dfrm.sifts_range_tag.isin(('Deletion', 'Insertion & Deletion')))
-            & (dfrm.repeated.eq(False))].index
+            & (dfrm.repeated.eq(False))]
+        focus = focus_df[['pdb_id', 'entity_id', 'UniProt']].to_numpy()
+        focus_index = focus_df.index
         updated_pdb_range, updated_unp_range = list(), list()
         seqAligner = SeqPairwiseAlign()
-        for index in focus_index:
-            record = dfrm.loc[index]
-            pdbSeq = cls.get_seqres(record['pdb_id'], record['entity_id'])
-            unpSeq = cls.get_unp_seq(record["UniProt"])
+        for record in focus:
+            # pdbSeq = cls.get_seqres(record['pdb_id'], record['entity_id'])
+            query, kwargs = cls.get_seqres(record[0], record[1])
+            res = await neo4j_api.afetch(query, **kwargs)
+            pdbSeq = ''.join(SEQ_DICT.get(r['residue_name'], 'X') for r in res)
+            # unpSeq = cls.get_unp_seq(record["UniProt"])
+            query, kwargs = cls.get_unp_seq(record[2])
+            res = await neo4j_api.afetch(query, **kwargs)
+            unpSeq = ''.join(r['aa'] for r in res)
+            # ---
             res = seqAligner.makeAlignment(unpSeq, pdbSeq)
             updated_unp_range.append(res[0])
             updated_pdb_range.append(res[1])
@@ -884,19 +906,25 @@ class SeqPairwiseAlign(object):
 def convert_index(lrange_str: str, rrange_str: str, site: int):
     lrange = json.loads(lrange_str)
     rrange = json.loads(rrange_str)
-    for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
-        assert (lend - lstart) == (rend-rstart)
-        if (site >= rstart) and (site <= rend):
-            return int(site + lstart - rstart)
-        else:
-            continue
-    return -1
+    try:
+        for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+            assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range"
+            if (site >= rstart) and (site <= rend):
+                return int(site + lstart - rstart)
+            else:
+                continue
+        return -1
+    except AssertionError as e:
+        logging.error(e)
+        raise e
 
 
 class Neo4j_API(Abclog):
     
     output_kwargs = {'sep': '\t', 'index': False, 'header': False, 'mode': 'a'}
-    db = None
+    filtered_sifts_path = None
+    res2pdbpath = None
+    neo4j_api = None
     sqlite_api = None
     unpmap_filter:Dict = None
     sifts_filter:Dict = None
@@ -914,7 +942,7 @@ class Neo4j_API(Abclog):
 
     @classmethod
     @unsync
-    async def filtered_sifts(cls, lyst: Union[Iterable, Unfuture]):
+    async def unp2pdb(cls, lyst: Union[Iterable, Unfuture]):
         '''
         Map from unp to pdb [DB]
         
@@ -924,7 +952,7 @@ class Neo4j_API(Abclog):
         * Only Save What We Want [Filtered Data]
         '''
         if not isinstance(lyst, Iterable):
-            lyst = lyst.result()
+            lyst = await lyst  # .result()
         sqlite_api = cls.sqlite_api
         
         # TODO: Load Existing Data
@@ -933,44 +961,67 @@ class Neo4j_API(Abclog):
             e_sifts_df = pd.DataFrame(exists)
             lyst = list(set(lyst) - set(e_sifts_df.UniProt))
             # Get pdb lyst that already been saved in local db
-            e_pdbs = e_sifts_df.pdb_id.unique()
+            # e_pdbs = e_sifts_df.pdb_id.unique()
         else:
             e_sifts_df = None
-            e_pdbs = []
-        
+            # e_pdbs = []
         # TODO: Fetch New Data
         if len(lyst) > 0:
             # Assume that the elements of the lyst are all valid and are covered by the remote db
-            res = await cls.db.afetch(*SIFTS.summary_mapping(lyst, 'unp'))
-            sifts_df = SIFTS.deal_mapping(res)
-            sifts_df = related_dataframe(cls.sifts_filter, sifts_df)
-            # TODO: Export New Data [Sync]
-            values = sifts_df.to_dict('records')
-            if values:
-                sqlite_api.sync_insert(
-                    sqlite_api.SIFTS_Info, values)
-            del values
-            # Get pdb lyst that **may** contain new pdbs
-            pdbs = sifts_df.pdb_id.unique()
+            query, kwargs = SIFTS.summary_mapping(lyst, 'unp')
+            res = await cls.neo4j_api.afetch(query, **kwargs)
+            sifts_df = await SIFTS.deal_mapping(res, cls.neo4j_api)
+            if sifts_df is not None:
+                sifts_df = related_dataframe(cls.sifts_filter, sifts_df)
+                if len(sifts_df) > 0:
+                    # TODO: Export New Data [Sync]
+                    values = sifts_df.to_dict('records')
+                    if values:
+                        await sqlite_api.async_insert(
+                            sqlite_api.SIFTS_Info, values)
+                    # del values
+                    # Get pdb lyst that **may** contain new pdbs
+                    # pdbs = sifts_df.pdb_id.unique()
+                else:
+                    sifts_df = None
+                # pdbs = []
         else:
             sifts_df = None
-            pdbs = []
+            # pdbs = []
         
+        sifts = [df for df in (sifts_df, e_sifts_df) if df is not None]
+        if sifts:
+            sifts_df = pd.concat(sifts, sort=False, ignore_index=True)
+        else:
+            return None
         # Following the principle of KEEP CONSISTENCY, we does not need the code below
         # e_sifts_df = related_dataframe(cls.sifts_filter, e_sifts_df)
         # Renew the pdb lyst. Now the elements in the lyst are all new to the local db
-        pdbs = list(set(pdbs)-set(e_pdbs))
+        # pdbs = list(set(pdbs)-set(e_pdbs))
+        # TODO: Fetch Existing Data
+        pdbs = sifts_df.pdb_id.unique()
+        exists = await sqlite_api.Entry_Info.objects.filter(pdb_id__in=pdbs).all()
+        if exists:
+            e_pdb_entry_df = pd.DataFrame(exists)
+            pdbs = list(set(pdbs) - set(e_pdb_entry_df.pdb_id))
+        else:
+            e_pdb_entry_df = None
         # TODO: Fetch New Data
-        if pdbs:
+        if len(pdbs) > 0:
             entry_info_func_res: Dict = {}
             for key, func in cls.entry_info_funcs.items():
-                res = await cls.db.afetch(*func(pdbs))
+                query, kwargs = func(pdbs)
+                res = await cls.neo4j_api.afetch(query, **kwargs)
                 entry_info_func_res[key] = Entry.to_data_frame(res)
             
             res = Entry.deal_nucleotides(entry_info_func_res.get('nucleotides', None))
             if res is not None:
                 entry_info_func_res['nucleotides'] = res
-            pdb_entry_df = pd.concat(entry_info_func_res.values(), join='outer', axis=1)
+            # pdb_entry_df = pd.concat(entry_info_func_res.values(), join='outer', axis=1)
+            pdb_entry_df = pd.concat(
+                (df.set_index(['pdb_id']) for df in entry_info_func_res.values() if len(df) > 0),
+                axis=1, sort=False).reset_index()
+            pdb_entry_df.rename(columns={'index': 'pdb_id'}, inplace=True)
             for col, default in cls.entry_info_add.items():
                 if col not in pdb_entry_df:
                     pdb_entry_df[col] = default
@@ -982,112 +1033,177 @@ class Neo4j_API(Abclog):
             # TODO: Export New Data [Sync]
             values = pdb_entry_df.to_dict('records')
             if values:
-                sqlite_api.sync_insert(
+                await sqlite_api.async_insert(
                     sqlite_api.Entry_Info, values)
-            del values
-            # TODO: Fetch New Data
-            pdbs = pdb_entry_df.pdb_id.unique()
-            if len(pdbs) > 0:
-                res = await cls.db.afetch(*Entry.summary_seq(pdbs))
-                seq_res_df = SIFTS.deal_seq_index(SIFTS.to_data_frame(res))
-                # WARNING: NEED TO BE FIXED, SHOULD BE MORE FLEXIBLE
-                del_pdbs = seq_res_df[
-                    (seq_res_df.UNK_COUNT.gt(0))
-                    | (seq_res_df.AVG_OBS_OBS_RATIO.le(0.25) & seq_res_df.SEQRES_COUNT.ge(50))
-                ].pdb_id.unique()
-                seq_res_df = seq_res_df[~seq_res_df.pdb_id.isin(del_pdbs)]
-                values = seq_res_df.to_dict('records')
-                # TODO: Export New Data [Sync]
-                if values:
-                    sqlite_api.sync_insert(sqlite_api.SEQRES_Info, values)
-                pdbs = seq_res_df.pdb_id.unique()
-
-        # TODO: Load Existing Data
-        if len(e_pdbs) > 0:
-            # exists = await sqlite_api.Entry_Info.objects.filter(pdb_id__in=e_pdbs).all()
-            # e_pdb_entry_df = pd.DataFrame(exists)
-            # e_pdbs = e_pdb_entry_df.pdb_id.unique()
-            exists = await sqlite_api.SEQRES_Info.objects.filter(pdb_id__in=e_pdbs)
-            e_seq_res_df = pd.DataFrame(exists)
-            e_pdbs = e_seq_res_df.pdb_id.unique()
-
-        if sifts_df is not None and len(sifts_df) > 0 and len(pdbs) > 0:
-            sifts_df = sifts_df[sifts_df.pdb_id.isin(pdbs)]
-            if e_sifts_df is not None and len(e_sifts_df) > 0 and len(e_pdbs) > 0:
-                e_sifts_df = e_sifts_df[e_sifts_df.pdb_id.isin(e_pdbs)]
-                return pd.concat((sifts_df, e_sifts_df), ignore_index=True, sort=False)
+                # pdbs = pdb_entry_df.pdb_id.unique()
             else:
-                return sifts_df
+                pdb_entry_df = None
+                # pdbs = []
+            # del values
         else:
-            if e_sifts_df is not None and len(e_sifts_df) > 0 and len(e_pdbs) > 0:
-                return e_sifts_df[e_sifts_df.pdb_id.isin(e_pdbs)]
+            pdb_entry_df = None
+        
+        pdb_entries = [df for df in (pdb_entry_df, e_pdb_entry_df) if df is not None]
+        if pdb_entries:
+            pdb_entry_df = pd.concat(pdb_entries, sort=False, ignore_index=True)
+        else:
+            return None
+        
+        # TODO: Load Existing Data
+        pdbs = pdb_entry_df.pdb_id.unique()
+        exists = await sqlite_api.SEQRES_Info.objects.filter(pdb_id__in=pdbs).all()
+        if exists:
+            e_seq_res_df = pd.DataFrame(exists)
+            pdbs = list(set(pdbs) - set(e_seq_res_df.pdb_id))
+        else:
+            e_seq_res_df = None
+        # TODO: Fetch New Data
+        if len(pdbs) > 0:
+            query, kwargs = Entry.summary_seq(pdbs)
+            res = await cls.neo4j_api.afetch(query, **kwargs)
+            seq_res_df = SIFTS.deal_seq_index(SIFTS.to_data_frame(res))
+            # WARNING: NEED TO BE FIXED, SHOULD BE MORE FLEXIBLE
+            del_pdbs = seq_res_df[
+                (seq_res_df.UNK_COUNT.gt(0))
+                | (seq_res_df.AVG_OBS_OBS_RATIO.le(0.25) & seq_res_df.SEQRES_COUNT.ge(50))
+            ].pdb_id.unique()
+            seq_res_df = seq_res_df[~seq_res_df.pdb_id.isin(del_pdbs)]
+            values = seq_res_df.to_dict('records')
+            # TODO: Export New Data [Sync]
+            if values:
+                await sqlite_api.async_insert(sqlite_api.SEQRES_Info, values)
             else:
-                return None
+                seq_res_df = None
+        else:
+            seq_res_df = None
+        
+        seq_ress = [df for df in (seq_res_df, e_seq_res_df) if df is not None]
+        if seq_ress:
+            seq_res_df = pd.concat(seq_ress, sort=False, ignore_index=True)
+        else:
+            return None
+        
+        return sifts_df[sifts_df.pdb_id.isin(seq_res_df.pdb_id.unique())]
 
     @classmethod
     @unsync
-    async def amap_to_pdb(cls, site_df: pd.DataFrame, unp:str, pdb_id: str, entity_id: str, chain_id: str, pdb_range: str, unp_range: str):
+    async def amapres2pdb(cls, site_df: pd.DataFrame, unp:str, pdb_id: str, entity_id: str, chain_id: str, pdb_range: str, unp_range: str):
         sqlite_api = cls.sqlite_api
         sites = [convert_index(pdb_range, unp_range, x) for x in site_df.Pos]
         site_df['residue_number'] = sites
         sites = list(set(sites) | set({1}))
-        res = await sqlite_api.Site_Info.objects.filter(
+        res = await sqlite_api.PDBRes_Info.objects.filter(
             pdb_id=pdb_id, entity_id=entity_id,
-            chain_id=chain_id, residue_number__in=sites)
+            chain_id=chain_id, residue_number__in=sites).all()
         if not res:
-            res = await cls.db.afetch(*Entry.get_residues(
+            query, kwargs = Entry.get_residues(
                 pdb_id, entity_id,
-                chain_id, sites))
+                chain_id)  # , sites
+            res = await cls.neo4j_api.afetch(query, **kwargs)
             res = Entry.to_data_frame(res)
             if len(res) > 0:
-                sqlite_api.sync_insert(
-                    sqlite_api.Site_Info, res.to_dict('records'))
+                res.author_insertion_code.fillna('', inplace=True)
+                await sqlite_api.async_insert(
+                    sqlite_api.PDBRes_Info, res.to_dict('records'))
             else:
                 return None
         else:
             res = pd.DataFrame(res)
-        # try:
-        # except ValueError:
-        # return None
         merge_df = pd.merge(site_df, res)
         merge_df['UniProt'] = unp
         return merge_df
 
     @classmethod
     @unsync
-    async def map_to_unp(cls, unp_map_df: pd.DataFrame, sifts_df: pd.DataFrame, path: Union[str, Path]):
+    async def mapres2pdb(cls, unp_map_df: pd.DataFrame, sifts_df: pd.DataFrame) -> Union[Unfuture, str, Path]:
+        if unp_map_df is None or sifts_df is None:
+            return
+        unp_map_df.sort_values(by='UniProt', inplace=True)
+        sifts_df.sort_values(by='UniProt', inplace=True)
         sqlite_api = cls.sqlite_api
         focus_cols = ['pdb_id', 'entity_id', 'chain_id',
                       'new_pdb_range', 'new_unp_range']
         sifts_nda = sifts_df[focus_cols].to_numpy()
         yourlist = unp_map_df.yourlist.to_numpy()
         unp_map_i_dict = slice_series(unp_map_df.UniProt.to_numpy())
-        for unp, (start, end) in slice_series(sifts_df.UniProt.to_numpy()).items():
-            focus_sifts_nda = sifts_nda[start:end]
-            start, end = unp_map_i_dict[unp]
-            from_lyst = np.unique(yourlist[start:end])
-            site_df = await sqlite_api.Site_Info.objects.filter(from_id__in=from_lyst).all()
-            site_df = pd.DataFrame(site_df)
-            try:
-                '''
-                TODO: make it async
-                async with aiofiles.open(cls.outpath, 'a') as fileOb:
-                    for i in (cls.amap_to_pdb(site_df, unp, *record) for record in focus_sifts_nda):
-                        res = await i
-                        pass
-                '''
-                res_map = pd.concat((cls.amap_to_pdb(site_df, unp, *record) for record in focus_sifts_nda), sort=False, ignore_index=True)
-                res_map.to_csv(path, **cls.output_kwargs)
-            except Exception:
-                traceback.print_exc()
-        return path
+        sifts_dict = slice_series(sifts_df.UniProt.to_numpy())        
+        try:
+            res_lyst = []
+            for unp, (start, end) in sifts_dict.items():
+                focus_sifts_nda = sifts_nda[start:end]
+                start, end = unp_map_i_dict[unp]
+                from_lyst = np.unique(yourlist[start:end])
+                site_df = await sqlite_api.Site_Info.objects.filter(from_id__in=from_lyst).all()
+                site_df = pd.DataFrame(site_df)
+                for record in focus_sifts_nda:
+                    res = await cls.amapres2pdb(site_df, unp, *record)
+                    if res is not None and len(res) > 0:
+                        res_lyst.append(res)
+            if res_lyst:
+                res = pd.concat(res_lyst, sort=False, ignore_index=True)
+                cols = sorted(res.columns)
+                res = res[cols]
+                if cls.res2pdbpath.exists():
+                    headers = None
+                else:
+                    headers = cols
+                async with aiofiles.open(cls.res2pdbpath, 'a') as fileOb:
+                    dataset = Dataset(headers=headers)
+                    dataset.extend(res.to_records(index=False))
+                    await fileOb.write(dataset.export('tsv'))
+                return 1
+            return 0
+        except Exception as e:
+            logging.error("res_map exception: "+str(e))
+            traceback.print_exc()
+            raise e
 
     @classmethod
     @unsync
-    async def process(cls, unp_map_df: pd.DataFrame):
+    async def process_unp2pdb(cls, indata: Union[str, Path, pd.DataFrame, Unfuture], sep='\t') -> Union[Unfuture, Tuple]:
+        '''
+        Default chain process
+        Default file seperator: tab
+        '''
+        # TODO: Add Converters
+        if not isinstance(indata, (str, Path, pd.DataFrame)):
+            indata = await indata  # .result()
+        if isinstance(indata, pd.DataFrame):
+            unp_map_df = indata
+        elif indata is None:
+            return None, None
+        else:
+            unp_map_df = pd.read_csv(indata, sep=sep)
+        unp_map_df = related_dataframe(cls.unpmap_filter, unp_map_df)
         related_unp = unp_map_df.UniProt.unique()
-        sifts_df = await cls.filtered_sifts(related_unp)
-        return cls.map_to_unp(unp_map_df, sifts_df, '---')
+        sifts_df = await cls.unp2pdb(related_unp)
+        if sifts_df is not None:
+            unp_map_df = unp_map_df[unp_map_df.UniProt.isin(sifts_df.UniProt.to_numpy())].reset_index(drop=True)
+            sifts_df = sifts_df.reset_index(drop=True)
+            if cls.filtered_sifts_path is not None:
+                cols = sorted(sifts_df.columns)
+                sifts_df = sifts_df[cols]
+                if cls.filtered_sifts_path.exists():
+                    headers = None
+                else:
+                    headers = cols
+                async with aiofiles.open(cls.filtered_sifts_path, 'a') as fileOb:
+                    dataset = Dataset(headers=headers)
+                    dataset.extend(sifts_df.to_records(index=False))
+                    await fileOb.write(dataset.export('tsv'))
+                    # await fileOb.flush()
+            return unp_map_df, sifts_df
+        else:
+            return None, None
+
+    @classmethod
+    @unsync
+    async def process_mapres2pdb(cls, dfs: Union[Tuple[pd.DataFrame], Unfuture]) -> Union[Unfuture, str, Path]:
+        if isinstance(dfs, Tuple):
+            unp_map_df, sifts_df = dfs
+        else:
+            unp_map_df, sifts_df = await dfs  # .result()
+        return cls.mapres2pdb(unp_map_df, sifts_df)
 
 '''
 TODO: 

@@ -11,41 +11,54 @@ import json
 from pandas import read_csv, merge, Series, DataFrame
 from numpy import nan
 from pathlib import Path
-from typing import Iterator
-from unsync import Unfuture
-import ujson as json
-import sys; sys.path.append("C:/GitWorks/pdb-profiling")
+from typing import Iterator, Coroutine
+from unsync import Unfuture, unsync
+import asyncio
+import sys
 from importlib import util as imp_util
 from tqdm import tqdm
-from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
-from pdb_profiling.processers.pdbe.neo4j_api import Neo4j_API
-from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
-from pdb_profiling.fetcher.webfetch import UnsyncFetch
-from pdb_profiling.fetcher.dbfetch import Neo4j
-from pdb_profiling.log import Abclog
-from pdb_profiling.utils import related_dataframe
+from time import sleep
 
 
 if "\\" in __file__:
     # Windows
     _SEP = "\\"
+    sys.path.append("C:/GitWorks/pdb-profiling")
 else:
     # Linux
     _SEP = "/"
+    sys.path.append("/mnt/c/GitWorks/pdb-profiling")
 
+try:
+    from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
+    from pdb_profiling.processers.pdbe.neo4j_api import Neo4j_API
+    from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
+    from pdb_profiling.fetcher.webfetch import UnsyncFetch
+    from pdb_profiling.fetcher.dbfetch import Neo4j
+    from pdb_profiling.log import Abclog
+    from pdb_profiling.utils import related_dataframe
+except Exception as e:
+    raise e
 
 def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
     return click.style(template % name, fg=fg)
 
 
+@unsync
+async def init_semaphore(concurreq) -> Unfuture:
+    """
+    `semaphore` initiated in the `unsync` event loop
+    """
+    await asyncio.sleep(.01)
+    return asyncio.Semaphore(concurreq)
+
+
 @click.group(chain=True, invoke_without_command=False)
 @click.option("--folder", default="", help="The file folder of new files.", type=click.Path())
 @click.option("--loggingpath", default=None, help="The file path of logging.", type=click.Path())
-@click.option('--concurreq', type=int, help="the number of concurent requests", default=100)
-@click.option('--concurrate', type=float, help="the rate of concurent requests", default=2)
-@click.option('--useexisting/--no-useexisting', help="whether to use existing result files", default=False, is_flag=True)
+@click.option('--useexisting/--no-useexisting', help="whether to use existing result files (For UnsyncFetch)", default=False, is_flag=True)
 @click.pass_context
-def Interface(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
+def Interface(ctx, folder, loggingpath, useexisting):
     if not folder:
         return
     # Init Folder Setting
@@ -54,8 +67,6 @@ def Interface(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
     ctx.ensure_object(dict)
     ctx.obj['folder'] = folder
     ctx.obj['loggingpath'] = loggingpath
-    ctx.obj['concurreq'] = concurreq
-    ctx.obj['concurrate'] = concurrate
     for cur_path in (folder/'UniProt'/'mapping',
                      folder/'UniProt'/'fasta',
                      folder/'DB'):
@@ -64,12 +75,13 @@ def Interface(ctx, folder, loggingpath, concurreq, concurrate, useexisting):
     # Init Logging Setting
     click.echo(colorClick("Logger"))
     ctx.obj['logger'] = Abclog.set_logging_fileHandler(loggingpath, logName='CommandLine')
+    # For TEST
     UnsyncFetch.use_existing = useexisting
-    
+  
 
 @Interface.resultcallback()
 @click.pass_context
-def process_pipeline(ctx, processors, folder, loggingpath, concurreq, concurrate, useexisting):
+def process_pipeline(ctx, processors, folder, loggingpath, useexisting):    
     def iter_task(task: Unfuture):
         if isinstance(task, Unfuture):
             return iter_task(task.result())
@@ -83,12 +95,25 @@ def process_pipeline(ctx, processors, folder, loggingpath, concurreq, concurrate
         if processor is not None:
             iterator = processor(iterator)
     tasks = list(iterator)
-    [iter_task(task) for task in tqdm(tasks, total=len(tasks))]
+    for task in tqdm(tasks, total=len(tasks)):
+        iter_task(task)
     # click.echo(res)
     # UnsyncFetch.unsync_tasks(list(iterator)).result()
     # [await fob for fob in tqdm(asyncio.as_completed(iterator), total=len(iterator))]
-    # sleep(6)
+    # sleep(30)
 
+
+@Interface.command("UniProt.init")
+@click.option('--concurreq', type=int, help="the number of concurent requests (For UniProt API)", default=100)
+@click.option('--concurrate', type=float, help="the rate of concurent requests (For UniProt API)", default=2)
+@click.pass_context
+def init_unp(ctx, concurreq, concurrate):
+    click.echo(colorClick("UniProt API"))
+    ctx.obj['unp_concurreq'] = concurreq
+    ctx.obj['unp_concurrate'] = concurrate
+    # Set Semaphore
+    click.echo("Set Semaphore (For UniProt API)")
+    ctx.obj['semaphore'] = init_semaphore(concurreq).result()
 
 
 @Interface.command("UniProt.id-mapping")
@@ -132,9 +157,10 @@ def idMappingViaUnpApi(ctx, input, sep, idcol, idtype, usecols, genecol, querych
                                 logger=ctx.obj['logger'])
             unsync_tasks = demo.retrieve(ctx.obj['mapping_folder']/outname,
                                         chunksize=querychunk,
-                                        concur_req=ctx.obj['concurreq'],
-                                        rate=ctx.obj['concurrate'],
-                                        run_tasks=False)
+                                        concur_req=ctx.obj['unp_concurreq'],
+                                        rate=ctx.obj['unp_concurrate'],
+                                        run_tasks=False,
+                                        semaphore = ctx.obj['semaphore'])
             for task in unsync_tasks:
                 yield task
 
@@ -175,11 +201,12 @@ def downloadUnpSeq(ctx, input, idcol, sep, include):
         else:
             with path.open('rt') as infile:
                 unps = [line.strip() for line in infile]
-        UniProtFASTA.retrieve(unps, ctx.obj['fasta_folder'], ctx.obj['concurreq'], ctx.obj['concurrate'])
+        UniProtFASTA.retrieve(unps, ctx.obj['fasta_folder'], ctx.obj['unp_concurreq'],
+                              ctx.obj['unp_concurrate'], semaphore=ctx.obj['semaphore'])
         return
     else:
         UniProtFASTA.obj = {key: ctx.obj[key]
-                            for key in ('fasta_folder', 'concurreq', 'concurrate')}
+                            for key in ('fasta_folder', 'concurreq', 'concurrate', 'semaphore')}
         return processor
 
 
@@ -207,9 +234,14 @@ def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq
     Neo4j_API.sqlite_api = sqlite_api
     ctx.obj['sqlite_api'] = sqlite_api
     if remotedburl is not None:
+        click.echo(colorClick("Remote DB (Neo4j)"))
         config = {'user': remotedbuser, 'pass': remotedbpass,
                 'url': remotedburl}
-        Neo4j_API.neo4j_api = Neo4j(config, concurreq, ctx.obj['logger'].info).connnect().result()
+        click.echo("Set Semaphore (For Neo4j API)")
+        Neo4j_API.neo4j_api = Neo4j(
+            config, concurreq,
+            init_semaphore(concurreq).result(),
+            log_func=ctx.obj['logger'].info).connnect().result()
 
 
 @Interface.command("DB.insert-sites-info")

@@ -1,3 +1,5 @@
+aiosqlite
+aioftp
 aiohttp
 aiofiles
 unsync

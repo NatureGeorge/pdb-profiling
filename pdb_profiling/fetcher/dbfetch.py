@@ -33,10 +33,15 @@ class Neo4j:
     # How long to wait after each successive failure.
     RETRY_WAITS: List = [0, 1, 4]
 
-    def __init__(self, config, concur_req: int = 200, log_func: Callable = print):
+    def __init__(self, config, concur_req: int = 200, semaphore = None, log_func: Callable = print):
         self._config = config
-        self._semaphore = asyncio.Semaphore(concur_req)
         self.log_func = log_func
+        if semaphore is None:
+            self._semaphore = asyncio.Semaphore(concur_req)
+        else:
+            self.log_func("Neo4j.init: pass asyncio.Semaphore")
+            self._semaphore = semaphore
+        
     
     @unsync
     async def connnect(self) -> Unfuture:
@@ -77,7 +82,7 @@ class Neo4j:
                 else:
                     self.log_func('BrokenPipeError or ServiceUnavailable. Retrying...')
                     await asyncio.sleep(retry_wait)
-                    await self.init_driver()
+                    self.init_driver().result()
         return res
          
     def close(self):
@@ -88,8 +93,8 @@ class Neo4j:
 
 if __name__ == "__main__":
     import sys
-    sys.path.append("C:/GitWorks/pdb-profiling/pdb_profiling/processers/pdbe")
-    from neo4j_api import Entry
+    sys.path.append("C:/GitWorks/pdb-profiling")
+    from pdb_profiling.processers.pdbe.neo4j_api import Entry
     config = {'user': 'neo4j', 'pass': 'p1he/pr2o/ile3',
               'url': 'bolt://10.20.212.153:7687'}
     queries = [
