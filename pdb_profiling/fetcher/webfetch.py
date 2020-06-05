@@ -15,7 +15,6 @@ from tenacity import retry, wait_random, stop_after_attempt, after_log, RetryErr
 import logging
 from tqdm import tqdm
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
-import ujson as json
 from furl import furl
 from pdb_profiling.log import Abclog
 import re

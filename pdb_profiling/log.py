@@ -36,7 +36,7 @@ class Abclog(object):
             cls.init_logger(logName)
         try:
             if path is None:
-                return
+                return cls.logger
             fileHandler = logging.FileHandler(filename=path)
             fileHandler.setLevel(level)
             fileHandler.setFormatter(cls.formatter)

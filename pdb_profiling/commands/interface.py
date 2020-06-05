@@ -5,19 +5,16 @@
 # @Last Modified: 2020-05-23 02:24:53 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
 import click
-import configparser
-import os
 import json
 from pandas import read_csv, merge, Series, DataFrame
 from numpy import nan
 from pathlib import Path
-from typing import Iterator, Coroutine
+from typing import Iterator
 from unsync import Unfuture, unsync
 import asyncio
 import sys
 from importlib import util as imp_util
 from tqdm import tqdm
-from time import sleep
 
 
 if "\\" in __file__:
@@ -27,7 +24,7 @@ if "\\" in __file__:
 else:
     # Linux
     _SEP = "/"
-    sys.path.append("/mnt/c/GitWorks/pdb-profiling")
+    sys.path.append("/data/zzf/2020/code/pdb-profiling")
 
 try:
     from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
@@ -224,7 +221,7 @@ TODO:
 @click.option('--remotedburl', default=None, help="the url of remote neo4j database", type=str)
 @click.option('--remotedbuser', default=None, help="the user-name that accesses to remote neo4j database", type=str)
 @click.option('--remotedbpass', default=None, help="the password that accesses to remote neo4j database", prompt=True, hide_input=True)
-@click.option('--concurreq', type=int, help="the number of concurent requests", default=200)
+@click.option('--concurreq', type=int, help="the number of concurent requests", default=3)
 @click.pass_context
 def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq):
     # Init Local DataBase Setting

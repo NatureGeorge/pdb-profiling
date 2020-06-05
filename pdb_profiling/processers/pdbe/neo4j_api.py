@@ -11,7 +11,7 @@ from collections import defaultdict
 from itertools import combinations, product
 from numpy import nan
 import numpy as np
-import ujson as json
+import orjson as json
 from functools import lru_cache
 from textdistance import jaccard, overlap
 from Bio import Align
@@ -327,7 +327,7 @@ class Entry(object):
         # dfrm['polymer_type'] = dfrm.apply(lambda x: cls.get_polymer_type(x['DNA_COUNT'], x['RNA_COUNT']), axis=1)
         dfrm['polymer_type'] = [cls.get_polymer_type(x, y) for x, y in zip(dfrm['DNA_COUNT'], dfrm['RNA_COUNT'])]
         res = pd.DataFrame(
-            ((pdb_id, json.dumps(dict(zip(data.entity_id, data.polymer_type))))
+            ((pdb_id, json.dumps(dict(zip(data.entity_id, data.polymer_type))).decode('utf-8'))
              for pdb_id, data in dfrm.groupby('pdb_id')),
             columns=('pdb_id', 'nucleotides_entity_type'))
         # res['has_hybrid_nucleotides'] = res.nucleotides_entity_type.apply(lambda x: 'D\/R' in x)
@@ -366,7 +366,7 @@ class Entry(object):
         def index2range(lyst):
             res = to_interval(int(i[0]) for i in lyst)
             if isinstance(res, List):
-                return json.dumps(res)
+                return json.dumps(res).decode('utf-8')
             else:
                 return res
         
@@ -644,8 +644,10 @@ class SIFTS(Entry):
         if len(dfrm) == 0:
             return
         dfrm = cls.deal_InDe(dfrm)
-        dfrm.pdb_range = dfrm.pdb_range.apply(json.dumps)
-        dfrm.unp_range = dfrm.unp_range.apply(json.dumps)
+        dfrm.pdb_range = dfrm.pdb_range.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
+        dfrm.unp_range = dfrm.unp_range.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
         dfrm = await cls.update_range(dfrm, neo4j_api)
         return dfrm
 
@@ -716,11 +718,11 @@ class SIFTS(Entry):
             dfrm.loc[focus_index, ['unp_range', 'pdb_range']] = focus_df
         
         dfrm['pdb_gap_list'] = dfrm.apply(lambda x: json.dumps(
-            get_gap_list(x['pdb_range'])), axis=1)
+            get_gap_list(x['pdb_range'])).decode('utf-8'), axis=1)
         dfrm['unp_gap_list'] = dfrm.apply(lambda x: json.dumps(
-            get_gap_list(x['unp_range'])), axis=1)
+            get_gap_list(x['unp_range'])).decode('utf-8'), axis=1)
         dfrm['var_list'] = dfrm.apply(lambda x: json.dumps(get_range_diff(
-            x['unp_range'], x['pdb_range'])), axis=1)
+            x['unp_range'], x['pdb_range'])).decode('utf-8'), axis=1)
         dfrm['repeated'] = dfrm.apply(
             lambda x: '-' in x['var_list'], axis=1)
         dfrm['repeated'] = dfrm.apply(
@@ -825,7 +827,7 @@ class SIFTS(Entry):
         group_cols = ['pdb_id', 'entity_id', 'tag']
         return pd.DataFrame(
             ((pdb_id, entity_id, tag, 
-              json.dumps(to_interval(groupData.residue_number))
+              json.dumps(to_interval(groupData.residue_number)).decode('utf-8')
               ) for (pdb_id, entity_id, tag), groupData in res.groupby(group_cols)),
             columns=group_cols+['conflict_range'])
 
@@ -884,7 +886,7 @@ class SeqPairwiseAlign(object):
         for alignment in alignments:
             result = self.getAlignmentSegment(alignment)
             self.alignment_count += 1
-            return json.dumps(result[0]), json.dumps(result[1])
+            return json.dumps(result[0]).decode('utf-8'), json.dumps(result[1]).decode('utf-8')
 
     @staticmethod
     def getAlignmentSegment(alignment):

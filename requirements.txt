@@ -5,7 +5,7 @@ aiofiles
 unsync
 tenacity
 furl
-ujson
+orjson
 pyexcel
 tablib
 pandas
