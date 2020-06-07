@@ -176,9 +176,11 @@ class Sqlite_API(object):
         self.PDBRes_Info = PDBRes_Info
         self.Site_Info = Site_Info
 
-    def __init__(self, url: str, drop_all: bool=False):
+    def __init__(self, url: str, drop_all: bool=False, insert_sleep: float=45.5):
+        self.insert_sleep = insert_sleep
         self.database = databases.Database(url)
         self.engine = sqlalchemy.create_engine(url)
+        self.engine.execute("PRAGMA journal_mode=WAL")
         self.init_table_model()
         if drop_all:
             self.metadata.drop_all(self.engine, checkfirst=True)
@@ -203,8 +205,8 @@ class Sqlite_API(object):
                 await self.database.execute(query)
                 break
             except OperationalError as e:
-                logging.error(f"{e}, sleep and try again")
-                await asyncio.sleep(.1)
+                logging.error(f"{e}, sleep {self.insert_sleep}s and try again")
+                await asyncio.sleep(self.insert_sleep)
 
 
 @unsync

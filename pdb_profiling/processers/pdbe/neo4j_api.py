@@ -5,6 +5,7 @@
 # @Last Modified: 2020-04-08 09:44:05 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import List, Iterable, Iterator, Union, Dict, Optional, Tuple
+from functools import partial, reduce
 import pandas as pd
 from pathlib import Path
 from collections import defaultdict
@@ -449,6 +450,32 @@ class Entry(object):
             res_ids = [str(i) for i in res_ids]
             # return session.run(query, pdb_id=pdb_id, entity_id=str(entity_id), chain_id=chain_id, res_ids=res_ids)
             kwargs = dict(pdb_id=pdb_id, entity_id=str(entity_id), chain_id=chain_id, res_ids=res_ids)
+        try:
+            return session.run(query, **kwargs)
+        except AttributeError:
+            return query, kwargs
+
+    @classmethod
+    def get_binding_redidues(cls, pdb_id: str, entity_id: str, chain_id: str, session=None):
+        if session is None:
+            if cls.session is not None:
+                session = cls.session
+        query = '''
+        MATCH (entry:Entry)-[:HAS_BOUND_MOLECULE]->(:BoundMolecule)<-[:IS_PART_OF]-(:BoundLigand)-[:HAS_ARP_CONTACT]-(res:PDBResidue)-[inChain:IS_IN_CHAIN]-(chain:Chain)-[:CONTAINS_CHAIN]-(entity:Entity)
+        WHERE entry.ID = $pdb_id AND entity.ID = $entity_id AND chain.AUTH_ASYM_ID = $chain_id
+        RETURN distinct entry.ID as pdb_id, 
+                        entity.ID as entity_id, 
+                        chain.AUTH_ASYM_ID as chain_id, 
+                        res.CHEM_COMP_ID as residue_name, 
+                        toInteger(res.ID) as residue_number, 
+                        tofloat(inChain.OBSERVED_RATIO) as obs_ratio, 
+                        toInteger(inChain.AUTH_SEQ_ID) as author_residue_number, 
+                        inChain.PDB_INS_CODE as author_insertion_code
+        '''
+        kwargs = dict(
+            pdb_id=pdb_id, 
+            entity_id=str(entity_id), 
+            chain_id=chain_id)
         try:
             return session.run(query, **kwargs)
         except AttributeError:
@@ -1020,9 +1047,11 @@ class Neo4j_API(Abclog):
             if res is not None:
                 entry_info_func_res['nucleotides'] = res
             # pdb_entry_df = pd.concat(entry_info_func_res.values(), join='outer', axis=1)
-            pdb_entry_df = pd.concat(
-                (df.set_index(['pdb_id']) for df in entry_info_func_res.values() if len(df) > 0),
-                axis=1, sort=False).reset_index()
+            merge = partial(pd.merge, on=['pdb_id'], how='outer')
+            pdb_entry_df = reduce(merge, (df for df in entry_info_func_res.values() if len(df) > 0))
+            # pdb_entry_df = pd.concat(
+            #    (df.set_index(['pdb_id']) for df in entry_info_func_res.values() if len(df) > 0),
+            #    axis=1, sort=False).reset_index()
             pdb_entry_df.rename(columns={'index': 'pdb_id'}, inplace=True)
             for col, default in cls.entry_info_add.items():
                 if col not in pdb_entry_df:

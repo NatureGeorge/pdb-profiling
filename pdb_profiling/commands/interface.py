@@ -222,12 +222,13 @@ TODO:
 @click.option('--remotedbuser', default=None, help="the user-name that accesses to remote neo4j database", type=str)
 @click.option('--remotedbpass', default=None, help="the password that accesses to remote neo4j database", prompt=True, hide_input=True)
 @click.option('--concurreq', type=int, help="the number of concurent requests", default=3)
+@click.option('--insertsleep', type=float, help="the sleep duration when encounter database lock error", default=45.5)
 @click.pass_context
-def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq):
+def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq, insertsleep):
     # Init Local DataBase Setting
     click.echo(colorClick(f"Local DB (dropall: {dropall})"))
     db_path = ctx.obj['DB_folder']/db
-    sqlite_api = Sqlite_API("sqlite:///%s" % str(db_path), dropall)
+    sqlite_api = Sqlite_API("sqlite:///%s" % str(db_path), dropall, insertsleep)
     Neo4j_API.sqlite_api = sqlite_api
     ctx.obj['sqlite_api'] = sqlite_api
     if remotedburl is not None:
