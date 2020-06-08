@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-26 08:02:16 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+from __future__ import absolute_import
 import asyncio
 import databases
 import orm
@@ -58,6 +59,7 @@ converters = {
     "sifts_range_tag": str,
     "new_unp_range": str,
     "new_pdb_range": str,
+    "conflict_range": str,
     # Res_Info
     "residue_number": int,
     "residue_name": str,
@@ -135,6 +137,8 @@ class Sqlite_API(object):
             sifts_range_tag = orm.String(max_length=25)
             new_unp_range = orm.Text()
             new_pdb_range = orm.Text()
+            conflict_range = orm.Text(
+                allow_null=True, allow_blank=True, default='')
 
         class PDBRes_Info(orm.Model):
             '''
@@ -213,7 +217,7 @@ class Sqlite_API(object):
 async def main():
     start = perf_counter()
     # sqlite_api = Sqlite_API("sqlite:///../../../test/db/orm_db_test.db")
-    sqlite_api = Sqlite_API("sqlite:///C:\\Download\\20200601\\DB\\local_sqlite_demo.db")
+    sqlite_api = Sqlite_API("sqlite:///C:\\Download\\m3d_running_example\\DB\\db2130.db")
     print('init db: {:.5f}s'.format(perf_counter()-start))
     '''
     for index, (Info, file) in enumerate(zip((sqlite_api.Entry_Info, sqlite_api.SEQRES_Info, sqlite_api.SIFTS_Info, sqlite_api.PDBRes_Info), (  #
@@ -253,14 +257,15 @@ async def main():
     # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
     # filter(pdb_id__in=['3wwq', '5v8w'])
-    example = await sqlite_api.Entry_Info.objects.limit(1000).all()
+    # example = await sqlite_api.Entry_Info.objects.limit(1000).all()
+    example = await sqlite_api.SEQRES_Info.objects.filter(pdb_id='4h3k',entity_id='3',chain_id='F').all()
     # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
     # example = await sqlite_api.Site_Info.objects.filter(from_id__in=('ENST00000379410', 'ENST00000379409')).all()
     # .filter(obs_ratio__lt=1).
     print('init select: {:.5f}s'.format(perf_counter()-start))
-    res = pd.DataFrame(example)
-    print(res)
-    print(len(res), len(res.drop_duplicates()))
+    # res = pd.DataFrame(example)
+    print(example[0].NON_INDEX)
+    # print(len(res), len(res.drop_duplicates()))
     # sqlite_api.sync_insert(sqlite_api.PDBRes_Info, [])
 
 

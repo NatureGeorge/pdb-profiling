@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-23 02:24:53 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
+from __future__ import absolute_import
 import click
 import json
 from pandas import read_csv, merge, Series, DataFrame
@@ -20,7 +21,7 @@ from tqdm import tqdm
 if "\\" in __file__:
     # Windows
     _SEP = "\\"
-    sys.path.append("C:/GitWorks/pdb-profiling")
+    sys.path.append("C:\GitWorks\pdb-profiling")
 else:
     # Linux
     _SEP = "/"
@@ -34,6 +35,7 @@ try:
     from pdb_profiling.fetcher.dbfetch import Neo4j
     from pdb_profiling.log import Abclog
     from pdb_profiling.utils import related_dataframe
+    from pdb_profiling.pipelines.score import Score_API
 except Exception as e:
     raise e
 
@@ -240,6 +242,7 @@ def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq
             config, concurreq,
             init_semaphore(concurreq).result(),
             log_func=ctx.obj['logger'].info).connnect().result()
+        ctx.obj['neo4j_api'] = Neo4j_API.neo4j_api
 
 
 @Interface.command("DB.insert-sites-info")
@@ -351,6 +354,37 @@ def neo4j_res2pdb(ctx, outname):
     Neo4j_API.res2pdbpath = ctx.obj['folder']/outname
     return processor
 
+
+@Interface.command("Score.stat-sifts")
+@click.option("--input", default="", help="the file of SIFTS Mapping result", type=click.Path())
+@click.option("--outname", help="the output file name of result file", type=click.Path())
+@click.option("--omit", help="omit the number of unmapped range", type=int, default=5)
+@click.option("--score/--no-score", help="whether to score", default=True, is_flag=True)
+@click.pass_context
+def statistics_sifts(ctx, input, outname, omit, score):
+    score_api = Score_API(
+        ctx.obj['sqlite_api'],
+        ctx.obj['neo4j_api'],
+        outpath=ctx.obj['folder']/outname,
+        logger=ctx.obj['logger'],
+        omit=omit,
+        add_score=score)
+    ctx.obj['score_api'] = score_api
+    
+    def processor(iterator: Iterator[Unfuture]):
+        '''
+        Continuations for Mapping from unp to pdb
+        '''
+        for task in iterator:
+            yield task.then(score_api.process)
+    
+    if input:
+        score_api.process(input).result()
+        ctx.obj['logger'].info("Finish stat-sifts")
+    else:
+        return processor
+    
+    
 
 if __name__ == '__main__':
     Interface(obj={})

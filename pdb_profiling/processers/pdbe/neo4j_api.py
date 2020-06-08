@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-04-08 09:44:05 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+from __future__ import absolute_import
 from typing import List, Iterable, Iterator, Union, Dict, Optional, Tuple
 from functools import partial, reduce
 import pandas as pd
@@ -106,7 +107,7 @@ def lyst2range(lyst, add_end=1):
 
 
 def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
-    if isinstance(mis_range, float):
+    if isinstance(mis_range, float) or mis_range is None:
         return pdb_range
     pdb_range_set = interval2set(pdb_range)
     mis_range_set = interval2set(mis_range)
@@ -114,23 +115,31 @@ def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterab
 
 
 def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
-    if isinstance(right, float):
-        return left
-    left_range_set = interval2set(left)
-    right_range_set = interval2set(right)
-    return to_interval(left_range_set | right_range_set)
+    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left:
+        return None
+    try:
+        left_range_set = interval2set(left)
+        right_range_set = interval2set(right)
+        return to_interval(left_range_set | right_range_set)
+    except Exception as e:
+        print(left, right)
+        print(type(left), type(right))
+        raise e
 
 
 def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable]) -> List:
-    if isinstance(unk_range, float):
-        return nan
+    if isinstance(unk_range, float) or unk_range is None:
+        return None
     obs_range_set = interval2set(obs_range)
     unk_range_set = interval2set(unk_range)
     return to_interval(obs_range_set & unk_range_set)
 
 
-def outside_range_len(pdb_range: str, seqres_len: int, omit: int = 5) -> int:
-    lyst = json.loads(pdb_range)
+def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:
+    if isinstance(pdb_range, str):
+        lyst = json.loads(pdb_range)
+    else:
+        lyst = pdb_range
     out_head = lyst[0][0]-1
     out_tail = seqres_len - lyst[-1][-1]
     if out_head <= omit:
@@ -145,7 +154,7 @@ def outside_range_len(pdb_range: str, seqres_len: int, omit: int = 5) -> int:
 
 
 def range_len(lyst: Union[List, str, float]) -> int:
-    if isinstance(lyst, float):
+    if isinstance(lyst, float) or lyst is None:
         return 0
     elif isinstance(lyst, str):
         lyst = json.loads(lyst)
@@ -456,22 +465,29 @@ class Entry(object):
             return query, kwargs
 
     @classmethod
-    def get_binding_redidues(cls, pdb_id: str, entity_id: str, chain_id: str, session=None):
+    def get_binding_redidues(cls, pdb_id: str, entity_id: str, chain_id: str, count_only: bool = True, session=None):
         if session is None:
             if cls.session is not None:
                 session = cls.session
-        query = '''
-        MATCH (entry:Entry)-[:HAS_BOUND_MOLECULE]->(:BoundMolecule)<-[:IS_PART_OF]-(:BoundLigand)-[:HAS_ARP_CONTACT]-(res:PDBResidue)-[inChain:IS_IN_CHAIN]-(chain:Chain)-[:CONTAINS_CHAIN]-(entity:Entity)
-        WHERE entry.ID = $pdb_id AND entity.ID = $entity_id AND chain.AUTH_ASYM_ID = $chain_id
-        RETURN distinct entry.ID as pdb_id, 
-                        entity.ID as entity_id, 
-                        chain.AUTH_ASYM_ID as chain_id, 
-                        res.CHEM_COMP_ID as residue_name, 
-                        toInteger(res.ID) as residue_number, 
-                        tofloat(inChain.OBSERVED_RATIO) as obs_ratio, 
-                        toInteger(inChain.AUTH_SEQ_ID) as author_residue_number, 
-                        inChain.PDB_INS_CODE as author_insertion_code
-        '''
+        if count_only:
+            query = '''
+                MATCH (entry:Entry)-[:HAS_BOUND_MOLECULE]->(:BoundMolecule)<-[:IS_PART_OF]-(:BoundLigand)-[:HAS_ARP_CONTACT]-(res:PDBResidue)-[:IS_IN_CHAIN]-(chain:Chain)-[:CONTAINS_CHAIN]-(entity:Entity)
+                WHERE entry.ID = $pdb_id AND entity.ID = $entity_id AND chain.AUTH_ASYM_ID = $chain_id
+                RETURN COUNT(DISTINCT res) as LIGAND_BINDING_RES_COUNT
+            '''
+        else:
+            query = '''
+                MATCH (entry:Entry)-[:HAS_BOUND_MOLECULE]->(:BoundMolecule)<-[:IS_PART_OF]-(:BoundLigand)-[:HAS_ARP_CONTACT]-(res:PDBResidue)-[inChain:IS_IN_CHAIN]-(chain:Chain)-[:CONTAINS_CHAIN]-(entity:Entity)
+                WHERE entry.ID = $pdb_id AND entity.ID = $entity_id AND chain.AUTH_ASYM_ID = $chain_id
+                RETURN distinct entry.ID as pdb_id, 
+                                entity.ID as entity_id, 
+                                chain.AUTH_ASYM_ID as chain_id, 
+                                res.CHEM_COMP_ID as residue_name, 
+                                toInteger(res.ID) as residue_number, 
+                                tofloat(inChain.OBSERVED_RATIO) as obs_ratio, 
+                                toInteger(inChain.AUTH_SEQ_ID) as author_residue_number, 
+                                inChain.PDB_INS_CODE as author_insertion_code
+                '''
         kwargs = dict(
             pdb_id=pdb_id, 
             entity_id=str(entity_id), 
@@ -508,6 +524,40 @@ class Entry(object):
         dfrm['chain_count'] = dfrm.entity_chain_map.apply(lambda x: sum(len(i) for i in x.values()))
         return dfrm
  
+    @classmethod
+    def summary_entity_interaction(cls, pdbs, session=None):
+        '''
+        Target: 
+        
+        * Whether two chains have interaction, if yes, find the interacting residues;
+        * Then check whether the interacting residues are in the mapped range of the corresponding uniprot-isoform
+
+        Possible Solution:
+
+        1. Find the interacting entity
+        2. Fing the Interface Node
+        3. Directly go to the residues with contact
+        4. Use InterfaceBindingResidue Node
+        5. Use MAP_TO_UNIPROT_RESIDUE Relationship
+
+        Problem to solve:
+
+        1. Difference between ARP_CONTACT and PISA_CONTACT
+        2. 
+        '''
+        query = '''
+                MATCH (entry:Entry)-[:HAS_ENTITY]-(entityA:Entity{POLYMER_TYPE:'P'})-[:INTERACTS_WITH_ARP|:INTERACTS_WITH_PISA]-(entityB:Entity{POLYMER_TYPE:'P'})
+                WHERE entry.ID IN $pdbs
+                RETURN entityA, entityB
+            '''
+        if session is None:
+            if cls.session is not None:
+                session = cls.session
+        try:
+            return session.run(query, pdbs=list(pdbs))
+        except AttributeError:
+            return query, dict(lyst=list(pdbs))
+
 
 class SIFTS(Entry):
     @classmethod
@@ -815,9 +865,23 @@ class SIFTS(Entry):
             return ''.join(r['aa'] for r in session.run(query))
         except AttributeError:
             return query, {}
+    
+    @classmethod
+    def get_unp_seq_len(cls, unp: str, session=None):
+        query = '''
+            MATCH (unp:UniProt{ACCESSION: "%s"})-[:HAS_UNP_RESIDUE]-(unpRes:UNPResidue)
+            RETURN COUNT(unpRes) as unp_len
+        ''' % unp
+        if session is None:
+            if cls.session is not None:
+                session = cls.session
+        try:
+            return session.run(query)
+        except AttributeError:
+            return query, {}
 
     @classmethod
-    def summary_res_conflict(cls, lyst, session=None):
+    def res_conflict_then(cls, res):
         def get_mutaRes(dfrm: pd.DataFrame):
             sites = defaultdict(list)
             def storeSites(lyst, sitelyst):
@@ -833,6 +897,14 @@ class SIFTS(Entry):
                 cur_df['tag'] = tag
                 yield cur_df
         
+        result = cls.to_data_frame(res)
+        if len(result) == 0:
+            return None
+        sites = get_mutaRes(result)
+        return pd.concat(yield_dfrm_of_mutaRes(sites), sort=False, ignore_index=True)
+
+    @classmethod
+    def summary_res_conflict(cls, lyst, session=None):
         muta_query = '''
             MATCH (entry:Entry)-[:HAS_ENTITY]->(entity:Entity{POLYMER_TYPE:'P'})-[:HAS_RESIDUE_CONFLICT]->(resCon:ResidueConflict)
             WHERE entry.ID in $lyst
@@ -842,9 +914,8 @@ class SIFTS(Entry):
             if cls.session is not None:
                 session = cls.session
         try:
-            result = cls.to_data_frame(session.run(muta_query, lyst=list(lyst)))
-            sites = get_mutaRes(result)
-            return pd.concat(yield_dfrm_of_mutaRes(sites), sort=False, ignore_index=True)
+            res = session.run(muta_query, lyst=list(lyst))
+            return cls.res_conflict_then(res)
         except AttributeError:
             return muta_query, dict(lyst=list(lyst))
 
@@ -1003,6 +1074,15 @@ class Neo4j_API(Abclog):
             if sifts_df is not None:
                 sifts_df = related_dataframe(cls.sifts_filter, sifts_df)
                 if len(sifts_df) > 0:
+                    # TODO: ADD Residue Conflict Info
+                    query, kwargs = SIFTS.summary_res_conflict(sifts_df.pdb_id.unique())
+                    res = await cls.neo4j_api.afetch(query, **kwargs)
+                    res = SIFTS.res_conflict_then(res)
+                    if res is not None:
+                        conflict_df = SIFTS.deal_res_conflict(res)
+                        sifts_df = sifts_df.merge(conflict_df.rename(columns={'tag': 'UniProt'}), how='left')
+                    else:
+                        sifts_df['conflict_range'] = None
                     # TODO: Export New Data [Sync]
                     values = sifts_df.to_dict('records')
                     if values:
