@@ -70,7 +70,10 @@ converters = {
     "from_id": str,
     "Ref": str,
     "Pos": int,
-    "Alt": str
+    "Alt": str,
+    # Else
+    "oligo_state": str,
+    "RAW_BS": float
     }
 
 
@@ -257,14 +260,16 @@ async def main():
     # example = await SIFTS_Info.objects.filter(UniProt='P12270').all()
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
     # filter(pdb_id__in=['3wwq', '5v8w'])
-    # example = await sqlite_api.Entry_Info.objects.limit(1000).all()
-    example = await sqlite_api.SEQRES_Info.objects.filter(pdb_id='4h3k',entity_id='3',chain_id='F').all()
+    example = await sqlite_api.Entry_Info.objects.limit(10).all()
+    # example = await sqlite_api.SEQRES_Info.objects.filter(pdb_id='4h3k',entity_id='3',chain_id='F').all()
     # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
     # example = await sqlite_api.Site_Info.objects.filter(from_id__in=('ENST00000379410', 'ENST00000379409')).all()
     # .filter(obs_ratio__lt=1).
     print('init select: {:.5f}s'.format(perf_counter()-start))
     # res = pd.DataFrame(example)
-    print(example[0].NON_INDEX)
+    # print(example[0].NON_INDEX)
+    print({value.pdb_id: (value.resolution, value.REVISION_DATE)
+           for value in example})
     # print(len(res), len(res.drop_duplicates()))
     # sqlite_api.sync_insert(sqlite_api.PDBRes_Info, [])
 

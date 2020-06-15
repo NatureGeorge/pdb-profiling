@@ -92,6 +92,11 @@ class AHP(object):
         select_vector = np.real(max_vector/np.linalg.norm(max_vector, ord=1))
         return select_vector * self.factor
     
+    def raw_score(self, array):
+        weight = self.weight/self.weight[0]
+        score = array[0]*weight[0]
+        return score + np.dot(array[1:], -weight[1:])
+
     def score(self, array):
         '''
         Assume that the elements in the array are sorted
@@ -158,7 +163,7 @@ class Score_API(object):
             sum(json.loads(var_list))
         v6 = 1 - min(indel_count/seqres.SEQRES_COUNT, 1)
         return (unp, record[0], record[1], record[2],
-                      pdb_range, unp_range,
+                      pdb_range, unp_range, seqres.SEQRES_COUNT,
                       unp_len, binding_res, obs_res_map_range, obs_res_map_count,
                       obs_std_res_map_range, obs_std_res_map_count,
                       out_res_count, obs_res_range, obs_res_count,
@@ -193,7 +198,8 @@ class Score_API(object):
         res_record_df = DataFrame(
             res_record_lyst,
             columns=('UniProt', 'pdb_id', 'entity_id', 'chain_id',
-                     'new_unp_range', 'new_pdb_range', 'LEN(UniProt)',
+                     'new_pdb_range', 'new_unp_range', 'SEQRES_COUNT', 
+                     'LEN(UniProt)',
                      'LIGAND_BINDING_RES_COUNT', 'obs_res_map_range',
                      'obs_res_map_count',
                      'obs_std_res_map_range', 'obs_std_res_map_count',
@@ -219,6 +225,15 @@ class Score_API(object):
     def score(self, dfrm):
         # arrays = dfrm[[f'v{i}' for i in range(1,7)]].to_numpy()
         self.ahp = AHP()
+        dfrm['RAW_BS'] = dfrm.apply(lambda x: self.ahp.raw_score([
+            x['obs_std_res_map_count'],
+            x['out_res_count'],
+            x['LIGAND_BINDING_RES_COUNT'],
+            x['mis_res_map_count'],
+            x['obs_non_muta_res_map_count'],
+            x['indel_count']
+        ])/x['LEN(UniProt)'],
+            axis=1)
         dfrm[['BS', 'GM', 'HM', 'HS', 'ES', 'LS']] = dfrm[[f'v{i}' for i in range(
             1, 7)]].apply(lambda x: self.score_pipe(np.array([x[f'v{i}'] for i in range(1,7)])), axis=1, result_type='expand')
         return dfrm

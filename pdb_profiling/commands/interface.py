@@ -25,7 +25,7 @@ if "\\" in __file__:
 else:
     # Linux
     _SEP = "/"
-    sys.path.append("/data/zzf/2020/code/pdb-profiling")
+    sys.path.append("/data/zzf/2020/src/pdb-profiling")
 
 try:
     from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
@@ -36,6 +36,7 @@ try:
     from pdb_profiling.log import Abclog
     from pdb_profiling.utils import related_dataframe
     from pdb_profiling.pipelines.score import Score_API
+    from pdb_profiling.pipelines.select import Select_API
 except Exception as e:
     raise e
 
@@ -355,13 +356,13 @@ def neo4j_res2pdb(ctx, outname):
     return processor
 
 
-@Interface.command("Score.stat-sifts")
+@Interface.command("Stat.score-sifts")
 @click.option("--input", default="", help="the file of SIFTS Mapping result", type=click.Path())
 @click.option("--outname", help="the output file name of result file", type=click.Path())
 @click.option("--omit", help="omit the number of unmapped range", type=int, default=5)
 @click.option("--score/--no-score", help="whether to score", default=True, is_flag=True)
 @click.pass_context
-def statistics_sifts(ctx, input, outname, omit, score):
+def score_sifts(ctx, input, outname, omit, score):
     score_api = Score_API(
         ctx.obj['sqlite_api'],
         ctx.obj['neo4j_api'],
@@ -384,7 +385,40 @@ def statistics_sifts(ctx, input, outname, omit, score):
     else:
         return processor
     
+
+@Interface.command("Stat.select-sifts")
+@click.option("--input", default="", help="the file of SIFTS Mapping result", type=click.Path())
+@click.option("--oligooutname", help="the output file name of oligo result file", type=click.Path())
+@click.option("--selectoutname", help="the output file name of selection result file", type=click.Path())
+@click.option("--omitcutoff", help="the length of omitted chains", type=int, default=50)
+@click.option("--omitcol", help="the column that apply omit-cutoff", type=str, default="ATOM_RECORD_COUNT")
+@click.option("--oscutoff", help="the cutoff of overlap coefficient", type=float, default=0.2)
+@click.pass_context
+def oligo_sifts(ctx, input, oligooutname, selectoutname, omitcutoff, omitcol, oscutoff):
+    def processor(iterator: Iterator[Unfuture]):
+        '''
+        Continuations for Mapping from unp to pdb
+        '''
+        for task in iterator:
+            yield task.then(ctx['select_api'].process)
     
+    select_api = Select_API(
+        ctx.obj['sqlite_api'],
+        ctx.obj['neo4j_api'],
+        oligo_path=ctx.obj['folder']/oligooutname,
+        selected_path=ctx.obj['folder']/selectoutname,
+        oscutoff=oscutoff,
+        logger=ctx.obj['logger'],
+        cutoff=omitcutoff,
+        omit_col=omitcol)
+    ctx.obj['select_api'] = select_api
+
+    if input:
+        select_api.process(input).result()
+        ctx.obj['logger'].info("Finish select")
+    else:
+        return processor
+
 
 if __name__ == '__main__':
     Interface(obj={})

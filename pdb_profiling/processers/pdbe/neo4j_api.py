@@ -40,7 +40,7 @@ standardAA = list(SEQ_DICT.keys())
 standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
 
 
-def to_interval(lyst: Union[Iterable, Iterator]) -> Union[float, List]:
+def to_interval(lyst: Union[Iterable, Iterator]) -> List:
     def pass_check(lyst):
         try:
             if not lyst or pd.isna(lyst):
@@ -52,10 +52,10 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> Union[float, List]:
                 return False
             else:
                 return True
-    if not pass_check(lyst): return nan
+    if not pass_check(lyst): return []
     else:
         lyst = set(int(i) for i in lyst)
-        if not pass_check(lyst): return nan
+        if not pass_check(lyst): return []
         start = []
         interval_lyst = []
         true_interval_lyst = []
@@ -109,13 +109,15 @@ def lyst2range(lyst, add_end=1):
 def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
     if isinstance(mis_range, float) or mis_range is None:
         return pdb_range
+    if len(pdb_range) == 0:
+        return []
     pdb_range_set = interval2set(pdb_range)
     mis_range_set = interval2set(mis_range)
     return to_interval(pdb_range_set - mis_range_set)
 
 
 def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
-    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left:
+    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left or left == 'nan' or right == 'nan':
         return None
     try:
         left_range_set = interval2set(left)
@@ -511,7 +513,7 @@ class Entry(object):
         try:
             return session.run(query, pdbs=list(pdbs))
         except AttributeError:
-            return query, dict(lyst=list(pdbs))
+            return query, dict(pdbs=list(pdbs))
     
     @classmethod
     def deal_entity_chain(cls, res):
@@ -599,10 +601,11 @@ class SIFTS(Entry):
             dfrm = res
         else:
             dfrm = cls.to_data_frame(res)
-            dfrm.unp_entity_info = dfrm.unp_entity_info.apply(lyst2dict)
-        dfrm['entity_unp_info'] = dfrm.unp_entity_info.apply(reverse_dict)
-        dfrm['entity_with_unp_count'] = dfrm.entity_unp_info.apply(len)
-        dfrm['min_unp_count'] = dfrm.entity_unp_info.apply(min_unp)
+            dfrm.unp_entity_info = dfrm.unp_entity_info.apply(lambda x: lyst2dict(x) if not isinstance(x, float) else nan)
+        # !!!
+        dfrm['entity_unp_info'] = dfrm.unp_entity_info.apply(lambda x: reverse_dict(x) if not isinstance(x, float) else nan)
+        dfrm['entity_with_unp_count'] = dfrm.entity_unp_info.apply(lambda x: len(x) if not isinstance(x, float) else nan)
+        dfrm['min_unp_count'] = dfrm.entity_unp_info.apply(lambda x: min_unp(x) if not isinstance(x, float) else nan)
         return dfrm
     
     @staticmethod
@@ -648,6 +651,30 @@ class SIFTS(Entry):
         tidy_na(unp_entity_chain, 'min_unp_count', 0, int)
         # pass_result_oli, indexes_oli
         return cls.get_oligo_state(unp_entity_chain)
+    
+    @classmethod
+    @unsync
+    async def asummary_oligo_state(cls, pdbs, neo4j):
+        query, kwargs = cls.summary_entity_chain(pdbs)
+        res = await neo4j.afetch(query, **kwargs)
+        entity_chain = cls.deal_entity_chain(res)
+        query, kwargs = cls.summary_entity_unp(pdbs)
+        res = await neo4j.afetch(query, **kwargs)
+        unp_entity = cls.deal_entity_unp(res)
+        unp_entity_chain = pd.merge(entity_chain, unp_entity, how='left')
+        tidy_na(unp_entity_chain, 'entity_with_unp_count', 0, int)
+        tidy_na(unp_entity_chain, 'min_unp_count', 0, int)
+        return cls.get_oligo_state(unp_entity_chain)
+
+    @classmethod
+    @unsync
+    async def pipe_oligo(cls, pdbs, neo4j, sqlite, **kwargs):
+        seqres_df = await sqlite.SEQRES_Info.objects.filter(pdb_id__in=pdbs).all()
+        seqres_df = pd.DataFrame(seqres_df)
+        omit_df = cls.omit_chains(seqres_df, **kwargs)
+        oligo_df, _ = await cls.asummary_oligo_state(pdbs, neo4j)
+        oligo_df, _ = cls.update_oligo_state(oligo_df, omit_df)
+        return oligo_df
 
     @staticmethod
     def omit_chains(seq_df: pd.DataFrame, cutoff: int = 50, omit_col: str = 'ATOM_RECORD_COUNT'):
@@ -736,7 +763,15 @@ class SIFTS(Entry):
         query = '''
             MATCH (entity:Entity)-[seg:HAS_UNIPROT_SEGMENT]->(unp:UniProt)
             WHERE entity.UNIQID IN $entity_uniqids AND unp.ACCESSION IN $unps
-            RETURN unp.ACCESSION as UniProt, entry.ID as pdb_id, entity.ID as entity_id, seg.AUTH_ASYM_ID as chain_id, tofloat(seg.IDENTITY) as identity, COLLECT([toInteger(seg.PDB_START), toInteger(seg.PDB_END)]) as pdb_range, COLLECT([toInteger(seg.UNP_START), toInteger(seg.UNP_END)]) as unp_range
+            RETURN unp.ACCESSION as UniProt,
+                   substring(entity.UNIQID,0,4) as pdb_id, 
+                   entity.ID as entity_id, 
+                   seg.AUTH_ASYM_ID as chain_id, 
+                   tofloat(seg.IDENTITY) as identity, 
+                   COLLECT([toInteger(seg.PDB_START), 
+                   toInteger(seg.PDB_END)]) as pdb_range, 
+                   COLLECT([toInteger(seg.UNP_START), 
+                   toInteger(seg.UNP_END)]) as unp_range
         '''
         '''
         if session is None:
@@ -885,8 +920,8 @@ class SIFTS(Entry):
         def get_mutaRes(dfrm: pd.DataFrame):
             sites = defaultdict(list)
             def storeSites(lyst, sitelyst):
-                sitelyst.extend([i.split('|')[1] for i in lyst])
-            dfrm.apply(lambda x: storeSites(x[2], sites[(x[0], x[1], x[3])]), axis=1)
+                sitelyst.extend([i.split('|')[1] for i in lyst if '|' in i])# !!!
+            dfrm.apply(lambda x: storeSites(x['resCon.DETAILS'], sites[(x['pdb_id'], x['entity_id'], x['resCon.ID'])]), axis=1)
             return sites
 
         def yield_dfrm_of_mutaRes(sites: Dict):
@@ -900,7 +935,11 @@ class SIFTS(Entry):
         result = cls.to_data_frame(res)
         if len(result) == 0:
             return None
-        sites = get_mutaRes(result)
+        try:
+            sites = get_mutaRes(result)
+        except IndexError:
+            logging.error(result.to_string())
+            return None
         return pd.concat(yield_dfrm_of_mutaRes(sites), sort=False, ignore_index=True)
 
     @classmethod

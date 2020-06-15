@@ -6,12 +6,13 @@ unsync
 tenacity
 furl
 orjson
+ujson
 pyexcel
 tablib
 pandas
 numpy
 textdistance
-biopython
+biopython==1.74
 databases
 neo4j
 tqdm
