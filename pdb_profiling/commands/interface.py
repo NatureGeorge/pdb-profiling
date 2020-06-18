@@ -69,7 +69,8 @@ def Interface(ctx, folder, loggingpath, useexisting):
     ctx.obj['loggingpath'] = loggingpath
     for cur_path in (folder/'UniProt'/'mapping',
                      folder/'UniProt'/'fasta',
-                     folder/'DB'):
+                     folder/'DB',
+                     folder/'I3D'):
         cur_path.mkdir(parents=True, exist_ok=True)
         ctx.obj[f'{cur_path.stem}_folder'] = cur_path
     # Init Logging Setting
@@ -244,6 +245,7 @@ def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq
             init_semaphore(concurreq).result(),
             log_func=ctx.obj['logger'].info).connnect().result()
         ctx.obj['neo4j_api'] = Neo4j_API.neo4j_api
+        ctx.obj['Neo4j_API'] = Neo4j_API
 
 
 @Interface.command("DB.insert-sites-info")
@@ -388,13 +390,14 @@ def score_sifts(ctx, input, outname, omit, score):
 
 @Interface.command("Stat.select-sifts")
 @click.option("--input", default="", help="the file of SIFTS Mapping result", type=click.Path())
-@click.option("--oligooutname", help="the output file name of oligo result file", type=click.Path())
-@click.option("--selectoutname", help="the output file name of selection result file", type=click.Path())
 @click.option("--omitcutoff", help="the length of omitted chains", type=int, default=50)
 @click.option("--omitcol", help="the column that apply omit-cutoff", type=str, default="ATOM_RECORD_COUNT")
 @click.option("--oscutoff", help="the cutoff of overlap coefficient", type=float, default=0.2)
+@click.option("--siftsfilter",
+              default='{"identity":["ge",0.9],"repeated":["eq",false]}',
+              help="the filter(JSON-Format Dict) of SIFTS Mapping result", type=str)
 @click.pass_context
-def oligo_sifts(ctx, input, oligooutname, selectoutname, omitcutoff, omitcol, oscutoff):
+def oligo_sifts(ctx, input, omitcutoff, omitcol, oscutoff, siftsfilter):
     def processor(iterator: Iterator[Unfuture]):
         '''
         Continuations for Mapping from unp to pdb
@@ -404,14 +407,15 @@ def oligo_sifts(ctx, input, oligooutname, selectoutname, omitcutoff, omitcol, os
     
     select_api = Select_API(
         ctx.obj['sqlite_api'],
-        ctx.obj['neo4j_api'],
-        oligo_path=ctx.obj['folder']/oligooutname,
-        selected_path=ctx.obj['folder']/selectoutname,
+        ctx.obj['Neo4j_API'],
+        folder=ctx.obj['folder'],
         oscutoff=oscutoff,
         logger=ctx.obj['logger'],
         cutoff=omitcutoff,
         omit_col=omitcol)
     ctx.obj['select_api'] = select_api
+    if ctx.obj['Neo4j_API'].sifts_filter is None:
+        ctx.obj['Neo4j_API'].sifts_filter = json.loads(siftsfilter)
 
     if input:
         select_api.process(input).result()

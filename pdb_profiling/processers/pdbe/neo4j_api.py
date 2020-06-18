@@ -1081,6 +1081,39 @@ class Neo4j_API(Abclog):
 
     @classmethod
     @unsync
+    async def pipe_new_sifts(cls, lyst, id_type):
+        if len(lyst) > 0:
+            # Assume that the elements of the lyst are all valid and are covered by the remote db
+            query, kwargs = SIFTS.summary_mapping(lyst, id_type)
+            res = await cls.neo4j_api.afetch(query, **kwargs)
+            sifts_df = await SIFTS.deal_mapping(res, cls.neo4j_api)
+            if sifts_df is not None:
+                sifts_df = related_dataframe(cls.sifts_filter, sifts_df)
+                if len(sifts_df) > 0:
+                    # TODO: ADD Residue Conflict Info
+                    query, kwargs = SIFTS.summary_res_conflict(
+                        sifts_df.pdb_id.unique())
+                    res = await cls.neo4j_api.afetch(query, **kwargs)
+                    res = SIFTS.res_conflict_then(res)
+                    if res is not None:
+                        conflict_df = SIFTS.deal_res_conflict(res)
+                        sifts_df = sifts_df.merge(conflict_df.rename(
+                            columns={'tag': 'UniProt'}), how='left')
+                    else:
+                        sifts_df['conflict_range'] = None
+                    # TODO: Export New Data [Sync]
+                    values = sifts_df.to_dict('records')
+                    await cls.sqlite_api.async_insert(cls.sqlite_api.SIFTS_Info, values)
+                    return sifts_df
+                else:
+                    return None
+            else:
+                return None
+        else:
+            return None
+
+    @classmethod
+    @unsync
     async def unp2pdb(cls, lyst: Union[Iterable, Unfuture]):
         '''
         Map from unp to pdb [DB]
@@ -1103,40 +1136,8 @@ class Neo4j_API(Abclog):
             # e_pdbs = e_sifts_df.pdb_id.unique()
         else:
             e_sifts_df = None
-            # e_pdbs = []
         # TODO: Fetch New Data
-        if len(lyst) > 0:
-            # Assume that the elements of the lyst are all valid and are covered by the remote db
-            query, kwargs = SIFTS.summary_mapping(lyst, 'unp')
-            res = await cls.neo4j_api.afetch(query, **kwargs)
-            sifts_df = await SIFTS.deal_mapping(res, cls.neo4j_api)
-            if sifts_df is not None:
-                sifts_df = related_dataframe(cls.sifts_filter, sifts_df)
-                if len(sifts_df) > 0:
-                    # TODO: ADD Residue Conflict Info
-                    query, kwargs = SIFTS.summary_res_conflict(sifts_df.pdb_id.unique())
-                    res = await cls.neo4j_api.afetch(query, **kwargs)
-                    res = SIFTS.res_conflict_then(res)
-                    if res is not None:
-                        conflict_df = SIFTS.deal_res_conflict(res)
-                        sifts_df = sifts_df.merge(conflict_df.rename(columns={'tag': 'UniProt'}), how='left')
-                    else:
-                        sifts_df['conflict_range'] = None
-                    # TODO: Export New Data [Sync]
-                    values = sifts_df.to_dict('records')
-                    if values:
-                        await sqlite_api.async_insert(
-                            sqlite_api.SIFTS_Info, values)
-                    # del values
-                    # Get pdb lyst that **may** contain new pdbs
-                    # pdbs = sifts_df.pdb_id.unique()
-                else:
-                    sifts_df = None
-                # pdbs = []
-        else:
-            sifts_df = None
-            # pdbs = []
-        
+        sifts_df = await cls.pipe_new_sifts(lyst, 'unp')
         sifts = [df for df in (sifts_df, e_sifts_df) if df is not None]
         if sifts:
             sifts_df = pd.concat(sifts, sort=False, ignore_index=True)

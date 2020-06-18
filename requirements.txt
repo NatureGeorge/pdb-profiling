@@ -17,3 +17,4 @@ databases
 neo4j
 tqdm
 orm
+networkx

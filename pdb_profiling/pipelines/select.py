@@ -11,11 +11,14 @@ import asyncio
 import aiofiles
 import ujson as json
 import orjson
+from pathlib import Path
+import networkx as nx
 from tablib import Dataset
 from typing import Dict
 from textdistance import overlap
 from pdb_profiling.processers.pdbe.sqlite_api import converters
-from pdb_profiling.processers.pdbe.neo4j_api import SIFTS, slice_series, lyst2range
+from pdb_profiling.processers.pdbe.neo4j_api import SIFTS, slice_series, lyst2range, related_dataframe
+import logging
 
 def str2ord(string: str):
     if len(string) > 1:
@@ -28,6 +31,7 @@ def str2ord(string: str):
 
 
 async def pipe_out(df, path):
+    path = Path(path)
     if isinstance(df, DataFrame):
         if path.exists():
             headers = None
@@ -51,11 +55,12 @@ class Select_API(object):
     usecols = ['UniProt', 'pdb_id', 'chain_id',
                'new_unp_range', 'entity_id', 'RAW_BS']
 
-    def __init__(self, sqlite, neo4j, oligo_path, selected_path, oscutoff, logger, **kwargs):
+    def __init__(self, sqlite, neo4j, folder, oscutoff, logger, **kwargs):
         self.sqlite = sqlite
         self.neo4j = neo4j
-        self.oligo_path = oligo_path
-        self.selected_path = selected_path
+        self.oligo_path = folder/'oligo.tsv'
+        self.moho_path = folder/'select_moho.tsv'
+        self.he_path = folder/'select_he.tsv'
         self.oscutoff = oscutoff
         self.logger = logger
         self.kwargs = kwargs
@@ -82,17 +87,18 @@ class Select_API(object):
     @staticmethod
     def check_range(focus_sifts_nda, cutoff):
         skip_index = []
-        checked_id = []
+        # checked_id = []
         for checking_index, record in enumerate(focus_sifts_nda):
             pdb_id = record[1]
-            if pdb_id not in checked_id:
-                checked_id.append(pdb_id)
-            else:
-                continue
+            # if pdb_id not in checked_id:
+            #     checked_id.append(pdb_id)
+            # else:
+            #     continue
             related_records = focus_sifts_nda[focus_sifts_nda[:, 1] == pdb_id]
             if len(related_records) > 1:
                 cur_range = orjson.loads(record[3])
                 cur_chain = record[2]
+                count = 0
                 for other_record in related_records:
                     other_chain = other_record[2]
                     if other_chain == cur_chain:
@@ -101,9 +107,11 @@ class Select_API(object):
                     score = overlap.similarity(lyst2range(cur_range),
                                                 lyst2range(other_range))
                     if score < 1 - cutoff:
-                        skip_index.append(checking_index)
-                    else:
                         continue
+                    else:
+                        count += 1
+                if not count:
+                    skip_index.append(checking_index)
             else:
                 skip_index.append(checking_index)
         return skip_index
@@ -141,20 +149,12 @@ class Select_API(object):
     async def select_e(self, sifts_df, entry_info, oligo_info, cutoff=0.2) -> Dataset:
         sifts_dict = slice_series(sifts_df.UniProt.to_numpy())
         sifts_nda = sifts_df.to_numpy()
-        # TODO: Load Partner SIFTS
-        '''
-        query, kwargs = SIFTS.extra_mapping(
-            (sifts_df.pdb_id+'_'+sifts_df.entity_id).unique(),
-            sifts_df.UniProt.unique()
-            )
-        res = await self.neo4j.afetch(query, **kwargs)
-        '''
         pass
-    
-        
-        # dataob = Dataset(headers=self.usecols+['1/resolution', 'revision_date_score', 'chain_id_score', 'select_tag', 'oligo_type'])
 
-
+    @staticmethod
+    def yieldallchains(dictob):
+        for lyst in dictob.values():
+            yield from lyst
     
     @unsync
     async def process(self, sifts_path):
@@ -162,7 +162,12 @@ class Select_API(object):
         sifts_df.drop_duplicates(inplace=True)
         sifts_df.sort_values(by='UniProt', inplace=True)
         pdbs = sifts_df.pdb_id.unique()
-        oligo_df = await SIFTS.pipe_oligo(pdbs, self.neo4j, self.sqlite, **self.kwargs)
+        oligo_df = await SIFTS.pipe_oligo(pdbs, self.neo4j.neo4j_api, self.sqlite, **self.kwargs)
+        valid_chains = dict(zip(oligo_df.pdb_id, oligo_df.entity_chain_map.apply(
+            lambda x: list(self.yieldallchains(x)))))
+        check_chains = sifts_df[['pdb_id', 'chain_id']].apply(lambda x: x['chain_id'] in valid_chains[x['pdb_id']], axis=1)
+        sifts_df.drop(index=check_chains[check_chains.eq(False)].index, inplace=True)
+        pdbs = sifts_df.pdb_id.unique()
         entry_info = await self.sqlite.Entry_Info.objects.filter(pdb_id__in=pdbs).all()
         entry_info = {value.pdb_id: (1/value.resolution, value.REVISION_DATE) for value in entry_info}
         # TODO: select
@@ -177,15 +182,19 @@ class Select_API(object):
         sifts_others_df = sifts_df.loc[sifts_df.index.difference(sifts_mo_df.index)]
         ho_res = self.select_o(sifts_others_df, entry_info, self.oscutoff, True, 'ho')
         # he
-        pdbs_he = oligo_df[oligo_df.oligo_state.eq('he')].pdb_id
+        pdbs_he = oligo_df[oligo_df.oligo_state.eq('he')].pdb_id.to_numpy()
         sifts_he_df = sifts_others_df[sifts_others_df.pdb_id.isin(pdbs_he)]
         ## TODO: Partner Pipe
-        oligo_info = dict(zip(oligo_df.pdb_id, oligo_df.entity_unp_info))
+        oligo_info = {key: value for key,value in zip(oligo_df.pdb_id, oligo_df.entity_unp_info) if key in pdbs_he}
+        ### -----------------------------------------------------------------
+        new_sifts_df = await self.neo4j.pipe_new_sifts(pdbs_he, 'pdb')
+        ### -----------------------------------------------------------------
         # TODO: output
         for col in self.json_cols:
             oligo_df[col] = oligo_df[col].apply(lambda x: json.dumps(x) if not isna(x) else x)
         await pipe_out(oligo_df, self.oligo_path)
-        await pipe_out(mo_res, self.selected_path)
-        await pipe_out(ho_res, self.selected_path)
+        await pipe_out(mo_res.stack(ho_res), self.moho_path)
+        await pipe_out(new_sifts_df, self.he_path)
+
         
 
