@@ -105,7 +105,7 @@ def process_pipeline(ctx, processors, folder, loggingpath, useexisting):
 
 
 @Interface.command("UniProt.init")
-@click.option('--concurreq', type=int, help="the number of concurent requests (For UniProt API)", default=100)
+@click.option('--concurreq', type=int, help="the number of concurent requests (For UniProt API)", default=20)
 @click.option('--concurrate', type=float, help="the rate of concurent requests (For UniProt API)", default=2)
 @click.pass_context
 def init_unp(ctx, concurreq, concurrate):
@@ -207,7 +207,7 @@ def downloadUnpSeq(ctx, input, idcol, sep, include):
         return
     else:
         UniProtFASTA.obj = {key: ctx.obj[key]
-                            for key in ('fasta_folder', 'concurreq', 'concurrate', 'semaphore')}
+                            for key in ('fasta_folder', 'unp_concurreq', 'unp_concurrate', 'semaphore')}
         return processor
 
 

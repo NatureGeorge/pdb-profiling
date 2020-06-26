@@ -36,6 +36,8 @@ def handle_exac_df(exac_df):
 
 
 def handle_premptc(premptc_df):
+    def split_df(df, colName, sep):
+        return df.drop([colName], axis=1).join(df[colName].str.split(sep, expand=True).stack().reset_index(level=1, drop=True).rename(colName))
     '''
     usecols=['Transcript_ID', 'aaref', 'aapos', 'aaalt']
     '''
@@ -46,6 +48,7 @@ def handle_premptc(premptc_df):
         )
     )
     premptc_df.rename(columns=columns, inplace=True)
+    premptc_df = split_df(premptc_df, 'from_id', ';').drop_duplicates()
     return premptc_df.to_dict('records')
 
 

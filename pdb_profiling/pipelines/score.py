@@ -18,7 +18,7 @@ from pdb_profiling.processers.pdbe.sqlite_api import converters
 
 def geometric_mean(array: Iterable):
     try:
-        assert len(array[array==0]) == 0
+        assert len(array[array<=0]) == 0
         array = np.log(array)
         return np.exp(array.sum()/len(array))
     except AssertionError:

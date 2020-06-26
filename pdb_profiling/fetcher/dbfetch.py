@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-26 12:17:51 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+from __future__ import absolute_import
 import asyncio
 from unsync import unsync, Unfuture
 from neo4j import GraphDatabase, basic_auth, READ_ACCESS
@@ -95,8 +96,8 @@ if __name__ == "__main__":
     import sys
     sys.path.append("C:/GitWorks/pdb-profiling")
     from pdb_profiling.processers.pdbe.neo4j_api import Entry
-    config = {'user': 'neo4j', 'pass': 'p1he/pr2o/ile3',
-              'url': 'bolt://10.20.212.153:7687'}
+    config = {'user': '...', 'pass': '...',
+              'url': 'bolt://...'}
     queries = [
         Entry.get_residues('1a01', '1', 'A', observed_only=True),
         Entry.get_residues('2xyn', '1', 'A', observed_only=True),
