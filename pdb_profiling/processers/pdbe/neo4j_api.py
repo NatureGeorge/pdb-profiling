@@ -40,6 +40,24 @@ standardAA = list(SEQ_DICT.keys())
 standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
 
 
+async def pipe_out(df, path):
+    path = Path(path)
+    if isinstance(df, pd.DataFrame):
+        if path.exists():
+            headers = None
+        else:
+            headers = sorted(df.columns)
+        async with aiofiles.open(path, 'a') as fileOb:
+            dataset = Dataset(headers=headers)
+            dataset.extend(df[headers].to_records(index=False))
+            await fileOb.write(dataset.export('tsv'))
+    elif isinstance(df, Dataset):
+        async with aiofiles.open(path, 'a') as fileOb:
+            await fileOb.write(df.export('tsv'))
+    else:
+        raise TypeError("Invalid Object for pipe_out()")
+
+
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
     def pass_check(lyst):
         try:
@@ -787,6 +805,26 @@ class SIFTS(Entry):
         '''
         return query, dict(entity_uniqids=list(entity_uniqids), unps=list(unps))
 
+    @classmethod
+    def pdbchain2unpres(cls, lyst, observed_only: bool = False):
+        query = '''
+        MATCH (chain:Chain)-[inChain:IS_IN_CHAIN]-(pdbres:PDBResidue)-[:MAP_TO_UNIPROT_RESIDUE]-(unpres:UNPResidue)-[:HAS_UNP_RESIDUE]-(unp:UniProt)
+        WHERE chain.UNIQID in $lyst {}
+        RETURN chain.UNIQID as UNQID,
+               pdbres.CHEM_COMP_ID as residue_name, 
+               toInteger(pdbres.ID) as residue_number,
+               tofloat(inChain.OBSERVED_RATIO) as obs_ratio,
+               toInteger(inChain.AUTH_SEQ_ID) as author_residue_number,
+               inChain.PDB_INS_CODE as author_insertion_code,
+               unpres.UNIQID as unp_index
+        '''
+        if observed_only:
+            query = query.format("AND inChain.OBSERVED = 'Y'")
+        else:
+            query = query.format('')
+
+        return query, dict(lyst=list(lyst))
+
     @staticmethod
     def sort_2_range(unp_range: List, pdb_range: List):
         unp_range, pdb_range = zip(*sorted(zip(unp_range, pdb_range), key=lambda x: x[0][0]))
@@ -1111,6 +1149,43 @@ class Neo4j_API(Abclog):
                 return None
         else:
             return None
+
+    @classmethod
+    @unsync
+    async def pdb2unp(cls, lyst: Union[Iterable, Unfuture]):
+        if not isinstance(lyst, Iterable):
+            lyst = await lyst
+        # Can be optimized
+        sifts_df = await cls.pipe_new_sifts(lyst, 'pdb')
+        return sifts_df
+
+    @classmethod
+    @unsync
+    async def amapres2unp(cls, site_df: pd.DataFrame, unp:str, pdb_id: str, entity_id: str, chain_id: str, pdb_range: str, unp_range: str):
+        sqlite_api = cls.sqlite_api
+        sites = [convert_index(unp_range, pdb_range, x) for x in site_df.Pos]
+        site_df['unp_index'] = sites
+        res = await sqlite_api.PDBRes_Info.objects.filter(
+            pdb_id=pdb_id, entity_id=entity_id,
+            chain_id=chain_id, author_residue_number__in=site_df.Pos.unique()).all()
+        pass
+
+    @classmethod
+    @unsync
+    async def process_map2unp(cls, df, respath, siftspath, observed_only):
+        pdb_entity_chain_id = df.pdb_id + '_' + df.entity_id.astype(str) + '_' + df.chain_id
+        query, kwargs = SIFTS.pdbchain2unpres(pdb_entity_chain_id.unique(), observed_only)
+        res = await cls.neo4j_api.afetch(query, **kwargs)
+        res = SIFTS.to_data_frame(res)
+        res[['UniProt', 'unp_index']] = res.apply(lambda x: x['unp_index'].split('_'), axis=1, result_type='expand')
+        res.UNQID = res.UNQID + '_' + res.UniProt
+        res['sifts_check'] = 0
+        sifts_df = await cls.pdb2unp(df.pdb_id.unique())
+        sifts_df['UNQID'] = sifts_df.pdb_id + '_' + sifts_df.entity_id.astype(str) + '_' + sifts_df.chain_id + '_' + sifts_df.UniProt
+        focus_index = res[res.UNQID.isin(set(res.UNQID) & set(sifts_df.UNQID))].index
+        res.loc[focus_index, 'sifts_check'] = 1
+        await pipe_out(res, respath)
+        await pipe_out(sifts_df, siftspath)
 
     @classmethod
     @unsync

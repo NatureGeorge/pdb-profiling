@@ -358,6 +358,33 @@ def neo4j_res2pdb(ctx, outname):
     return processor
 
 
+@Interface.command("DB.GraphDB.to-unpres")
+@click.option("--input", type=click.Path())
+@click.option("--sep", default="\t", help="the seperator of input file", type=str)
+@click.option("--observedonly/--no-observedonly", default=True, is_flag=True)
+@click.option('--readchunk', type=int, help="the chunksize parameter of pandas.read_csv", default=None)
+@click.pass_context
+def neo4j_res2unp(ctx, input, sep, observedonly, readchunk):
+    respath = ctx.obj['folder']/'pdb2unp_rm.tsv'
+    siftspath = ctx.obj['folder']/'pdb2unp_fs.tsv'
+    def yieldTasks(df):
+        for dfrm in df:
+            dfrm = dfrm.drop_duplicates()
+            yield Neo4j_API.process_map2unp(dfrm, respath, siftspath, observedonly)
+
+    def processor(iterator: Iterator[Unfuture]):
+        '''This processor do nothing'''
+        for task in iterator:
+            yield task
+
+    df = read_csv(input, sep=sep, chunksize=readchunk, usecols=['pdb_id', 'entity_id', 'chain_id'])
+    if isinstance(df, DataFrame):
+        df = (df,)
+    click.echo(colorClick("Set Task Iterator", "%s"))
+    ctx.obj['iterator'] = yieldTasks(df)
+    return processor
+
+
 @Interface.command("Stat.score-sifts")
 @click.option("--input", default="", help="the file of SIFTS Mapping result", type=click.Path())
 @click.option("--outname", help="the output file name of result file", type=click.Path())
