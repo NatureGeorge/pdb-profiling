@@ -33,13 +33,14 @@ def str2ord(string: str):
 async def pipe_out(df, path):
     path = Path(path)
     if isinstance(df, DataFrame):
+        sorted_col = sorted(df.columns)
         if path.exists():
             headers = None
         else:
-            headers = sorted(df.columns)
+            headers = sorted_col
         async with aiofiles.open(path, 'a') as fileOb:
             dataset = Dataset(headers=headers)
-            dataset.extend(df[headers].to_records(index=False))
+            dataset.extend(df[sorted_col].to_records(index=False))
             await fileOb.write(dataset.export('tsv'))
     elif isinstance(df, Dataset):
         async with aiofiles.open(path, 'a') as fileOb:

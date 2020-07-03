@@ -43,13 +43,14 @@ standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
 async def pipe_out(df, path):
     path = Path(path)
     if isinstance(df, pd.DataFrame):
+        sorted_col = sorted(df.columns)
         if path.exists():
             headers = None
         else:
-            headers = sorted(df.columns)
+            headers = sorted_col
         async with aiofiles.open(path, 'a') as fileOb:
             dataset = Dataset(headers=headers)
-            dataset.extend(df[headers].to_records(index=False))
+            dataset.extend(df[sorted_col].to_records(index=False))
             await fileOb.write(dataset.export('tsv'))
     elif isinstance(df, Dataset):
         async with aiofiles.open(path, 'a') as fileOb:
@@ -390,6 +391,19 @@ class Entry(object):
             return session.run(query, lyst=list(pdbs), standardAA=standardAA)
         except AttributeError:
             return query, dict(lyst=list(pdbs), standardAA=standardAA)
+
+    @classmethod
+    def summary_eec(cls, pdbs, protein_only:bool=True):
+        query = '''
+            MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[inChain:CONTAINS_CHAIN]-(chain:Chain)
+            WHERE entry.ID IN $pdbs
+            RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, chain.STRUCT_ASYM_ID as struct_asym_id
+        '''
+        if protein_only:
+            query = query.format("{POLYMER_TYPE:'P'}")
+        else:
+            query = query.format("")
+        return query, dict(pdbs=list(pdbs))
 
     @staticmethod
     def deal_seq_index(dfrm: pd.DataFrame) -> pd.DataFrame:
@@ -810,13 +824,15 @@ class SIFTS(Entry):
         query = '''
         MATCH (chain:Chain)-[inChain:IS_IN_CHAIN]-(pdbres:PDBResidue)-[:MAP_TO_UNIPROT_RESIDUE]-(unpres:UNPResidue)-[:HAS_UNP_RESIDUE]-(unp:UniProt)
         WHERE chain.UNIQID in $lyst {}
-        RETURN chain.UNIQID as UNQID,
+        RETURN chain.UNIQID as UNIQID,
+               chain.AUTH_ASYM_ID as chain_id,
                pdbres.CHEM_COMP_ID as residue_name, 
                toInteger(pdbres.ID) as residue_number,
                tofloat(inChain.OBSERVED_RATIO) as obs_ratio,
                toInteger(inChain.AUTH_SEQ_ID) as author_residue_number,
                inChain.PDB_INS_CODE as author_insertion_code,
-               unpres.UNIQID as unp_index
+               unpres.UNIQID as unp_index,
+               unpres.ONE_LETTER_CODE as unp_res
         '''
         if observed_only:
             query = query.format("AND inChain.OBSERVED = 'Y'")
@@ -1173,19 +1189,28 @@ class Neo4j_API(Abclog):
     @classmethod
     @unsync
     async def process_map2unp(cls, df, respath, siftspath, observed_only):
-        pdb_entity_chain_id = df.pdb_id + '_' + df.entity_id.astype(str) + '_' + df.chain_id
-        query, kwargs = SIFTS.pdbchain2unpres(pdb_entity_chain_id.unique(), observed_only)
+        df.pdb_id = df.pdb_id.str.lower()
+        if 'entity_id' in df.columns:
+            df.entity_id = df.entity_id.astype(str)
+        query, kwargs = Entry.summary_eec(df.pdb_id.unique())
+        res = await cls.neo4j_api.afetch(query, **kwargs)
+        df = df.merge(Entry.to_data_frame(res), how="left")
+        pdb_entity_struct_asym_id = df.pdb_id + '_' + df.entity_id + '_' + df.struct_asym_id
+        query, kwargs = SIFTS.pdbchain2unpres(pdb_entity_struct_asym_id.unique(), observed_only)
         res = await cls.neo4j_api.afetch(query, **kwargs)
         res = SIFTS.to_data_frame(res)
-        res[['UniProt', 'unp_index']] = res.apply(lambda x: x['unp_index'].split('_'), axis=1, result_type='expand')
-        res.UNQID = res.UNQID + '_' + res.UniProt
-        res['sifts_check'] = 0
-        sifts_df = await cls.pdb2unp(df.pdb_id.unique())
-        sifts_df['UNQID'] = sifts_df.pdb_id + '_' + sifts_df.entity_id.astype(str) + '_' + sifts_df.chain_id + '_' + sifts_df.UniProt
-        focus_index = res[res.UNQID.isin(set(res.UNQID) & set(sifts_df.UNQID))].index
-        res.loc[focus_index, 'sifts_check'] = 1
-        await pipe_out(res, respath)
-        await pipe_out(sifts_df, siftspath)
+        if len(res) > 0:
+            res[['UniProt', 'unp_index']] = res.apply(lambda x: x['unp_index'].split('_'), axis=1, result_type='expand')
+            res.UNIQID = res.apply(lambda x: '_'.join(x['UNIQID'].split('_')[0:2]+[x['chain_id']]), axis=1)
+            res.drop(columns=['chain_id'], inplace=True)
+            res.UNIQID = res.UNIQID + '_' + res.UniProt
+            res['sifts_check'] = 0
+            sifts_df = await cls.pdb2unp(df.pdb_id.unique())
+            sifts_df['UNIQID'] = sifts_df.pdb_id + '_' + sifts_df.entity_id.astype(str) + '_' + sifts_df.chain_id + '_' + sifts_df.UniProt
+            focus_index = res[res.UNIQID.isin(set(res.UNIQID) & set(sifts_df.UNIQID))].index
+            res.loc[focus_index, 'sifts_check'] = 1
+            await pipe_out(res, respath)
+            await pipe_out(sifts_df, siftspath)
 
     @classmethod
     @unsync

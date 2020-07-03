@@ -14,7 +14,7 @@ numpy
 textdistance
 biopython==1.74
 databases
-neo4j
+neo4j==1.7.6
 tqdm
 orm
 networkx

@@ -377,7 +377,7 @@ def neo4j_res2unp(ctx, input, sep, observedonly, readchunk):
         for task in iterator:
             yield task
 
-    df = read_csv(input, sep=sep, chunksize=readchunk, usecols=['pdb_id', 'entity_id', 'chain_id'])
+    df = read_csv(input, sep=sep, chunksize=readchunk)  # usecols=['pdb_id', 'entity_id', 'chain_id']
     if isinstance(df, DataFrame):
         df = (df,)
     click.echo(colorClick("Set Task Iterator", "%s"))
