@@ -25,7 +25,7 @@ if "\\" in __file__:
 else:
     # Linux
     _SEP = "/"
-    sys.path.append("/data/zzf/2020/src/pdb-profiling")
+    sys.path.append("/data/zzf/2020/src/pdb-profiling_0706")
 
 try:
     from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
@@ -363,8 +363,11 @@ def neo4j_res2pdb(ctx, outname):
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)
 @click.option("--observedonly/--no-observedonly", default=True, is_flag=True)
 @click.option('--readchunk', type=int, help="the chunksize parameter of pandas.read_csv", default=None)
+@click.option("--siftsfilter",
+              default='{"identity":["ge",0.9],"repeated":["eq",false]}',
+              help="the filter(JSON-Format Dict) of SIFTS Mapping result", type=str)
 @click.pass_context
-def neo4j_res2unp(ctx, input, sep, observedonly, readchunk):
+def neo4j_res2unp(ctx, input, sep, observedonly, readchunk, siftsfilter):
     respath = ctx.obj['folder']/'pdb2unp_rm.tsv'
     siftspath = ctx.obj['folder']/'pdb2unp_fs.tsv'
     def yieldTasks(df):
@@ -376,7 +379,8 @@ def neo4j_res2unp(ctx, input, sep, observedonly, readchunk):
         '''This processor do nothing'''
         for task in iterator:
             yield task
-
+    if ctx.obj['Neo4j_API'].sifts_filter is None:
+        ctx.obj['Neo4j_API'].sifts_filter = json.loads(siftsfilter)
     df = read_csv(input, sep=sep, chunksize=readchunk)  # usecols=['pdb_id', 'entity_id', 'chain_id']
     if isinstance(df, DataFrame):
         df = (df,)

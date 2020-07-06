@@ -111,6 +111,26 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
         return true_interval_lyst
 
 
+def lyst22intervel(x, y):
+    x, y = sorted(x), sorted(y)
+    start_x, start_y = x[0], y[0]
+    index_x, index_y = x[0]-1, y[0]-1
+    interval_x, interval_y = [], []
+    for i, j in zip(x, y):
+        pre_x = index_x + 1
+        pre_y = index_y + 1
+        if pre_x == i and pre_y == j:
+            index_x, index_y = i, j
+        else:
+            interval_x.append((start_x, index_x))
+            interval_y.append((start_y, index_y))
+            start_x, start_y = i, j
+            index_x, index_y = i, j
+    interval_x.append((start_x, index_x))
+    interval_y.append((start_y, index_y))
+    return interval_x, interval_y
+
+
 def interval2set(lyst: Union[Iterable, Iterator, str]):
     if isinstance(lyst, str):
         lyst = json.loads(lyst)
@@ -774,6 +794,16 @@ class SIFTS(Entry):
             return query, dict(lyst=list(lyst))
     
     @classmethod
+    def summary_mapping_detail(cls, pdb_id, entity_id, unp):
+        query = '''
+        MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity)-[:HAS_PDB_RESIDUE]-(pdbres:PDBResidue)-[:MAP_TO_UNIPROT_RESIDUE]-(unpres:UNPResidue)-[:HAS_UNP_RESIDUE]-(unp:UniProt)
+        WHERE unp.ACCESSION = $unp AND entity.ID = $entity_id AND entry.ID = $pdb_id
+        RETURN toInteger(pdbres.ID) as residue_number,
+               toInteger(SPLIT(unpres.UNIQID, '_')[1]) as unp_index
+        '''
+        return query, dict(pdb_id=pdb_id, entity_id=entity_id, unp=unp)
+
+    @classmethod
     @unsync
     async def deal_mapping(cls, res, neo4j_api):
         dfrm = cls.to_data_frame(res)
@@ -905,6 +935,33 @@ class SIFTS(Entry):
     @classmethod
     @unsync
     async def update_range(cls, dfrm: pd.DataFrame, neo4j_api) -> pd.DataFrame:
+        new_unp_range, new_pdb_range = 'new_unp_range', 'new_pdb_range'
+        focus_df = dfrm[
+            (dfrm.sifts_range_tag.isin(('Deletion', 'Insertion & Deletion')))
+            & (dfrm.repeated.eq(False))]
+        focus = focus_df[['pdb_id', 'entity_id', 'UniProt']].to_numpy()
+        focus_index = focus_df.index
+        updated_pdb_range, updated_unp_range = list(), list()
+        for record in focus:
+            query, kwargs = cls.summary_mapping_detail(*record)
+            res = await neo4j_api.afetch(query, **kwargs)
+            res = cls.to_data_frame(res)
+            res_unp_intervel, res_pdb_intervel = lyst22intervel(res.unp_index, res.residue_number)
+            updated_unp_range.append(json.dumps(res_unp_intervel).decode('utf-8'))
+            updated_pdb_range.append(json.dumps(res_pdb_intervel).decode('utf-8'))
+        updated_range_df = pd.DataFrame(
+            {new_unp_range: updated_unp_range, new_pdb_range: updated_pdb_range}, index=focus_index)
+        dfrm = pd.merge(dfrm, updated_range_df, left_index=True,
+                        right_index=True, how='left')
+        dfrm[new_unp_range] = dfrm.apply(lambda x: x['unp_range'] if pd.isna(
+            x[new_unp_range]) else x[new_unp_range], axis=1)
+        dfrm[new_pdb_range] = dfrm.apply(lambda x: x['pdb_range'] if pd.isna(
+            x[new_pdb_range]) else x[new_pdb_range], axis=1)
+        return dfrm
+
+    @classmethod
+    @unsync
+    async def update_range_local_align(cls, dfrm: pd.DataFrame, neo4j_api) -> pd.DataFrame:
         new_unp_range, new_pdb_range = 'new_unp_range', 'new_pdb_range'
         focus_df = dfrm[
             (dfrm.sifts_range_tag.isin(('Deletion', 'Insertion & Deletion')))
