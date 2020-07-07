@@ -382,7 +382,7 @@ class Entry(object):
              for pdb_id, data in dfrm.groupby('pdb_id')),
             columns=('pdb_id', 'nucleotides_entity_type'))
         # res['has_hybrid_nucleotides'] = res.nucleotides_entity_type.apply(lambda x: 'D\/R' in x)
-        res['has_hybrid_nucleotides'] = ['D\/R' in x for x in res.nucleotides_entity_type.values]
+        res['has_hybrid_nucleotides'] = ['D/R' in x for x in res.nucleotides_entity_type.values]
         return res
 
     @classmethod
@@ -417,7 +417,7 @@ class Entry(object):
         query = '''
             MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[inChain:CONTAINS_CHAIN]-(chain:Chain)
             WHERE entry.ID IN $pdbs
-            RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, chain.STRUCT_ASYM_ID as struct_asym_id
+            RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, chain.STRUCT_ASYM_ID as struct_asym_id, entity.POLYMER_TYPE as POLYMER_TYPE
         '''
         if protein_only:
             query = query.format("{POLYMER_TYPE:'P'}")
@@ -612,7 +612,23 @@ class Entry(object):
         except AttributeError:
             return query, dict(lyst=list(pdbs))
 
-
+    @classmethod
+    def summary_chain_interaction(cls, pdbs, source:str):
+        query = '''
+        MATCH (entry:Entry)-[:HAS_ENTITY]-(:Entity{POLYMER_TYPE:'P'})-[:HAS_PDB_RESIDUE]-(:PDBResidue)-[has_contact:%s]-(:PDBResidue)
+        WHERE entry.ID IN $pdbs AND has_contact.AUTH_ASYM_ID_1 <> has_contact.AUTH_ASYM_ID_2
+        RETURN distinct entry.ID as pdb_id, has_contact.AUTH_ASYM_ID_1 as chain_id_1, has_contact.AUTH_ASYM_ID_2 as chain_id_2, true as from_%s
+        '''
+        # //COLLECT(has_contact.TYPE) as type
+        source = source.lower()
+        if source == 'pisa_bond':
+            query = query % ("HAS_PISA_BOND", source)
+        elif source == 'arp_contact':
+            query = query % ("HAS_ARP_CONTACT", source)
+        else:
+            raise ValueError("Invalid source! Please input specified source within ('pisa_bond', 'arp_contact')")
+        return query, dict(pdbs=list(pdbs))
+        
 class SIFTS(Entry):
     @classmethod
     def summary_entity_unp(cls, pdbs, tax_id: Optional[str]=None, session=None):
@@ -815,6 +831,7 @@ class SIFTS(Entry):
         dfrm.unp_range = dfrm.unp_range.apply(
             lambda x: json.dumps(x).decode('utf-8'))
         dfrm = await cls.update_range(dfrm, neo4j_api)
+        # dfrm = await cls.update_range_local_align(dfrm, neo4j_api)
         return dfrm
 
     @classmethod
@@ -962,7 +979,7 @@ class SIFTS(Entry):
     @classmethod
     @unsync
     async def update_range_local_align(cls, dfrm: pd.DataFrame, neo4j_api) -> pd.DataFrame:
-        new_unp_range, new_pdb_range = 'new_unp_range', 'new_pdb_range'
+        new_unp_range, new_pdb_range = 'new_unp_range_align', 'new_pdb_range_align'
         focus_df = dfrm[
             (dfrm.sifts_range_tag.isin(('Deletion', 'Insertion & Deletion')))
             & (dfrm.repeated.eq(False))]
@@ -1271,6 +1288,29 @@ class Neo4j_API(Abclog):
 
     @classmethod
     @unsync
+    async def pipe_new_entry_info(cls, pdbs):
+        entry_info_func_res: Dict = {}
+        for key, func in cls.entry_info_funcs.items():
+            query, kwargs = func(pdbs)
+            res = await cls.neo4j_api.afetch(query, **kwargs)
+            entry_info_func_res[key] = Entry.to_data_frame(res)
+        res = Entry.deal_nucleotides(entry_info_func_res.get('nucleotides', None))
+        if res is not None:
+            entry_info_func_res['nucleotides'] = res
+        merge = partial(pd.merge, on=['pdb_id'], how='outer')
+        pdb_entry_df = reduce(merge, (df for df in entry_info_func_res.values() if len(df) > 0))
+        pdb_entry_df.rename(columns={'index': 'pdb_id'}, inplace=True)
+        for col, default in cls.entry_info_add.items():
+            if col not in pdb_entry_df:
+                pdb_entry_df[col] = default
+            else:
+                pdb_entry_df[col].fillna(default, inplace=True)
+        pdb_entry_df.BOUND_LIGAND_COUNT = pdb_entry_df.BOUND_LIGAND_COUNT.apply(int)
+        pdb_entry_df.BOUND_MOL_COUNT = pdb_entry_df.BOUND_MOL_COUNT.apply(int)
+        return pdb_entry_df
+
+    @classmethod
+    @unsync
     async def unp2pdb(cls, lyst: Union[Iterable, Unfuture]):
         '''
         Map from unp to pdb [DB]
@@ -1314,29 +1354,7 @@ class Neo4j_API(Abclog):
             e_pdb_entry_df = None
         # TODO: Fetch New Data
         if len(pdbs) > 0:
-            entry_info_func_res: Dict = {}
-            for key, func in cls.entry_info_funcs.items():
-                query, kwargs = func(pdbs)
-                res = await cls.neo4j_api.afetch(query, **kwargs)
-                entry_info_func_res[key] = Entry.to_data_frame(res)
-            
-            res = Entry.deal_nucleotides(entry_info_func_res.get('nucleotides', None))
-            if res is not None:
-                entry_info_func_res['nucleotides'] = res
-            # pdb_entry_df = pd.concat(entry_info_func_res.values(), join='outer', axis=1)
-            merge = partial(pd.merge, on=['pdb_id'], how='outer')
-            pdb_entry_df = reduce(merge, (df for df in entry_info_func_res.values() if len(df) > 0))
-            # pdb_entry_df = pd.concat(
-            #    (df.set_index(['pdb_id']) for df in entry_info_func_res.values() if len(df) > 0),
-            #    axis=1, sort=False).reset_index()
-            pdb_entry_df.rename(columns={'index': 'pdb_id'}, inplace=True)
-            for col, default in cls.entry_info_add.items():
-                if col not in pdb_entry_df:
-                    pdb_entry_df[col] = default
-                else:
-                    pdb_entry_df[col].fillna(default, inplace=True)
-            pdb_entry_df.BOUND_LIGAND_COUNT = pdb_entry_df.BOUND_LIGAND_COUNT.apply(int)
-            pdb_entry_df.BOUND_MOL_COUNT = pdb_entry_df.BOUND_MOL_COUNT.apply(int)
+            pdb_entry_df = await cls.pipe_new_entry_info(pdbs)
             pdb_entry_df = related_dataframe(cls.entry_filter, pdb_entry_df)
             # TODO: Export New Data [Sync]
             values = pdb_entry_df.to_dict('records')
@@ -1372,8 +1390,7 @@ class Neo4j_API(Abclog):
             seq_res_df = SIFTS.deal_seq_index(SIFTS.to_data_frame(res))
             # WARNING: NEED TO BE FIXED, SHOULD BE MORE FLEXIBLE
             del_pdbs = seq_res_df[
-                (seq_res_df.UNK_COUNT.gt(0))
-                | (seq_res_df.AVG_OBS_OBS_RATIO.le(0.25) & seq_res_df.SEQRES_COUNT.ge(50))
+                seq_res_df.AVG_OBS_OBS_RATIO.le(0.25) & seq_res_df.SEQRES_COUNT.ge(50)
             ].pdb_id.unique()
             seq_res_df = seq_res_df[~seq_res_df.pdb_id.isin(del_pdbs)]
             values = seq_res_df.to_dict('records')

@@ -7,7 +7,7 @@
 from __future__ import absolute_import
 import asyncio
 from unsync import unsync, Unfuture
-from neo4j import GraphDatabase, basic_auth, READ_ACCESS
+from neo4j import GraphDatabase
 from neo4j.exceptions import ServiceUnavailable
 from typing import Callable, List, Optional
 from pandas import DataFrame, concat
@@ -62,13 +62,12 @@ class Neo4j:
     @unsync
     def init_driver(self):
         self.log_func("Init Neo4j DataBase Driver")
-        auth = basic_auth(self._config['user'], self._config['pass'])
-        self.driver = GraphDatabase.driver(self._config['url'], auth=auth, encrypted=True)
+        self.driver = GraphDatabase.driver(self._config['url'], auth=(self._config['user'], self._config['pass']))
 
     @unsync
     def afetch_start(self, query, **kwargs):
-        with self.driver.session(access_mode=READ_ACCESS) as session:
-            return session.run(query, **kwargs).records()
+        with self.driver.session() as session:
+            return [dict(i) for i in session.run(query, **kwargs)]
     
     @unsync
     async def afetch(self, query, **kwargs):
