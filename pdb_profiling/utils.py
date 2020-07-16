@@ -10,7 +10,10 @@ import shutil
 from typing import Optional, Union, Dict, Tuple, Iterable
 from logging import Logger
 from pandas import read_csv, DataFrame
+import numpy as np
 from pathlib import Path
+import aiofiles
+from tablib import Dataset
 
 
 def decompression(path: str, extension: str =".gz", remove: bool =True, outputPath: Optional[str] = None, logger: Optional[Logger] = None):
@@ -66,3 +69,48 @@ def related_dataframe(filters: Optional[Union[Dict, Iterable[Tuple]]] = None, df
     for col, (symbol, value) in filters:
         dfrm = dfrm[getattr(getattr(dfrm, col), symbol)(value)]
     return dfrm
+
+
+def sort_sub_cols(dfrm, cols):
+    if set(dfrm.columns) >= set(cols):
+        dfrm[cols] = np.sort(dfrm[cols].to_numpy())
+        return dfrm.drop_duplicates()
+    else:
+        return dfrm
+
+
+async def pipe_out(df, path):
+    path = Path(path)
+    if isinstance(df, DataFrame):
+        sorted_col = sorted(df.columns)
+        if path.exists():
+            headers = None
+        else:
+            headers = sorted_col
+        async with aiofiles.open(path, 'a') as fileOb:
+            dataset = Dataset(headers=headers)
+            dataset.extend(df[sorted_col].to_records(index=False))
+            await fileOb.write(dataset.export('tsv'))
+    elif isinstance(df, Dataset):
+        async with aiofiles.open(path, 'a') as fileOb:
+            await fileOb.write(df.export('tsv'))
+    else:
+        raise TypeError("Invalid Object for pipe_out()")
+
+
+def flatten_dict(data: Dict, root: str, with_root: bool = True):
+    if with_root:
+        iterator = yield_flatten_dict(data[root], root)
+    else:
+        iterator = yield_flatten_dict(data[root])
+    for key, value in iterator:
+        data[key] = value
+    del data[root]
+
+
+def yield_flatten_dict(data: Dict, root: Optional[str] = None):
+    if root is None:
+        yield from data.items()
+    else:
+        for key, value in data.items():
+            yield f'{root}.{key}', value

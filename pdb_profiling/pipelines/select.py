@@ -18,6 +18,7 @@ from typing import Dict
 from textdistance import overlap
 from pdb_profiling.processers.pdbe.sqlite_api import converters
 from pdb_profiling.processers.pdbe.neo4j_api import SIFTS, slice_series, lyst2range, related_dataframe
+from pdb_profiling.utils import pipe_out
 import logging
 
 def str2ord(string: str):
@@ -28,25 +29,6 @@ def str2ord(string: str):
         return num
     else:
         return ord(string)
-
-
-async def pipe_out(df, path):
-    path = Path(path)
-    if isinstance(df, DataFrame):
-        sorted_col = sorted(df.columns)
-        if path.exists():
-            headers = None
-        else:
-            headers = sorted_col
-        async with aiofiles.open(path, 'a') as fileOb:
-            dataset = Dataset(headers=headers)
-            dataset.extend(df[sorted_col].to_records(index=False))
-            await fileOb.write(dataset.export('tsv'))
-    elif isinstance(df, Dataset):
-        async with aiofiles.open(path, 'a') as fileOb:
-            await fileOb.write(df.export('tsv'))
-    else:
-        raise TypeError("Invalid Object for pipe_out()")
 
 
 class Select_API(object):

@@ -12,7 +12,7 @@ import tablib
 from tablib import InvalidDimensions, UnsupportedFormat
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from json import JSONDecodeError
-import ujson as json
+import orjson as json
 import time
 from pathlib import Path
 from logging import Logger
@@ -21,7 +21,7 @@ from unsync import unsync, Unfuture
 from Bio import Align, SeqIO
 from Bio.SubsMat import MatrixInfo as matlist
 from functools import lru_cache
-from pdb_profiling.utils import decompression, related_dataframe
+from pdb_profiling.utils import decompression, related_dataframe, flatten_dict
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 
@@ -186,21 +186,22 @@ class ProcessPDBe(Abclog):
         elif method == 'get':
             for pdb in pdbs:
                 pdb = pdb.lower()
-                yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, os.path.join(folder, f'{file_prefix}+{pdb}.json')
+                identifier = pdb.replace('/', '%')
+                yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, os.path.join(folder, f'{file_prefix}+{identifier}.json')
         else:
             raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
 
     @classmethod
     def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, **kwargs):
-        t0 = time.perf_counter()
+        # t0 = time.perf_counter()
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, method, folder, chunksize, task_id), 
             cls.process, 
             concur_req=concur_req, 
             rate=rate, 
-            logger=cls.logger).result()
-        elapsed = time.perf_counter() - t0
-        cls.logger.info('{} ids downloaded in {:.2f}s'.format(len(res), elapsed))
+            logger=cls.logger)
+        # elapsed = time.perf_counter() - t0
+        # cls.logger.info('{} ids downloaded in {:.2f}s'.format(len(res), elapsed))
         return res
     
     @classmethod
@@ -213,7 +214,7 @@ class ProcessPDBe(Abclog):
             return path
         path = Path(path)
         with path.open() as inFile:
-            data = json.load(inFile)
+            data = json.loads(inFile.read())
         suffix = path.name.replace('%', '/').split('+')[0]
         new_path = str(path).replace('.json', '.tsv')
         PDBeDecoder.pyexcel_io(
@@ -529,7 +530,7 @@ class PDBeDecoder(object):
             for value in values:
                 for key in value:
                     if isinstance(value[key], (Dict, List)):
-                        value[key] = json.dumps(value[key])
+                        value[key] = json.dumps(value[key]).decode('utf-8')
             yield values, ('pdb_id',), (pdb,)
 
     @staticmethod
@@ -543,7 +544,7 @@ class PDBeDecoder(object):
                     observed = chain['observed']
                     for fragement in observed:
                         for key in ('start', 'end'):
-                            fragement[key] = json.dumps(fragement[key])
+                            fragement[key] = json.dumps(fragement[key]).decode('utf-8')
                     yield observed, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
@@ -566,7 +567,7 @@ class PDBeDecoder(object):
                         if 'multiple_conformers' not in res:
                             res['multiple_conformers'] = None
                         else:
-                            res['multiple_conformers'] = json.dumps(res['multiple_conformers'])
+                            res['multiple_conformers'] = json.dumps(res['multiple_conformers']).decode('utf-8')
                     yield residues, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
@@ -583,7 +584,7 @@ class PDBeDecoder(object):
                         for record in fragment:
                             for key in record:
                                 if isinstance(record[key], (Dict, List)):
-                                    record[key] = json.dumps(record[key])
+                                    record[key] = json.dumps(record[key]).decode('utf-8')
                             if 'sheet_id' not in record:
                                 record['sheet_id'] = None
                         yield fragment, ('secondary_structure', 'chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (name, chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
@@ -609,7 +610,7 @@ class PDBeDecoder(object):
                 for entity in entities:
                     for key in entity:
                         if isinstance(entity[key], (Dict, List)):
-                            entity[key] = json.dumps(entity[key])
+                            entity[key] = json.dumps(entity[key]).decode('utf-8')
                 keys = list(biounit)
                 keys.remove('entities')
                 yield entities, tuple(keys)+('pdb_id',), tuple(biounit[key] for key in keys)+(pdb, )
@@ -641,8 +642,8 @@ class PDBeDecoder(object):
                 identifier = child[uniprot]['identifier']
                 chains = child[uniprot]['mappings']
                 for chain in chains:
-                    chain['start'] = json.dumps(chain['start'])
-                    chain['end'] = json.dumps(chain['end'])
+                    chain['start'] = json.dumps(chain['start']).decode('utf-8')
+                    chain['end'] = json.dumps(chain['end']).decode('utf-8')
                     chain['pdb_id'] = top_root
                     chain[sec_root] = uniprot
                     chain['identifier'] = identifier
@@ -653,11 +654,43 @@ class PDBeDecoder(object):
             for pdb in child:
                 chains = child[pdb]
                 for chain in chains:
-                    chain['start'] = json.dumps(chain['start'])
-                    chain['end'] = json.dumps(chain['end'])
+                    chain['start'] = json.dumps(chain['start']).decode('utf-8')
+                    chain['end'] = json.dumps(chain['end']).decode('utf-8')
                 yield chains, ('pdb_id', 'UniProt'), (pdb, top_root)
         else:
             raise ValueError(f'Unexpected data structure for inputted data: {data}')
+
+    
+    @staticmethod
+    @dispatch_on_set({'pisa/interfacelist/'})
+    def yieldPISAInterfaceList(data: Dict):
+        for pdb in data:
+            records = data[pdb]['interfaceentries']
+            for record in records:
+                flatten_dict(record, 'structure_1')
+                flatten_dict(record, 'structure_2')
+            flatten_dict(data[pdb], 'page_title', False)
+            cols = sorted(i for i in data[pdb].keys() if i != 'interfaceentries')
+            yield records, cols, tuple(data[pdb][col] for col in cols)
+    
+    @staticmethod
+    @dispatch_on_set({'pisa/interfacedetail/'})
+    def yieldPISAInterfaceDetail(data: Dict):
+        edge_cols1 = ('structure', 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy')
+        edge_cols2 = ('structure', 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy')
+        for pdb in data:
+            records = data[pdb]['interface_detail']
+            del records['bonds']
+            for col in edge_cols1: flatten_dict(records['interface_structure_1'], col)
+            for col in edge_cols2: flatten_dict(records['interface_structure_2'], col)
+            flatten_dict(data[pdb], 'page_title', False)
+            flatten_dict(records, 'interface_structure_1')
+            flatten_dict(records, 'interface_structure_2')
+            flatten_dict(data[pdb], 'interface_detail')
+            cols = sorted(i for i in data[pdb].keys() if i != 'interface_detail.residues')
+            yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
+            yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
+
 
 
 # TODO: Chain UniProt ID Mapping -> ProcessSIFTS -> ProcessPDBe

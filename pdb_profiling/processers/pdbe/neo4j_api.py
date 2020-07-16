@@ -23,6 +23,7 @@ import asyncio
 import aiofiles
 from tablib import Dataset
 import traceback
+from pdb_profiling.utils import pipe_out, sort_sub_cols
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
@@ -38,25 +39,6 @@ SEQ_DICT = {
 standardAA = list(SEQ_DICT.keys())
 
 standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
-
-
-async def pipe_out(df, path):
-    path = Path(path)
-    if isinstance(df, pd.DataFrame):
-        sorted_col = sorted(df.columns)
-        if path.exists():
-            headers = None
-        else:
-            headers = sorted_col
-        async with aiofiles.open(path, 'a') as fileOb:
-            dataset = Dataset(headers=headers)
-            dataset.extend(df[sorted_col].to_records(index=False))
-            await fileOb.write(dataset.export('tsv'))
-    elif isinstance(df, Dataset):
-        async with aiofiles.open(path, 'a') as fileOb:
-            await fileOb.write(df.export('tsv'))
-    else:
-        raise TypeError("Invalid Object for pipe_out()")
 
 
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
@@ -112,7 +94,8 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
 
 
 def lyst22intervel(x, y):
-    x, y = sorted(x), sorted(y)
+    # x, y = sorted(x), sorted(y)
+    x, y = zip(*sorted(zip(x, y), key=lambda cur: cur[0]))
     start_x, start_y = x[0], y[0]
     index_x, index_y = x[0]-1, y[0]-1
     interval_x, interval_y = [], []
@@ -628,7 +611,53 @@ class Entry(object):
         else:
             raise ValueError("Invalid source! Please input specified source within ('pisa_bond', 'arp_contact')")
         return query, dict(pdbs=list(pdbs))
-        
+
+    @classmethod
+    def summary_assembly(cls, pdbs, protein_only:bool=True):
+        query = '''
+        MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[:CONTAINS_CHAIN]-(chain:Chain)-[:IS_PART_OF_ASSEMBLY]-(ass:Assembly)
+        WHERE entry.ID IN $pdbs
+        WITH entry,entity,chain,ass
+        MATCH (entity:Entity)-[inass:IS_PART_OF_ASSEMBLY]-(ass:Assembly)
+        RETURN
+            entry.ID as pdb_id,
+            entity.ID as entity_id,
+            entity.POLYMER_TYPE as POLYMER_TYPE,
+            chain.AUTH_ASYM_ID as chain_id,
+            ass.UNIQID as biounit_id, 
+            ass.PREFERED as PREFERED,
+            inass.NUMBER_OF_CHAINS as NUMBER_OF_CHAINS
+        '''
+        if protein_only:
+            query = query.format("{POLYMER_TYPE:'P'}")
+        else:
+            query = query.format("")
+        return query, dict(pdbs=list(pdbs))
+    
+    @classmethod
+    def summary_assembly_interface(cls, pdbs, protein_only:bool=True):
+        query = '''
+        MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[:CONTAINS_CHAIN]-(chain:Chain)-[:IS_PART_OF_ASSEMBLY]-(ass:Assembly)-[:HAS_INTERFACE]-(interface:Interface)
+        WHERE entry.ID IN $pdbs
+        WITH entry,entity,chain,ass,interface
+        MATCH (interface:Interface)-[:HAS_ENTITY]-(entity:Entity)-[inass:IS_PART_OF_ASSEMBLY]-(ass:Assembly)
+        RETURN
+            entry.ID as pdb_id,
+            entity.ID as entity_id,
+            entity.POLYMER_TYPE as POLYMER_TYPE,
+            chain.AUTH_ASYM_ID as chain_id,
+            ass.UNIQID as biounit_id, 
+            ass.PREFERED as PREFERED,
+            inass.NUMBER_OF_CHAINS as NUMBER_OF_CHAINS,
+            interface.UNIQID as interface_id
+        '''
+        if protein_only:
+            query = query.format("{POLYMER_TYPE:'P'}")
+        else:
+            query = query.format("")
+        return query, dict(pdbs=list(pdbs))
+
+
 class SIFTS(Entry):
     @classmethod
     def summary_entity_unp(cls, pdbs, tax_id: Optional[str]=None, session=None):
@@ -1274,7 +1303,7 @@ class Neo4j_API(Abclog):
         res = await cls.neo4j_api.afetch(query, **kwargs)
         res = SIFTS.to_data_frame(res)
         if len(res) > 0:
-            res[['UniProt', 'unp_index']] = res.apply(lambda x: x['unp_index'].split('_'), axis=1, result_type='expand')
+            res[['UniProt', 'unp_index']] = res.unp_index.str.split('_', expand=True)
             res.UNIQID = res.apply(lambda x: '_'.join(x['UNIQID'].split('_')[0:2]+[x['chain_id']]), axis=1)
             res.drop(columns=['chain_id'], inplace=True)
             res.UNIQID = res.UNIQID + '_' + res.UniProt
@@ -1529,6 +1558,54 @@ class Neo4j_API(Abclog):
         else:
             unp_map_df, sifts_df = await dfs  # .result()
         return cls.mapres2pdb(unp_map_df, sifts_df)
+
+    @classmethod
+    @unsync
+    async def pipe_api_info(cls, func, **kwargs):
+        query, newkwargs = func(**kwargs)
+        res = await cls.neo4j_api.afetch(query, **newkwargs)
+        return Entry.to_data_frame(res)
+
+    @classmethod
+    @unsync
+    async def load_interact_chain_info(cls, i3d, pdbs):
+        pre_cols = ['from_pisa_bond', 'from_arp_contact', 'from_i3d_chain_pair']
+        pisa_df = await cls.pipe_api_info(Entry.summary_chain_interaction, pdbs=pdbs, source='pisa_bond')
+        arp_df = await cls.pipe_api_info(Entry.summary_chain_interaction, pdbs=pdbs, source='arp_contact')
+        cols = ['chain_id_1', 'chain_id_2']
+        dfs = [df for df in (sort_sub_cols(pisa_df, cols), sort_sub_cols(arp_df, cols), i3d) if len(df) > 0]
+        if len(dfs) > 0:
+            merge = partial(pd.merge, how='outer')
+            res = reduce(merge, dfs)
+            for col in pre_cols:
+                if col not in res.columns:
+                    res[col] = False
+                else:
+                    res[col] = res[col].fillna(False)
+            return res[['pdb_id']+cols+pre_cols]
+        else:
+            return None
+
+    @staticmethod
+    def pipe_sifts2interact(sifts_df):
+        sifts_df['Entry'] = sifts_df.UniProt.str.split('-').str[0]
+        # sifts_df = sifts_df[['Entry', 'UniProt', 'pdb_id', 'chain_id']]
+        cols = [i for i in sifts_df.columns if i != 'pdb_id']
+        sifts_df1 = sifts_df.rename(columns=dict(zip(cols, (i+'_1' for i in cols))))
+        sifts_df2 = sifts_df.rename(columns=dict(zip(cols, (i+'_2' for i in cols))))
+        sifts_df1 = sifts_df1.rename(columns={"Entry_1": "PROT1"})
+        sifts_df2 = sifts_df2.rename(columns={"Entry_2": "PROT2"})
+        sifts_df12 = pd.merge(sifts_df1, sifts_df2)
+        return sifts_df12[sifts_df12.chain_id_1 != sifts_df12.chain_id_2].reset_index(drop=True)
+
+    @classmethod
+    @unsync
+    async def pipe_interaction(cls, pdbs, i3d):
+        int_df = await cls.load_interact_chain_info(i3d.chain_pairs_p(pdbs), pdbs)
+        sifts_df = await cls.pipe_new_sifts(pdbs, 'pdb') # ! FILTERED & Can be optimized
+        sifts_df = cls.pipe_sifts2interact(sifts_df)
+        return int_df.merge(sifts_df, how='left').merge(i3d.unp_chain_pairs_p(pdbs), how='left').merge(i3d.all_unp_pairs_12, how='left')
+
 
 '''
 TODO: 
