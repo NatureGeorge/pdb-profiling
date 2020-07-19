@@ -23,7 +23,7 @@ import asyncio
 import aiofiles
 from tablib import Dataset
 import traceback
-from pdb_profiling.utils import pipe_out, sort_sub_cols
+from pdb_profiling.utils import pipe_out, sort_sub_cols, slice_series
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
@@ -246,28 +246,6 @@ def tidy_na(dfrm: pd.DataFrame, colName: str, fill, astype):
     dfrm[colName] = dfrm[colName].fillna(fill).apply(astype)
 
 
-def slice_series(se: Iterable) -> Dict:
-    '''
-    For Sorted Series
-    '''
-    data = {}
-    cur = next(iter(se))
-    start = 0
-    try:
-        for index, i in enumerate(se):
-            if i != cur:
-                assert cur not in data, "Invalid Series"
-                data[cur] = (start, index)
-                cur = i
-                start = index
-        assert cur not in data, "Invalid Series"
-        data[cur] = (start, index+1)
-    except AssertionError as e:
-        logging.error(e)
-        raise e
-    return data
-
-
 class Entry(object):
 
     session = None
@@ -398,7 +376,7 @@ class Entry(object):
     @classmethod
     def summary_eec(cls, pdbs, protein_only:bool=True):
         query = '''
-            MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[inChain:CONTAINS_CHAIN]-(chain:Chain)
+            MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{})-[:CONTAINS_CHAIN|:IS_AN_INSTANCE_OF]-(chain)
             WHERE entry.ID IN $pdbs
             RETURN entry.ID as pdb_id, entity.ID as entity_id, chain.AUTH_ASYM_ID as chain_id, chain.STRUCT_ASYM_ID as struct_asym_id, entity.POLYMER_TYPE as POLYMER_TYPE
         '''

@@ -34,7 +34,7 @@ try:
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
     from pdb_profiling.fetcher.dbfetch import Neo4j
     from pdb_profiling.log import Abclog
-    from pdb_profiling.utils import related_dataframe
+    from pdb_profiling.utils import related_dataframe, init_semaphore
     from pdb_profiling.pipelines.score import Score_API
     from pdb_profiling.pipelines.select import Select_API
 except Exception as e:
@@ -42,15 +42,6 @@ except Exception as e:
 
 def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
     return click.style(template % name, fg=fg)
-
-
-@unsync
-async def init_semaphore(concurreq) -> Unfuture:
-    """
-    `semaphore` initiated in the `unsync` event loop
-    """
-    await asyncio.sleep(.01)
-    return asyncio.Semaphore(concurreq)
 
 
 @click.group(chain=True, invoke_without_command=False)

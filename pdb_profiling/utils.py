@@ -14,6 +14,17 @@ import numpy as np
 from pathlib import Path
 import aiofiles
 from tablib import Dataset
+import asyncio
+from unsync import unsync, Unfuture
+
+
+@unsync
+async def init_semaphore(concurreq) -> Unfuture:
+    """
+    `semaphore` initiated in the `unsync` event loop
+    """
+    await asyncio.sleep(.01)
+    return asyncio.Semaphore(concurreq)
 
 
 def decompression(path: str, extension: str =".gz", remove: bool =True, outputPath: Optional[str] = None, logger: Optional[Logger] = None):
@@ -114,3 +125,25 @@ def yield_flatten_dict(data: Dict, root: Optional[str] = None):
     else:
         for key, value in data.items():
             yield f'{root}.{key}', value
+
+
+def slice_series(se: Iterable) -> Dict:
+    '''
+    For Sorted Series
+    '''
+    data = {}
+    cur = next(iter(se))
+    start = 0
+    try:
+        for index, i in enumerate(se):
+            if i != cur:
+                assert cur not in data, "Invalid Series"
+                data[cur] = (start, index)
+                cur = i
+                start = index
+        assert cur not in data, "Invalid Series"
+        data[cur] = (start, index+1)
+    except AssertionError as e:
+        logging.error(e)
+        raise e
+    return data

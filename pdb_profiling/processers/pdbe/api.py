@@ -199,7 +199,8 @@ class ProcessPDBe(Abclog):
             cls.process, 
             concur_req=concur_req, 
             rate=rate, 
-            logger=cls.logger)
+            logger=cls.logger,
+            semaphore=kwargs.get('semaphore', None))
         # elapsed = time.perf_counter() - t0
         # cls.logger.info('{} ids downloaded in {:.2f}s'.format(len(res), elapsed))
         return res

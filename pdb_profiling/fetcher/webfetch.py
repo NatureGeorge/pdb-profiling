@@ -18,6 +18,7 @@ from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Corouti
 from furl import furl
 from pdb_profiling.log import Abclog
 import re
+from pdb_profiling.utils import init_semaphore
 
 
 class UnsyncFetch(Abclog):
@@ -147,7 +148,8 @@ class UnsyncFetch(Abclog):
         cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
         cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
         if semaphore is None:
-            semaphore = asyncio.Semaphore(concur_req)
+            # asyncio.Semaphore(concur_req)
+            semaphore = init_semaphore(concur_req).result()
         else:
             cls.logger.info(f'{cls.multi_tasks.__qualname__}: pass asyncio.Semaphore')
         if to_do_func is None:
