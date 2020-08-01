@@ -151,7 +151,7 @@ def idMappingViaUnpApi(ctx, input, sep, idcol, idtype, usecols, genecol, querych
                                         chunksize=querychunk,
                                         concur_req=ctx.obj['unp_concurreq'],
                                         rate=ctx.obj['unp_concurrate'],
-                                        run_tasks=False,
+                                        ret_res=False,
                                         semaphore = ctx.obj['semaphore'])
             for task in unsync_tasks:
                 yield task

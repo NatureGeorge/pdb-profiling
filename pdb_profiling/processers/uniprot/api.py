@@ -138,7 +138,7 @@ class MapUniProtID(Abclog):
                        chunksize: int = 100, 
                        concur_req: int = 20, 
                        rate: float = 1.5,
-                       run_tasks: bool = True,
+                       ret_res: bool = True,
                        semaphore = None):
         finish_id = list()
         self.outputPath = Path(outputPath)
@@ -184,7 +184,7 @@ class MapUniProtID(Abclog):
             concur_req=concur_req, 
             rate=rate, 
             logger=self.logger,
-            run_tasks=run_tasks,
+            ret_res=ret_res,
             semaphore=semaphore)
         return res
 
@@ -388,11 +388,11 @@ class UniProtFASTA(Abclog):
             return None
         if not cls.obj:
             folder = path.parent
-            kwargs = {'run_tasks': False}
+            kwargs = {'ret_res': False}
         else:
             folder = cls.obj['fasta_folder']
             kwargs = {'concur_req': cls.obj['unp_concurreq'], 'rate': cls.obj['unp_concurrate'],
-                      'run_tasks': False, 'semaphore': cls.obj['semaphore']}
+                      'ret_res': False, 'semaphore': cls.obj['semaphore']}
         unps = pd.read_csv(path, sep='\t', usecols=['UniProt']).UniProt.drop_duplicates()
         for fob in cls.retrieve(unps, folder, **kwargs):
             await fob
@@ -406,11 +406,11 @@ class UniProtFASTA(Abclog):
             yield ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': cls.params}, cur_filePath)
 
     @classmethod
-    def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, run_tasks: bool = True, semaphore=None):
+    def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, semaphore=None):
         return UnsyncFetch.multi_tasks(
             cls.yieldTasks(lyst, folder), 
             concur_req=concur_req, 
             rate=rate, 
             logger=cls.logger,
-            run_tasks=run_tasks,
+            ret_res=ret_res,
             semaphore=semaphore)

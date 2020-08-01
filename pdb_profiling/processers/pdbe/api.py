@@ -13,14 +13,10 @@ from tablib import InvalidDimensions, UnsupportedFormat
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from json import JSONDecodeError
 import orjson as json
-import time
 from pathlib import Path
 from logging import Logger
 from collections import OrderedDict, defaultdict
 from unsync import unsync, Unfuture
-from Bio import Align, SeqIO
-from Bio.SubsMat import MatrixInfo as matlist
-from functools import lru_cache
 from pdb_profiling.utils import decompression, related_dataframe, flatten_dict
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
@@ -32,7 +28,7 @@ API_LYST: List = sorted(['summary', 'molecules', 'experiment', 'ligand_monomers'
                    'assembly', 'electron_density_statistics',
                    'cofactor', 'drugbank', 'related_experiment_data'])
 
-BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/api/'
+BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
 
 FTP_URL: str = 'ftp://ftp.ebi.ac.uk/'
 
@@ -124,45 +120,6 @@ class SeqRangeReader(object):
         return self.output()
 
 
-class SeqPairwiseAlign(object):
-    def __init__(self):
-        self.seqa = None
-        self.seqb = None
-        self.aligner = Align.PairwiseAligner()
-        self.aligner.mode = 'global'
-        self.aligner.open_gap_score = -10
-        self.aligner.extend_gap_score = -0.5
-        self.aligner.substitution_matrix = matlist.blosum62
-        self.alignment_count = 0
-
-    @lru_cache()
-    def makeAlignment(self, seqa, seqb):
-        if seqa is None or seqb is None:
-            return np.nan, np.nan
-        self.seqa = seqa
-        self.seqb = seqb
-        alignments = self.aligner.align(seqa, seqb)
-        for alignment in alignments:
-            result = self.getAlignmentSegment(alignment)
-            self.alignment_count += 1
-            return json.dumps(result[0]), json.dumps(result[1])
-
-    @staticmethod
-    def getAlignmentSegment(alignment):
-        segments1 = []
-        segments2 = []
-        i1, i2 = alignment.path[0]
-        for node in alignment.path[1:]:
-            j1, j2 = node
-            if j1 > i1 and j2 > i2:
-                segment1 = [i1 + 1, j1]
-                segment2 = [i2 + 1, j2]
-                segments1.append(segment1)
-                segments2.append(segment2)
-            i1, i2 = j1, j2
-        return segments1, segments2
-
-
 class ProcessPDBe(Abclog):
 
     converters = {
@@ -192,7 +149,7 @@ class ProcessPDBe(Abclog):
             raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
 
     @classmethod
-    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, **kwargs):
+    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res:bool=True, **kwargs):
         # t0 = time.perf_counter()
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, method, folder, chunksize, task_id), 
@@ -200,6 +157,7 @@ class ProcessPDBe(Abclog):
             concur_req=concur_req, 
             rate=rate, 
             logger=cls.logger,
+            ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         # elapsed = time.perf_counter() - t0
         # cls.logger.info('{} ids downloaded in {:.2f}s'.format(len(res), elapsed))
@@ -321,7 +279,8 @@ class ProcessSIFTS(ProcessPDBe):
             lambda x: json.loads(x['var_list'])[0], axis=1)
         add_tage_to_range(dfrm, tage_name='sifts_range_tage')
         return dfrm
-
+    
+    '''
     @staticmethod
     def update_range(dfrm: pd.DataFrame, fasta_col: str, unp_fasta_files_folder: str, new_range_cols=('new_sifts_unp_range', 'new_sifts_pdb_range')) -> pd.DataFrame:
         def getSeq(fasta_path: str):
@@ -375,6 +334,7 @@ class ProcessSIFTS(ProcessPDBe):
         res = cls.retrieve(pdbs, 'mappings/all_isoforms/', 'get', folder)
         # return pd.concat((cls.dealWithInDe(cls.reformat(route)) for route in res if route is not None), sort=False, ignore_index=True)
         return res
+    '''
 
 
 class ProcessEntryData(ProcessPDBe):
@@ -435,19 +395,19 @@ class ProcessEntryData(ProcessPDBe):
             related_pdbs = pdbs[i:i+chunksize]
             molecules_dfrm = ProcessEntryData.unit(
                 related_pdbs,
-                suffix='pdb/entry/molecules/',
+                suffix='api/pdb/entry/molecules/',
                 method='post',
                 folder=folder,
                 task_id=i)
             res_listing_dfrm = ProcessEntryData.unit(
                 related_pdbs,
-                suffix='pdb/entry/residue_listing/',
+                suffix='api/pdb/entry/residue_listing/',
                 method='get',
                 folder=folder,
                 task_id=i)
             modified_AA_dfrm = ProcessEntryData.unit(
                 related_pdbs,
-                suffix='pdb/entry/modified_AA_or_NA/',
+                suffix='api/pdb/entry/modified_AA_or_NA/',
                 method='post',
                 folder=folder,
                 task_id=i)
@@ -474,6 +434,8 @@ class PDBeDecoder(object):
     @staticmethod
     def sync_with_pyexcel(*args) -> pe.Sheet:
         records, *remain = args
+        if not len(records):
+            return None
         sheet = pe.get_sheet(records=records, name_columns_by_row=0)
         if len(remain) > 1:
             append_header, append_value = remain
@@ -489,6 +451,8 @@ class PDBeDecoder(object):
                 cur_sheet.row += cls.sync_with_pyexcel(*res)
             except AttributeError:
                 cur_sheet = cls.sync_with_pyexcel(*res)
+            except TypeError:
+                continue
         if kwargs:
             cur_sheet.save_as(**kwargs)
         return cur_sheet
@@ -520,11 +484,11 @@ class PDBeDecoder(object):
         return cur_ob
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/status/', 'pdb/entry/summary/', 'pdb/entry/modified_AA_or_NA/',
-                      'pdb/entry/mutated_AA_or_NA/', 'pdb/entry/cofactor/', 'pdb/entry/molecules/',
-                      'pdb/entry/ligand_monomers/', 'pdb/entry/experiment/',
-                      'pdb/entry/electron_density_statistics/',
-                      'pdb/entry/related_experiment_data/', 'pdb/entry/drugbank/'})
+    @dispatch_on_set({'api/pdb/entry/status/', 'api/pdb/entry/summary/', 'api/pdb/entry/modified_AA_or_NA/',
+                      'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
+                      'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/',
+                      'api/pdb/entry/electron_density_statistics/',
+                      'api/pdb/entry/related_experiment_data/', 'api/pdb/entry/drugbank/'})
     def yieldCommon(data: Dict) -> Generator:
         for pdb in data:
             values = data[pdb]
@@ -535,7 +499,7 @@ class PDBeDecoder(object):
             yield values, ('pdb_id',), (pdb,)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/polymer_coverage/'})
+    @dispatch_on_set({'api/pdb/entry/polymer_coverage/'})
     def yieldPolymerCoverage(data: Dict) -> Generator:
         for pdb in data:
             molecules = data[pdb]['molecules']
@@ -549,14 +513,14 @@ class PDBeDecoder(object):
                     yield observed, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/observed_residues_ratio/'})
+    @dispatch_on_set({'api/pdb/entry/observed_residues_ratio/'})
     def yieldObservedResiduesRatio(data: Dict) -> Generator:
         for pdb in data:
             for entity_id, entity in data[pdb].items():
                 yield entity, ('entity_id', 'pdb_id'), (entity_id, pdb)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/residue_listing/'})
+    @dispatch_on_set({'api/pdb/entry/residue_listing/'})
     def yieldResidues(data: Dict) -> Generator:
         for pdb in data:
             molecules = data[pdb]['molecules']
@@ -572,7 +536,7 @@ class PDBeDecoder(object):
                     yield residues, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/secondary_structure/'})
+    @dispatch_on_set({'api/pdb/entry/secondary_structure/'})
     def yieldSecondaryStructure(data: Dict) -> Generator:
         for pdb in data:
             molecules = data[pdb]['molecules']
@@ -591,7 +555,7 @@ class PDBeDecoder(object):
                         yield fragment, ('secondary_structure', 'chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (name, chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/binding_sites/'})
+    @dispatch_on_set({'api/pdb/entry/binding_sites/'})
     def yieldBindingSites(data: Dict) -> Generator:
         for pdb in data:
             for site in data[pdb]:
@@ -603,7 +567,7 @@ class PDBeDecoder(object):
                     yield residues, ('residues_type', 'details', 'evidence_code', 'site_id', 'pdb_id'), (tage, site['details'], site['evidence_code'], site['site_id'], pdb)
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/assembly/'})
+    @dispatch_on_set({'api/pdb/entry/assembly/'})
     def yieldAssembly(data: Dict) -> Generator:
         for pdb in data:
             for biounit in data[pdb]:
@@ -617,7 +581,7 @@ class PDBeDecoder(object):
                 yield entities, tuple(keys)+('pdb_id',), tuple(biounit[key] for key in keys)+(pdb, )
 
     @staticmethod
-    @dispatch_on_set({'pdb/entry/files/'})
+    @dispatch_on_set({'api/pdb/entry/files/'})
     def yieldAssociatedFiles(data: Dict) -> Generator:
         for pdb in data:
             for key in data[pdb]:
@@ -629,7 +593,7 @@ class PDBeDecoder(object):
                         continue
 
     @staticmethod
-    @dispatch_on_set({'mappings/all_isoforms/'})
+    @dispatch_on_set({'api/mappings/all_isoforms/'})
     def yieldSIFTSRange(data: Dict) -> Generator:
         top_root = next(iter(data))  # PDB_ID or UniProt Isoform ID
         sec_root = next(iter(data[top_root]))  # 'UniProt' or 'PDB'
@@ -661,9 +625,8 @@ class PDBeDecoder(object):
         else:
             raise ValueError(f'Unexpected data structure for inputted data: {data}')
 
-    
     @staticmethod
-    @dispatch_on_set({'pisa/interfacelist/'})
+    @dispatch_on_set({'api/pisa/interfacelist/'})
     def yieldPISAInterfaceList(data: Dict):
         for pdb in data:
             records = data[pdb]['interfaceentries']
@@ -675,7 +638,7 @@ class PDBeDecoder(object):
             yield records, cols, tuple(data[pdb][col] for col in cols)
     
     @staticmethod
-    @dispatch_on_set({'pisa/interfacedetail/'})
+    @dispatch_on_set({'api/pisa/interfacedetail/'})
     def yieldPISAInterfaceDetail(data: Dict):
         edge_cols1 = ('structure', 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy')
         edge_cols2 = ('structure', 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy')
@@ -692,6 +655,43 @@ class PDBeDecoder(object):
             yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
             yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
 
+
+class PDBeModelServer(Abclog):
+    
+    root = 'model-server/v1/'
+    headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
+    
+    @classmethod
+    def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params) -> Generator:
+        if data_collection is None:
+            assert method == 'get', 'Invalid method!'
+            for pdb in pdbs:
+                args = dict(
+                    url=f'{BASE_URL}{cls.root}{pdb}/{suffix}?',
+                    headers=cls.headers,
+                    params=params)
+                yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
+        else:
+            assert method == 'post', 'Invalid method!'
+            for pdb, data in zip(pdbs, data_collection):
+                args = dict(
+                    url=f'{BASE_URL}{cls.root}{pdb}/{suffix}?',
+                    headers=cls.headers,
+                    params=params,
+                    data=data)
+                yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
+
+    @classmethod
+    def retrieve(cls, pdbs, suffix: str, method: str, folder: str, data_collection=None, params={'model_nums': 1, 'encoding': 'cif'}, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+        res = UnsyncFetch.multi_tasks(
+            cls.yieldTasks(pdbs, suffix, method, folder,
+                           data_collection, params),
+            concur_req=concur_req,
+            rate=rate,
+            logger=cls.logger,
+            ret_res=ret_res,
+            semaphore=kwargs.get('semaphore', None))
+        return res
 
 
 # TODO: Chain UniProt ID Mapping -> ProcessSIFTS -> ProcessPDBe

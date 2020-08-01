@@ -16,6 +16,8 @@ import aiofiles
 from tablib import Dataset
 import asyncio
 from unsync import unsync, Unfuture
+from itertools import chain
+import orjson as json
 
 
 @unsync
@@ -147,3 +149,30 @@ def slice_series(se: Iterable) -> Dict:
         logging.error(e)
         raise e
     return data
+
+
+def split_df_by_chain(df, all_cols, cols_to_split, mode='sep'):
+    '''
+    Reference: <https://stackoverflow.com/a/50731258/12876491>
+    '''
+    def chainer_sep(s):
+        return list(chain.from_iterable(s.str.split(',')))
+
+    def chainer_json(s):
+        return list(chain.from_iterable(s.apply(json.loads)))
+    
+    if mode == 'sep':
+        chainer = chainer_sep
+        lens = df[cols_to_split[0]].str.split(',').map(len)
+    elif mode == 'json-list':
+        chainer = chainer_json
+        lens = df[cols_to_split[0]].apply(json.loads).map(len)
+    else:
+        raise ValueError("Invalid mode!")
+    
+    repeat_dict = {col: np.repeat(df[col], lens)
+                   for col in set(all_cols)-set(cols_to_split)}
+    chain_dict = {col: chainer(df[col]) for col in cols_to_split}
+    return DataFrame({**repeat_dict, **chain_dict})
+
+

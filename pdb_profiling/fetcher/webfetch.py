@@ -118,7 +118,7 @@ class UnsyncFetch(Abclog):
 
     @classmethod
     @unsync
-    async def fetch_file(cls, semaphore: asyncio.Semaphore, method: str, info: Dict, path: str, rate: float):
+    async def fetch_file(cls, semaphore, method: str, info: Dict, path: str, rate: float):
         download_func = cls.download_func_dispatch(method)
         try:
             async with semaphore:
@@ -139,7 +139,7 @@ class UnsyncFetch(Abclog):
               to_do_func: Optional[Callable] = None,
               concur_req: int = 4, rate: float = 1.5,
               logger: Optional[logging.Logger] = None,
-              run_tasks: bool = True,
+              ret_res: bool = True,
               semaphore = None
               ):
 
@@ -158,7 +158,7 @@ class UnsyncFetch(Abclog):
         else:
             tasks = [cls.fetch_file(semaphore, method, info, path, rate).then(
                 to_do_func) for method, info, path in tasks]
-        if run_tasks:
+        if ret_res:
             t0 = perf_counter()
             res = cls.unsync_tasks(tasks).result()
             elapsed = perf_counter() - t0
