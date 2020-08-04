@@ -7,7 +7,7 @@
 import os
 import numpy as np
 import pandas as pd
-import pyexcel as pe
+from pyexcel import get_sheet, Sheet
 import tablib
 from tablib import InvalidDimensions, UnsupportedFormat
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
@@ -17,7 +17,7 @@ from pathlib import Path
 from logging import Logger
 from collections import OrderedDict, defaultdict
 from unsync import unsync, Unfuture
-from pdb_profiling.utils import decompression, related_dataframe, flatten_dict
+from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 
@@ -165,10 +165,10 @@ class ProcessPDBe(Abclog):
     
     @classmethod
     @unsync
-    def process(cls, path: Union[str, Path, Unfuture]):
+    async def process(cls, path: Union[str, Path, Unfuture]):
         cls.logger.debug('Start to decode')
         if not isinstance(path, (str, Path)):
-            path = path.result()
+            path = await path # .result()
         if path is None:
             return path
         path = Path(path)
@@ -176,11 +176,9 @@ class ProcessPDBe(Abclog):
             data = json.loads(inFile.read())
         suffix = path.name.replace('%', '/').split('+')[0]
         new_path = str(path).replace('.json', '.tsv')
-        PDBeDecoder.pyexcel_io(
-            suffix=suffix,
-            data=data,
-            filename=new_path,
-            delimiter='\t')
+        await pipe_out(
+            df=PDBeDecoder.pyexcel_io(suffix=suffix, data=data), 
+            path=new_path, format='tsv', mode='w')
         cls.logger.debug(f'Decoded file in {new_path}')
         return new_path
 
@@ -432,19 +430,20 @@ class ProcessEntryData(ProcessPDBe):
 
 class PDBeDecoder(object):
     @staticmethod
-    def sync_with_pyexcel(*args) -> pe.Sheet:
+    def sync_with_pyexcel(*args) -> Sheet:
         records, *remain = args
         if not len(records):
             return None
-        sheet = pe.get_sheet(records=records, name_columns_by_row=0)
+        sheet = get_sheet(records=records, name_columns_by_row=0)
         if len(remain) > 1:
             append_header, append_value = remain
-            append_data = [append_header] + [append_value]*len(records)
-            sheet.column += pe.Sheet(append_data)
+            append_value = tuple(i if i is not None else 'null' for i in append_value)
+            append_data = [append_header] + [append_value for _ in range(len(records))]
+            sheet.column += Sheet(append_data)
         return sheet
 
     @classmethod
-    def pyexcel_io(cls, suffix: str, data: Dict, **kwargs) -> pe.Sheet:
+    def pyexcel_io(cls, suffix: str, data: Dict) -> Sheet:
         cur_sheet = None
         for res in traversePDBeData(suffix, data):
             try:
@@ -453,8 +452,6 @@ class PDBeDecoder(object):
                 cur_sheet = cls.sync_with_pyexcel(*res)
             except TypeError:
                 continue
-        if kwargs:
-            cur_sheet.save_as(**kwargs)
         return cur_sheet
 
     @staticmethod

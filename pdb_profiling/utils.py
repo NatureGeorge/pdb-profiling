@@ -7,17 +7,73 @@
 import os
 import gzip
 import shutil
-from typing import Optional, Union, Dict, Tuple, Iterable
+from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List
 from logging import Logger
-from pandas import read_csv, DataFrame
+from pandas import read_csv, DataFrame, isna
 import numpy as np
 from pathlib import Path
 import aiofiles
 from tablib import Dataset
+from pyexcel import Sheet
 import asyncio
 from unsync import unsync, Unfuture
 from itertools import chain
 import orjson as json
+import logging
+
+
+def to_interval(lyst: Union[Iterable, Iterator]) -> List:
+    def pass_check(lyst):
+        try:
+            if not lyst or isna(lyst):
+                return False
+            else:
+                return True
+        except ValueError:
+            if isinstance(lyst, float):
+                return False
+            else:
+                return True
+    if not pass_check(lyst):
+        return []
+    else:
+        lyst = set(int(i) for i in lyst)
+        if not pass_check(lyst):
+            return []
+        start = []
+        interval_lyst = []
+        true_interval_lyst = []
+        max_edge = max(lyst)
+        min_edge = min(lyst)
+        if len(lyst) == (max_edge + 1 - min_edge):
+            true_interval_lyst.append((min_edge, max_edge))
+        else:
+            lyst_list = sorted(lyst)
+            for j in lyst_list:
+                if not start:
+                    i = j
+                    start.append(j)
+                    i += 1
+                else:
+                    if (i != j) or (j == max(lyst_list)):
+                        if j == max(lyst_list):
+                            if (i != j):
+                                interval_lyst.append(start)
+                                interval_lyst.append([j])
+                                break
+                            else:
+                                start.append(j)
+                        interval_lyst.append(start)
+                        start = [j]
+                        i = j + 1
+                    else:
+                        start.append(j)
+                        i += 1
+            for li in interval_lyst:
+                max_edge = max(li)
+                min_edge = min(li)
+                true_interval_lyst.append((min_edge, max_edge))
+        return true_interval_lyst
 
 
 @unsync
@@ -92,23 +148,30 @@ def sort_sub_cols(dfrm, cols):
         return dfrm
 
 
-async def pipe_out(df, path):
+async def pipe_out(df, path, **kwargs):
+    if not isinstance(df, (DataFrame, Dataset, Sheet)):
+        raise TypeError(f"Invalid Object for pipe_out(): {type(df)}")
+    if len(df) == 0:
+        raise ValueError("Zero record!")
     path = Path(path)
-    if isinstance(df, DataFrame):
-        sorted_col = sorted(df.columns)
-        if path.exists():
-            headers = None
-        else:
-            headers = sorted_col
-        async with aiofiles.open(path, 'a') as fileOb:
+    var_format = kwargs.get('format', 'tsv')
+    async with aiofiles.open(path, kwargs.get('mode', 'a')) as fileOb:
+        if isinstance(df, DataFrame):
+            sorted_col = sorted(df.columns)
+            if path.exists():
+                headers = None
+            else:
+                headers = sorted_col
             dataset = Dataset(headers=headers)
             dataset.extend(df[sorted_col].to_records(index=False))
-            await fileOb.write(dataset.export('tsv'))
-    elif isinstance(df, Dataset):
-        async with aiofiles.open(path, 'a') as fileOb:
-            await fileOb.write(df.export('tsv'))
-    else:
-        raise TypeError("Invalid Object for pipe_out()")
+            to_write = dataset.export(var_format)
+        elif isinstance(df, Dataset):
+            to_write = df.export(var_format)
+        elif isinstance(df, Sheet):
+            to_write = getattr(df, var_format)
+        else:
+            pass
+        await fileOb.write(to_write)
 
 
 def flatten_dict(data: Dict, root: str, with_root: bool = True):
@@ -151,19 +214,19 @@ def slice_series(se: Iterable) -> Dict:
     return data
 
 
-def split_df_by_chain(df, all_cols, cols_to_split, mode='sep'):
+def split_df_by_chain(df, all_cols, cols_to_split, mode='sep', sep=','):
     '''
     Reference: <https://stackoverflow.com/a/50731258/12876491>
     '''
     def chainer_sep(s):
-        return list(chain.from_iterable(s.str.split(',')))
+        return list(chain.from_iterable(s.str.split(sep)))
 
     def chainer_json(s):
         return list(chain.from_iterable(s.apply(json.loads)))
     
     if mode == 'sep':
         chainer = chainer_sep
-        lens = df[cols_to_split[0]].str.split(',').map(len)
+        lens = df[cols_to_split[0]].str.split(sep).map(len)
     elif mode == 'json-list':
         chainer = chainer_json
         lens = df[cols_to_split[0]].apply(json.loads).map(len)

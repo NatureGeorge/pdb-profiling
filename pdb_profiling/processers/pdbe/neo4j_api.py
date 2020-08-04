@@ -23,7 +23,7 @@ import asyncio
 import aiofiles
 from tablib import Dataset
 import traceback
-from pdb_profiling.utils import pipe_out, sort_sub_cols, slice_series
+from pdb_profiling.utils import pipe_out, sort_sub_cols, slice_series, to_interval
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
@@ -40,57 +40,6 @@ standardAA = list(SEQ_DICT.keys())
 
 standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
 
-
-def to_interval(lyst: Union[Iterable, Iterator]) -> List:
-    def pass_check(lyst):
-        try:
-            if not lyst or pd.isna(lyst):
-                return False
-            else:
-                return True
-        except ValueError:
-            if isinstance(lyst, float):
-                return False
-            else:
-                return True
-    if not pass_check(lyst): return []
-    else:
-        lyst = set(int(i) for i in lyst)
-        if not pass_check(lyst): return []
-        start = []
-        interval_lyst = []
-        true_interval_lyst = []
-        max_edge = max(lyst)
-        min_edge = min(lyst)
-        if len(lyst) == (max_edge + 1 - min_edge):
-            true_interval_lyst.append((min_edge, max_edge))
-        else:
-            lyst_list = sorted(lyst)
-            for j in lyst_list:
-                if not start:
-                    i = j
-                    start.append(j)
-                    i += 1
-                else:
-                    if (i != j) or (j == max(lyst_list)):
-                        if j == max(lyst_list):
-                            if (i != j):
-                                interval_lyst.append(start)
-                                interval_lyst.append([j])
-                                break
-                            else:
-                                start.append(j)
-                        interval_lyst.append(start)
-                        start = [j]
-                        i = j + 1
-                    else:
-                        start.append(j)
-                        i += 1
-            for li in interval_lyst:
-                max_edge = max(li)
-                min_edge = min(li)
-                true_interval_lyst.append((min_edge, max_edge))
-        return true_interval_lyst
 
 
 def lyst22intervel(x, y):

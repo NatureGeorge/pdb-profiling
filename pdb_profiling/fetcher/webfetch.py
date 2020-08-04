@@ -151,7 +151,7 @@ class UnsyncFetch(Abclog):
             # asyncio.Semaphore(concur_req)
             semaphore = init_semaphore(concur_req).result()
         else:
-            cls.logger.info(f'{cls.multi_tasks.__qualname__}: pass asyncio.Semaphore')
+            cls.logger.debug(f'{cls.multi_tasks.__qualname__}: pass {repr(semaphore)}')
         if to_do_func is None:
             tasks = [cls.fetch_file(semaphore, method, info, path, rate)
                      for method, info, path in tasks]

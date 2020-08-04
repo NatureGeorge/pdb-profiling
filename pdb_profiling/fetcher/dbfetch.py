@@ -82,7 +82,7 @@ class Neo4j:
                 else:
                     self.log_func('BrokenPipeError or ServiceUnavailable. Retrying...')
                     await asyncio.sleep(retry_wait)
-                    self.init_driver().result()
+                    await self.init_driver()
         return res
          
     def close(self):
