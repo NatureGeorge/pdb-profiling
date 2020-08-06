@@ -20,6 +20,7 @@ from unsync import unsync, Unfuture
 from itertools import chain
 import orjson as json
 import logging
+from io import StringIO
 
 
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
@@ -148,6 +149,15 @@ def sort_sub_cols(dfrm, cols):
         return dfrm
 
 
+async def a_read_csv(path, read_mode='r',**kwargs):
+    '''
+    only suitable for small dataframe
+    '''
+    async with aiofiles.open(path, read_mode) as file_io:
+        with StringIO(await file_io.read()) as text_io:
+            return read_csv(text_io, **kwargs)
+
+
 async def pipe_out(df, path, **kwargs):
     if not isinstance(df, (DataFrame, Dataset, Sheet)):
         raise TypeError(f"Invalid Object for pipe_out(): {type(df)}")
@@ -155,7 +165,7 @@ async def pipe_out(df, path, **kwargs):
         raise ValueError("Zero record!")
     path = Path(path)
     var_format = kwargs.get('format', 'tsv')
-    async with aiofiles.open(path, kwargs.get('mode', 'a')) as fileOb:
+    async with aiofiles.open(path, kwargs.get('mode', 'a')) as file_io:
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
             if path.exists():
@@ -171,7 +181,7 @@ async def pipe_out(df, path, **kwargs):
             to_write = getattr(df, var_format)
         else:
             pass
-        await fileOb.write(to_write)
+        await file_io.write(to_write)
 
 
 def flatten_dict(data: Dict, root: str, with_root: bool = True):

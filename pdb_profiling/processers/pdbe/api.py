@@ -14,6 +14,7 @@ from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Ge
 from json import JSONDecodeError
 import orjson as json
 from pathlib import Path
+import aiofiles
 from logging import Logger
 from collections import OrderedDict, defaultdict
 from unsync import unsync, Unfuture
@@ -172,8 +173,8 @@ class ProcessPDBe(Abclog):
         if path is None:
             return path
         path = Path(path)
-        with path.open() as inFile:
-            data = json.loads(inFile.read())
+        async with aiofiles.open(path) as inFile:
+            data = json.loads(await inFile.read())
         suffix = path.name.replace('%', '/').split('+')[0]
         new_path = str(path).replace('.json', '.tsv')
         await pipe_out(
