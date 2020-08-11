@@ -130,7 +130,16 @@ class ProcessPDBe(Abclog):
         'entity_id': int,
         'author_residue_number': int,
         'residue_number': int,
-        'author_insertion_code': str}
+        'author_insertion_code': str,
+        'id': int,
+        'interface_id': int,
+        'interface_number': int,
+        'pdb_code': str,
+        'assemble_code': int,
+        'assembly_id': int
+        }
+    
+    use_existing: bool = False
 
     @staticmethod
     def yieldTasks(pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 25, task_id: int = 0) -> Generator:
@@ -173,15 +182,27 @@ class ProcessPDBe(Abclog):
         if path is None:
             return path
         path = Path(path)
-        async with aiofiles.open(path) as inFile:
-            data = json.loads(await inFile.read())
         suffix = path.name.replace('%', '/').split('+')[0]
         new_path = str(path).replace('.json', '.tsv')
-        await pipe_out(
-            df=PDBeDecoder.pyexcel_io(suffix=suffix, data=data), 
-            path=new_path, format='tsv', mode='w')
-        cls.logger.debug(f'Decoded file in {new_path}')
-        return new_path
+        if Path(new_path).exists() and cls.use_existing:
+            return new_path
+        async with aiofiles.open(path) as inFile:
+            try:
+                data = json.loads(await inFile.read())
+            except Exception as e:
+                cls.logger.error(f"Error in {path}")
+                raise e
+        res = PDBeDecoder.pyexcel_io(suffix=suffix, data=data)
+        if res is not None:
+            await pipe_out(
+                df=res, path=new_path, 
+                format='tsv', mode='w')
+            cls.logger.debug(f'Decoded file in {new_path}')
+            return new_path
+        else:
+            cls.logger.warning(f"Without Expected Data ({suffix}): {data}")
+            return None
+        
 
 
 class ProcessSIFTS(ProcessPDBe):
@@ -641,7 +662,10 @@ class PDBeDecoder(object):
         edge_cols1 = ('structure', 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy')
         edge_cols2 = ('structure', 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy')
         for pdb in data:
-            records = data[pdb]['interface_detail']
+            try:
+                records = data[pdb]['interface_detail']
+            except KeyError:
+                raise ValueError(f"Without Expected interface_detail: {data}")
             del records['bonds']
             for col in edge_cols1: flatten_dict(records['interface_structure_1'], col)
             for col in edge_cols2: flatten_dict(records['interface_structure_2'], col)
