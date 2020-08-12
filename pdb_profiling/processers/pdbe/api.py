@@ -127,7 +127,7 @@ class ProcessPDBe(Abclog):
         'pdb_id': str,
         'chain_id': str,
         'struct_asym_id': str,
-        'entity_id': int,
+        'entity_id': str,
         'author_residue_number': int,
         'residue_number': int,
         'author_insertion_code': str,
@@ -451,6 +451,15 @@ class ProcessEntryData(ProcessPDBe):
                 json.dump(data, outFile)
 
 class PDBeDecoder(object):
+
+    @staticmethod
+    def init_folder(folder: Union[Path, str], suffixes: Iterable) -> Iterable[Path]:
+        folder = Path(folder)
+        for suffix in suffixes:
+            new_path = folder/suffix
+            new_path.mkdir(parents=True, exist_ok=True)
+            yield new_path
+
     @staticmethod
     def sync_with_pyexcel(*args) -> Sheet:
         records, *remain = args
