@@ -450,15 +450,7 @@ class ProcessEntryData(ProcessPDBe):
             with Path(folder, f'clean_pdb_statistic+{i}.json').open(mode='w+') as outFile:
                 json.dump(data, outFile)
 
-class PDBeDecoder(object):
-
-    @staticmethod
-    def init_folder(folder: Union[Path, str], suffixes: Iterable) -> Iterable[Path]:
-        folder = Path(folder)
-        for suffix in suffixes:
-            new_path = folder/suffix
-            new_path.mkdir(parents=True, exist_ok=True)
-            yield new_path
+class PDBeDecoder(object):    
 
     @staticmethod
     def sync_with_pyexcel(*args) -> Sheet:
@@ -514,7 +506,7 @@ class PDBeDecoder(object):
     @staticmethod
     @dispatch_on_set({'api/pdb/entry/status/', 'api/pdb/entry/summary/', 'api/pdb/entry/modified_AA_or_NA/',
                       'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
-                      'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/',
+                      'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/', 'api/pdb/entry/carbohydrate_polymer/',
                       'api/pdb/entry/electron_density_statistics/',
                       'api/pdb/entry/related_experiment_data/', 'api/pdb/entry/drugbank/'})
     def yieldCommon(data: Dict) -> Generator:

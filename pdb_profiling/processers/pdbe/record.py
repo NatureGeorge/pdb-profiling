@@ -8,8 +8,7 @@ from typing import Iterable, Union, Callable, Optional, Hashable
 from pathlib import Path
 from unsync import unsync, Unfuture
 from re import compile as re_compile
-from functools import lru_cache
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe
 from pdb_profiling.processers.pdbe.api import ProcessPDBe, FUNCS as API_SET
 
 
@@ -77,7 +76,7 @@ class PDB(object):
             pdbs=self.get_pdb_id(),
             suffix=api_suffix,
             method='get', 
-            folder=next(init_folder_from_suffix(self.get_folder(), api_suffix)),
+            folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
             ret_res=False, 
             semaphore=self.get_web_semaphore())[0]
         if then_func is not None:
@@ -143,26 +142,77 @@ class PDB(object):
             'json-list').rename(columns={"in_chains": "struct_asym_id_in_assembly"}).reset_index(drop=True)
         return eec_df
 
+    @unsync
+    async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None):
+        
+        def to_assembly_id(pdb_id, assemblys):
+            for assembly_id in assemblys:
+                yield f"{pdb_id}/{assembly_id}"
+        
+        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.assembly2eec)
+        assemblys = set(ass_eec_df.assembly_id) | {0}
+        if focus_assembly_ids is not None:
+            assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
+        else:
+            assemblys = sorted(assemblys)
+        self.assembly = dict(zip(
+            assemblys, 
+            (PDBAssemble(ass_id, self.get_folder()) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
+
+    def get_assembly(self, assembly_id):
+        return self.assembly[assembly_id]
+
 
 class PDBAssemble(PDB):
 
     id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+")
+    interface_filters = {
+        'structure_2.symmetry_operator': ('eq', 'x,y,z'),
+        'css': ('gt', 0),
+        }
 
     def set_pdb_id(self, pdb_id: str):
         self.pdb_id = pdb_id.lower()
         assert bool(self.id_pattern.fullmatch(self.pdb_id)), f"Invalid ID: {self.pdb_id}"
 
+    @classmethod
+    async def to_interfacelist_df(cls, path: Unfuture):
+        interfacelist_df = await path.then(cls.to_dataframe)
+        if interfacelist_df is None:
+            return None
+        interfacelist_df.rename(columns={
+                                "id": "interface_id", 
+                                "pdb_code": "pdb_id", 
+                                "assemble_code": "assembly_id"
+                                }, inplace=True)
+        return interfacelist_df
 
-class PDBInterface(PDB):
+    @unsync
+    async def set_interface(self):
+        
+        def to_interface_id(pdb_assembly_id, interfaces):
+            for interface_id in interfaces:
+                yield f"{pdb_assembly_id}/{interface_id}"
+
+        interfacelist_df = await self.fetch_from_web_api('api/pisa/interfacelist/', self.to_interfacelist_df)
+        
+        if interfacelist_df is None:
+            self.interface = dict()
+            return
+        
+        interfaces = related_dataframe(
+            self.interface_filters, interfacelist_df).interface_id.unique()
+        self.interface = dict(zip(
+            interfaces,
+            (PDBInterface(if_id, self.get_folder()) for if_id in to_interface_id(self.pdb_id, interfaces))))
+
+
+class PDBInterface(PDBAssemble):
  
     id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+/[0-9]+")
 
-    def set_pdb_id(self, pdb_id: str):
-        self.pdb_id = pdb_id.lower()
-        assert bool(self.id_pattern.fullmatch(self.pdb_id)), f"Invalid ID: {self.pdb_id}"
 
 
-class PDBCollection(PDB):
-    def __init__(self, pdbs: Iterable[PDB]):
-        self.pdbs = pdbs
+
+
 
