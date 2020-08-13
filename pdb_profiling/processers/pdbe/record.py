@@ -4,23 +4,53 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union
+from typing import Iterable, Union, Callable, Optional, Hashable
+from pathlib import Path
 from unsync import unsync, Unfuture
-from re import compile
-from pdb_profiling.utils import init_semaphore
+from re import compile as re_compile
+from functools import lru_cache
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain
+from pdb_profiling.processers.pdbe.api import ProcessPDBe, FUNCS as API_SET
+
+
+API_SET = {api for apiset in API_SET for api in apiset[1]}
+
 
 class PDB(object):
+
+    def register_task(self, key: Hashable, task: Unfuture):
+        self.tasks[key] = task
 
     @classmethod
     def set_web_semaphore(cls, web_semaphore_value):
         cls.web_semaphore = init_semaphore(web_semaphore_value).result()
-    
+
+    @classmethod
+    def get_web_semaphore(cls):
+        return cls.web_semaphore
+
     @classmethod
     def set_db_semaphore(cls, db_semaphore_value):
         cls.db_semaphore = init_semaphore(db_semaphore_value).result()
 
-    def __init__(self, pdb_id: str):
+    @classmethod
+    def get_db_semaphore(cls):
+        return cls.db_semaphore
+
+    @classmethod
+    def set_folder(cls, folder: Union[Path, str]):
+        folder = Path(folder)
+        assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
+        cls.folder = folder
+    
+    @classmethod
+    def get_folder(cls) -> Path:
+        return cls.folder
+
+    def __init__(self, pdb_id: str, folder: Union[Path, str]):
         self.set_pdb_id(pdb_id)
+        self.set_folder(folder)
+        self.tasks = dict()
     
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.pdb_id}>"
@@ -29,20 +59,94 @@ class PDB(object):
         assert len(pdb_id) == 4, "Invalid PDB ID!"
         self.pdb_id = pdb_id.lower()
 
+    def get_pdb_id(self):
+        return (self.pdb_id, )
+
     def set_neo4j_connection(self, api):
         pass
 
     def set_sqlite_connection(self, api):
         pass
 
-    @staticmethod
-    def submit_task(task_func: Unfuture, **task_kwargs) -> Unfuture:
-        return task_func(**task_kwargs)
+    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
+        assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
+        task = self.tasks.get((api_suffix, then_func), None)
+        if task is not None:
+            return task
+        task = ProcessPDBe.retrieve(
+            pdbs=self.get_pdb_id(),
+            suffix=api_suffix,
+            method='get', 
+            folder=next(init_folder_from_suffix(self.get_folder(), api_suffix)),
+            ret_res=False, 
+            semaphore=self.get_web_semaphore())[0]
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((api_suffix, then_func), task)
+        return task
+
+    @classmethod
+    @unsync
+    async def to_dataframe(cls, path):
+        path = await path
+        if path is None:
+            return None
+        residue_df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters)
+        return residue_df
+
+    @classmethod
+    @unsync
+    async def orr2eec(cls, path: Unfuture):
+        '''
+        TODO Retrieve entry-entity-chain info via `observed_residues_ratio`
+        
+        NOTE only for polymeric molecules 
+        
+            * polypeptide(L)
+            * polydeoxyribonucleotide
+            * polyribonucleotide
+            * polydeoxyribonucleotide/polyribonucleotide hybrid (e.g. 6ozg)
+        '''
+        eec_df = await path.then(cls.to_dataframe)
+        eec_df['struct_asym_id_in_assembly'] = eec_df.struct_asym_id
+        eec_df = eec_df.drop(columns=['number_residues', 'observed_ratio', 'partial_ratio'])
+        return eec_df
+
+    @unsync
+    async def res2eec(self, merge_with_molecules_info:bool=False):
+        '''
+        NOTE except waters
+        '''
+        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        eec_df = res_df[['pdb_id', 'entity_id', 'chain_id',
+                         'struct_asym_id']].drop_duplicates().reset_index(drop=True)
+        if merge_with_molecules_info:
+            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', PDB.to_dataframe)
+            return eec_df.merge(mol_df, how='left')
+        else:
+            return eec_df
+
+    @classmethod
+    @unsync
+    async def assembly2eec(cls, path: Unfuture):
+        '''
+        NOTE except waters
+        '''
+        assembly_df = await path.then(cls.to_dataframe)
+        # exclude_molecule_type=('bound', 'water', 'carbohydrate polymer')
+        assembly_focus_col = ('in_chains', 'pdb_id',
+                              'entity_id', 'molecule_type', 
+                              'assembly_id')
+        eec_df = split_df_by_chain(
+            assembly_df[assembly_df.molecule_type.ne('water')],
+            assembly_focus_col, assembly_focus_col[0:1],
+            'json-list').rename(columns={"in_chains": "struct_asym_id_in_assembly"}).reset_index(drop=True)
+        return eec_df
 
 
 class PDBAssemble(PDB):
 
-    id_pattern = compile("[a-z0-9]{4}/[0-9]+")
+    id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+")
 
     def set_pdb_id(self, pdb_id: str):
         self.pdb_id = pdb_id.lower()
@@ -50,8 +154,8 @@ class PDBAssemble(PDB):
 
 
 class PDBInterface(PDB):
-    
-    id_pattern = compile("[a-z0-9]{4}/[0-9]+/[0-9]+")
+ 
+    id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+/[0-9]+")
 
     def set_pdb_id(self, pdb_id: str):
         self.pdb_id = pdb_id.lower()
@@ -61,3 +165,4 @@ class PDBInterface(PDB):
 class PDBCollection(PDB):
     def __init__(self, pdbs: Iterable[PDB]):
         self.pdbs = pdbs
+
