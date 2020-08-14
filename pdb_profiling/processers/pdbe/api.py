@@ -159,6 +159,14 @@ class ProcessPDBe(Abclog):
             raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
 
     @classmethod
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, rate: float = 1.5):
+        return UnsyncFetch.single_task(
+            task=next(cls.yieldTasks((pdb, ), suffix, method, folder)),
+            semaphore=semaphore,
+            to_do_func=cls.process,
+            rate=rate)
+
+    @classmethod
     def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res:bool=True, **kwargs):
         # t0 = time.perf_counter()
         res = UnsyncFetch.multi_tasks(

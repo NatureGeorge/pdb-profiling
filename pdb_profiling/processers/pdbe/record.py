@@ -17,6 +17,8 @@ API_SET = {api for apiset in API_SET for api in apiset[1]}
 
 class PDB(object):
 
+    folder = None
+
     def register_task(self, key: Hashable, task: Unfuture):
         self.tasks[key] = task
 
@@ -44,22 +46,28 @@ class PDB(object):
     
     @classmethod
     def get_folder(cls) -> Path:
+        cls.check_folder()
         return cls.folder
 
-    def __init__(self, pdb_id: str, folder: Union[Path, str]):
-        self.set_pdb_id(pdb_id)
-        self.set_folder(folder)
+    @classmethod
+    def check_folder(cls):
+        if cls.folder is None:
+            raise ValueError("Please set folder via PDB.set_folder(folder: Union[Path, str])")
+
+    def __init__(self, pdb_id: str):
+        self.check_folder()
+        self.set_id(pdb_id)
         self.tasks = dict()
     
     def __repr__(self):
-        return f"<{self.__class__.__name__} {self.pdb_id}>"
+        return f"<{self.__class__.__name__} {self.get_id()}>"
     
-    def set_pdb_id(self, pdb_id: str):
+    def set_id(self, pdb_id: str):
         assert len(pdb_id) == 4, "Invalid PDB ID!"
         self.pdb_id = pdb_id.lower()
 
-    def get_pdb_id(self):
-        return (self.pdb_id, )
+    def get_id(self):
+        return self.pdb_id
 
     def set_neo4j_connection(self, api):
         pass
@@ -72,13 +80,12 @@ class PDB(object):
         task = self.tasks.get((api_suffix, then_func), None)
         if task is not None:
             return task
-        task = ProcessPDBe.retrieve(
-            pdbs=self.get_pdb_id(),
+        task = ProcessPDBe.single_retrieve(
+            pdb=self.get_id(),
             suffix=api_suffix,
             method='get', 
             folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
-            ret_res=False, 
-            semaphore=self.get_web_semaphore())[0]
+            semaphore=self.get_web_semaphore())
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((api_suffix, then_func), task)
@@ -102,6 +109,7 @@ class PDB(object):
         NOTE only for polymeric molecules 
         
             * polypeptide(L)
+            * polypeptide(D) (e.g.3ue7, struct_asym_id: A)
             * polydeoxyribonucleotide
             * polyribonucleotide
             * polydeoxyribonucleotide/polyribonucleotide hybrid (e.g. 6ozg)
@@ -112,7 +120,7 @@ class PDB(object):
         return eec_df
 
     @unsync
-    async def res2eec(self, merge_with_molecules_info:bool=False):
+    async def res2eec(self, merge_with_molecules_info:bool=True):
         '''
         NOTE except waters
         '''
@@ -135,7 +143,7 @@ class PDB(object):
         # exclude_molecule_type=('bound', 'water', 'carbohydrate polymer')
         assembly_focus_col = ('in_chains', 'pdb_id',
                               'entity_id', 'molecule_type', 
-                              'assembly_id')
+                              'assembly_id', 'details')
         eec_df = split_df_by_chain(
             assembly_df[assembly_df.molecule_type.ne('water')],
             assembly_focus_col, assembly_focus_col[0:1],
@@ -144,12 +152,16 @@ class PDB(object):
 
     @unsync
     async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None):
+        '''
+        NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
+        '''
         
         def to_assembly_id(pdb_id, assemblys):
             for assembly_id in assemblys:
                 yield f"{pdb_id}/{assembly_id}"
         
         ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.assembly2eec)
+        ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
         assemblys = set(ass_eec_df.assembly_id) | {0}
         if focus_assembly_ids is not None:
             assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
@@ -157,7 +169,7 @@ class PDB(object):
             assemblys = sorted(assemblys)
         self.assembly = dict(zip(
             assemblys, 
-            (PDBAssemble(ass_id, self.get_folder()) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
+            (PDBAssemble(ass_id, self) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
@@ -165,15 +177,24 @@ class PDB(object):
 
 class PDBAssemble(PDB):
 
-    id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+")
-    interface_filters = {
-        'structure_2.symmetry_operator': ('eq', 'x,y,z'),
-        'css': ('gt', 0),
-        }
+    id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
+    struct_range_pattern = re_compile(r"\[.+\]([A-Z]+):[0-9]+")  # e.g. [FMN]B:149
 
-    def set_pdb_id(self, pdb_id: str):
-        self.pdb_id = pdb_id.lower()
-        assert bool(self.id_pattern.fullmatch(self.pdb_id)), f"Invalid ID: {self.pdb_id}"
+    def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None, interface_filters={'structure_2.symmetry_operator': ('eq', 'x,y,z'), 'css': ('gt', 0)}):
+        super().__init__(pdb_ass_id)
+        self.pdb_ob = pdb_ob
+        self.interface_filters = interface_filters
+
+    def set_id(self, pdb_ass_id: str):
+        self.pdb_ass_id = pdb_ass_id.lower()
+        try:
+            self.pdb_id, self.assembly_id = self.id_pattern.fullmatch(self.pdb_ass_id).groups()
+        except AttributeError:
+            raise ValueError(f"Invalid ID: {self.pdb_ass_id}")
+        self.assembly_id = int(self.assembly_id)
+    
+    def get_id(self):
+        return self.pdb_ass_id
 
     @classmethod
     async def to_interfacelist_df(cls, path: Unfuture):
@@ -185,13 +206,17 @@ class PDBAssemble(PDB):
                                 "pdb_code": "pdb_id", 
                                 "assemble_code": "assembly_id"
                                 }, inplace=True)
+        interfacelist_df['struct_asym_id_in_assembly_1'] = interfacelist_df.apply(
+            lambda x: cls.struct_range_pattern.match(x['structure_1.range']).group(1) if x['structure_1.original_range'] != '{-}' else x['structure_1.range'], axis=1)
+        interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df.apply(
+            lambda x: cls.struct_range_pattern.match(x['structure_2.range']).group(1) if x['structure_2.original_range'] != '{-}' else x['structure_2.range'], axis=1)
         return interfacelist_df
 
     @unsync
-    async def set_interface(self):
-        
-        def to_interface_id(pdb_assembly_id, interfaces):
-            for interface_id in interfaces:
+    async def set_interface(self, obligated_class_chains: Optional[Iterable[str]] = None):
+
+        def to_interface_id(pdb_assembly_id, focus_interface_ids):
+            for interface_id in focus_interface_ids:
                 yield f"{pdb_assembly_id}/{interface_id}"
 
         interfacelist_df = await self.fetch_from_web_api('api/pisa/interfacelist/', self.to_interfacelist_df)
@@ -200,18 +225,50 @@ class PDBAssemble(PDB):
             self.interface = dict()
             return
         
-        interfaces = related_dataframe(
+        if obligated_class_chains is not None:
+            interfacelist_df = interfacelist_df[
+                interfacelist_df.struct_asym_id_in_assembly_1.isin(obligated_class_chains) |
+                interfacelist_df.struct_asym_id_in_assembly_2.isin(obligated_class_chains)]
+        
+        focus_interface_ids = related_dataframe(
             self.interface_filters, interfacelist_df).interface_id.unique()
+
         self.interface = dict(zip(
-            interfaces,
-            (PDBInterface(if_id, self.get_folder()) for if_id in to_interface_id(self.pdb_id, interfaces))))
+            focus_interface_ids, (PDBInterface(if_id, self) for if_id in to_interface_id(self.get_id(), focus_interface_ids))))
+
+    def get_interface(self, interface_id):
+        return self.interface[interface_id]
+
+    @property
+    def demo_interface_filters(self):
+        return '''
+        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.assembly2eec)
+        molType_label_dict = ass_eec_df[ass_eec_df.assembly_id.eq(self.assembly_id)].groupby(
+            'molecule_type').struct_asym_id_in_assembly.apply(tuple).to_dict()
+        '''
+        
 
 
 class PDBInterface(PDBAssemble):
  
-    id_pattern = re_compile(r"[a-z0-9]{4}/[0-9]+/[0-9]+")
+    id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)/([0-9]+)")
 
+    def __init__(self, pdb_ass_int_id, pdbAssemble_ob: Optional[PDBAssemble]=None):
+        super().__init__(pdb_ass_int_id)
+        self.pdbAssemble_ob = pdbAssemble_ob
 
+    def set_id(self, pdb_ass_int_id: str):
+        self.pdb_ass_int_id = pdb_ass_int_id.lower()
+        try:
+            self.pdb_id, self.assembly_id, self.interface_id = self.id_pattern.fullmatch(
+                self.pdb_ass_int_id).groups()
+        except AttributeError:
+            raise ValueError(f"Invalid ID: {self.pdb_ass_int_id}")
+        self.assembly_id = int(self.assembly_id)
+        self.interface_id = int(self.interface_id)
+    
+    def get_id(self):
+        return self.pdb_ass_int_id
 
 
 
