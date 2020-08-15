@@ -189,7 +189,7 @@ class PDB(object):
             for assembly_id in assemblys:
                 yield f"{pdb_id}/{assembly_id}"
         
-        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.assembly2eec)
+        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.assembly2eec)
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
         assemblys = set(ass_eec_df.assembly_id) | {0}
         if focus_assembly_ids is not None:
@@ -254,12 +254,15 @@ class PDB(object):
 class PDBAssemble(PDB):
 
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
-    struct_range_pattern = re_compile(r"\[.+\]([A-Z]+):[0-9]+")  # e.g. [FMN]B:149
+    struct_range_pattern = re_compile(r"\[.+\]([A-Z]+):[0-9]+")  # e.g. [FMN]B:149 [C2E]A:301
+    rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
 
-    def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None, interface_filters={'structure_2.symmetry_operator': ('eq', 'x,y,z'), 'css': ('gt', 0)}):
+    def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None):
         super().__init__(pdb_ass_id)
         self.pdb_ob = pdb_ob
-        self.interface_filters = interface_filters
+        self.interface_filters = {
+            'structure_2.symmetry_operator': ('eq', 'x,y,z'), 
+            'css': ('ge', 0)}
 
     def set_id(self, pdb_ass_id: str):
         self.pdb_ass_id = pdb_ass_id.lower()
@@ -274,6 +277,16 @@ class PDBAssemble(PDB):
 
     @classmethod
     async def to_interfacelist_df(cls, path: Unfuture):
+        def transform(x):
+            res = cls.rare_pat.search(x)
+            assert bool(res), "Unexpected Case"
+            chain, num = res.groups()
+            num = int(num)
+            if num == 1:
+                return chain
+            else:
+                return chain+chr(63+num)
+
         interfacelist_df = await path.then(cls.to_dataframe)
         if interfacelist_df is None:
             return None
@@ -282,10 +295,18 @@ class PDBAssemble(PDB):
                                 "pdb_code": "pdb_id", 
                                 "assemble_code": "assembly_id"
                                 }, inplace=True)
-        interfacelist_df['struct_asym_id_in_assembly_1'] = interfacelist_df.apply(
-            lambda x: cls.struct_range_pattern.match(x['structure_1.range']).group(1) if x['structure_1.original_range'] != '{-}' else x['structure_1.range'], axis=1)
-        interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df.apply(
-            lambda x: cls.struct_range_pattern.match(x['structure_2.range']).group(1) if x['structure_2.original_range'] != '{-}' else x['structure_2.range'], axis=1)
+        if any('_' in i for i in interfacelist_df['structure_1.range']):
+            interfacelist_df['structure_1.range'] = interfacelist_df['structure_1.range'].apply(lambda x: transform(x) if '_' in x else x)
+            interfacelist_df['struct_asym_id_in_assembly_1'] = interfacelist_df['structure_1.range']
+        else:
+            interfacelist_df['struct_asym_id_in_assembly_1'] = interfacelist_df.apply(
+                lambda x: cls.struct_range_pattern.match(x['structure_1.range']).group(1) if x['structure_1.original_range'] != '{-}' else x['structure_1.range'], axis=1)
+        if any('_' in i for i in interfacelist_df['structure_2.range']):
+            interfacelist_df['structure_2.range'] = interfacelist_df['structure_2.range'].apply(lambda x: transform(x) if '_' in x else x)
+            interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df['structure_2.range']
+        else:
+            interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df.apply(
+                lambda x: cls.struct_range_pattern.match(x['structure_2.range']).group(1) if x['structure_2.original_range'] != '{-}' else x['structure_2.range'], axis=1)
         return interfacelist_df
 
     @unsync
@@ -318,6 +339,20 @@ class PDBAssemble(PDB):
         return self.interface[interface_id]
 
     @unsync
+    async def set_assemble_eec_as_df(self):
+        eec_as_df = await self.pdb_ob.get_eec_as_df()
+        assert self.assembly_id in eec_as_df.assembly_id, f"{repr(self)}: Invalid assembly_id!"
+        self.assemble_eec_as_df = eec_as_df[eec_as_df.assembly_id.eq(self.assembly_id)]
+    
+    @unsync
+    async def get_assemble_eec_as_df(self):
+        try:
+            return self.assemble_eec_as_df
+        except AttributeError:
+            await self.set_assemble_eec_as_df()
+            return self.assemble_eec_as_df
+
+    @unsync
     async def pipe_protein_protein_interface(self):
         '''
         DEMO
@@ -331,9 +366,11 @@ class PDBAssemble(PDB):
         >>> self.set_interface().result()
         '''
         
-        eec_as_df = await self.pdb_ob.get_eec_as_df()
+        eec_as_df = await self.get_assemble_eec_as_df()
+        if len(eec_as_df) == 1:
+            self.interface = dict()
+            return
         protein_type_asym = eec_as_df[
-            eec_as_df.assembly_id.eq(self.assembly_id) &
             eec_as_df.molecule_type.eq('polypeptide(L)')].struct_asym_id_in_assembly
         self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', protein_type_asym)
         self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', protein_type_asym)
@@ -355,9 +392,11 @@ class PDBAssemble(PDB):
         >>> self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
         >>> self.set_interface(obligated_class_chains=protein_type_asym).result()
         '''
-
-        eec_as_df = await self.pdb_ob.get_eec_as_df()
-        molType_dict = eec_as_df[eec_as_df.assembly_id.eq(self.assembly_id)].groupby('molecule_type').struct_asym_id_in_assembly.apply(set).to_dict()
+        eec_as_df = await self.get_assemble_eec_as_df()
+        if len(eec_as_df) == 1:
+            self.interface = dict()
+            return
+        molType_dict = eec_as_df.groupby('molecule_type').struct_asym_id_in_assembly.apply(set).to_dict()
 
         protein_type_asym = molType_dict.get('polypeptide(L)', set())
         ligand_type_asym = molType_dict.get('bound', set())
@@ -474,8 +513,11 @@ class PDBInterface(PDBAssemble):
             saiia2 = struct_sele_set.pop()
             record2 = {'struct_asym_id_in_assembly_2': saiia2}
             cur_keys = list(set(focus_cols[:-3])-set(common_keys)-{'struct_asym_id_in_assembly'})
-            cur_record = eec_as_df[eec_as_df.struct_asym_id_in_assembly.eq(saiia2) &
+            try:
+                cur_record = eec_as_df[eec_as_df.struct_asym_id_in_assembly.eq(saiia2) &
                       eec_as_df.assembly_id.eq(self.assembly_id)][cur_keys].to_dict('record')[0]
+            except Exception:
+                raise ValueError(f"\n{self.get_id()},\n{saiia2},\n{eec_as_df}")
             for key, value in cur_record.items():
                 record2[f"{key}_2"] = value
 
