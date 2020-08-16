@@ -255,3 +255,140 @@ def init_folder_from_suffix(folder: Union[Path, str], suffixes: Iterable) -> Ite
         new_path = folder/suffix
         new_path.mkdir(parents=True, exist_ok=True)
         yield new_path
+
+
+class MMCIF2DictPlus(dict):
+    """
+    Parse a mmCIF file and return a dictionary
+        
+    NOTE: Override methods based on Biopython's `Bio.PDB.MMCIF2Dict.MMCIF2Dict`
+    """
+
+    def _check_token_with_focus_keys(self, token: Iterable[str]) -> bool:
+        return ((token[1] in self.focus_keys) or any(key in token[1] for key in self.focus_keys)) and token[0] == 0
+
+    def __init__(self, handle, focus_keys: Iterable[str], async_handle=False):
+        self.focus_keys = focus_keys
+        self.quote_chars = ["'", '"']
+        self.whitespace_chars = [" ", "\t"]
+        # TODO: init first loop
+        loop_flag = False
+        key = None
+        tokens = self._tokenize(handle)
+        try:
+            token = next(tokens)
+        except StopIteration:
+            return  # NOTE: annotation from biopython: for Python 3.7 and PEP 479
+        self[token[1][0:5]] = token[1][5:]
+        i = 0
+        n = 0
+        use = []
+        # TODO: loops
+        for token in tokens:
+            if token[1].lower() == "loop_":
+                loop_flag = True
+                keys = []
+                i = 0
+                n = 0
+                use = []
+                continue
+            elif loop_flag:
+                '''
+                NOTE: annotation from biopython:
+                # The second condition checks we are in the first column
+                # Some mmCIF files (e.g. 4q9r) have values in later columns
+                # starting with an underscore and we don't want to read
+                # these as keys
+                '''
+                if token[1].startswith("_") and (n == 0 or i % n == 0):
+                    if i > 0:
+                        loop_flag = False
+                    else:
+                        if self._check_token_with_focus_keys(token):
+                            use.append(n)
+                            self[token[1]] = []
+                        keys.append(token[1])
+                        n += 1
+                        continue
+                else:
+                    key_index = i % n
+                    try:
+                        if key_index in use:
+                            self[keys[key_index]].append(token[1])
+                    except Exception:
+                        raise ValueError(f"{keys}, {key_index}, {use}")
+                    i += 1
+                    continue
+            if key is None:
+                if self._check_token_with_focus_keys(token):
+                    key = token[1]
+            else:
+                # Always returns a list
+                self[key] = [token[1]]
+                key = None
+
+    def _splitline(self, line: str):
+        # NOTE: annotation from biopython: See https://www.iucr.org/resources/cif/spec/version1.1/cifsyntax for the syntax
+        in_token = False
+        # NOTE: annotation from biopython: quote character of the currently open quote, or None if no quote open
+        quote_open_char = None
+        start_i = 0
+        for (i, c) in enumerate(line):
+            if c in self.whitespace_chars:
+                if in_token and not quote_open_char:
+                    in_token = False
+                    yield start_i, line[start_i:i]
+            elif c in self.quote_chars:
+                if not quote_open_char:
+                    if in_token:
+                        raise ValueError("Opening quote in middle of word: " + line)
+                    quote_open_char = c
+                    in_token = True
+                    start_i = i + 1
+                elif c == quote_open_char and (i + 1 == len(line) or line[i + 1] in self.whitespace_chars):
+                    quote_open_char = None
+                    in_token = False
+                    yield start_i, line[start_i:i]
+            elif c == "#" and not in_token:
+                ''' NOTE: annotation from biopython:
+                # Skip comments. "#" is a valid non-comment char inside of a
+                # quote and inside of an unquoted token (!?!?), so we need to
+                # check that the current char is not in a token.
+                '''
+                return
+            elif not in_token:
+                in_token = True
+                start_i = i
+        if in_token:
+            yield start_i, line[start_i:]
+        if quote_open_char:
+            raise ValueError("Line ended with quote open: " + line)
+
+    def _tokenize(self, handle):
+        empty = True
+        for line in handle:
+            empty = False
+            if line.startswith("#"):
+                continue
+            elif line.startswith(";"):
+                '''
+                NOTE: annotation from biopython:
+                # The spec says that leading whitespace on each line must be
+                # preserved while trailing whitespace may be stripped.  The
+                # trailing newline must be stripped.
+                '''
+                token_buffer = [line[1:].rstrip()]
+                for line in handle:
+                    line = line.rstrip()
+                    if line.startswith(";"):
+                        yield 1, "\n".join(token_buffer)
+                        line = line[1:]
+                        if line and not line[0] in self.whitespace_chars:
+                            raise ValueError("Missing whitespace")
+                        break
+                    token_buffer.append(line)
+                else:
+                    raise ValueError("Missing closing semicolon")
+            yield from self._splitline(line.strip())
+        if empty:
+            raise ValueError("Empty file.")

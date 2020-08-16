@@ -691,6 +691,8 @@ class PDBeModelServer(Abclog):
     
     root = 'model-server/v1/'
     headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
+    api_sets = {'atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
+                'residueSurroundings', 'symmetryMates', 'query-many'}
     
     @classmethod
     def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params) -> Generator:
@@ -713,7 +715,9 @@ class PDBeModelServer(Abclog):
                 yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
 
     @classmethod
-    def retrieve(cls, pdbs, suffix: str, method: str, folder: str, data_collection=None, params={'model_nums': 1, 'encoding': 'cif'}, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+    def retrieve(cls, pdbs, suffix: str, method: str, folder: str, data_collection=None, params=None, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+        if params is None:
+            params = {'model_nums': 1, 'encoding': 'cif'}
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, method, folder,
                            data_collection, params),
@@ -723,6 +727,18 @@ class PDBeModelServer(Abclog):
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res
+    
+    @classmethod
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, data_collection=None, params=None, rate: float = 1.5):
+        if params is None:
+            params = {'model_nums': 1, 'encoding': 'cif'}
+        if data_collection is not None:
+            data_collection = (data_collection, )
+        return UnsyncFetch.single_task(
+            task=next(cls.yieldTasks((pdb, ), suffix, method, folder,
+                                     data_collection, params)),
+            semaphore=semaphore,
+            rate=rate)
 
 
 # TODO: Chain UniProt ID Mapping -> ProcessSIFTS -> ProcessPDBe

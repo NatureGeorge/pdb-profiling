@@ -7,12 +7,13 @@
 from typing import Iterable, Union, Callable, Optional, Hashable
 from numpy import array, where as np_where
 from pathlib import Path
-from pandas import isna, concat
+from pandas import isna, concat, DataFrame
 from unsync import unsync, Unfuture
+from aiofiles import open as aiofiles_open
 from re import compile as re_compile
 import orjson as json
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval
-from pdb_profiling.processers.pdbe.api import ProcessPDBe, FUNCS as API_SET
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus
+from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNCS as API_SET
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -93,6 +94,78 @@ class PDB(object):
             task = task.then(then_func)
         self.register_task((api_suffix, then_func), task)
         return task
+
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
+        assert api_suffix in PDBeModelServer.api_sets, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_sets}"
+        task = self.tasks.get((PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), None)
+        if task is not None:
+            return task
+        task = PDBeModelServer.single_retrieve(
+            pdb=self.get_id(),
+            suffix=api_suffix,
+            method=method,
+            folder=next(init_folder_from_suffix(
+                self.get_folder()/'model-server', (api_suffix, ))),
+            semaphore=self.get_web_semaphore(),
+            data_collection=data_collection,
+            params=params)
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), task)
+        return task
+
+    @classmethod
+    @unsync
+    async def to_assg_oper_df(cls, path: Unfuture):
+        '''
+        EXAMPLE OF model_id != asym_id_rank
+        
+            * 3hl2
+            * 3ue7
+        '''
+        
+        def to_rank(rank_dict, assembly_id, struct_asym_id):
+            var = rank_dict[assembly_id, struct_asym_id]
+            var[1] += 1
+            assert var[1] <= var[0]
+            return var[1]
+        
+        assg_cols = ('_pdbx_struct_assembly_gen.asym_id_list',
+                     '_pdbx_struct_assembly_gen.oper_expression',
+                     '_pdbx_struct_assembly_gen.assembly_id')
+        oper_cols = ('_pdbx_struct_oper_list.id', 
+                     '_pdbx_struct_oper_list.symmetry_operation')
+        async with aiofiles_open(await path, 'rt') as file_io:
+            handle = await file_io.read()
+            handle = (i+'\n' for i in handle.split('\n'))
+            mmcif_dict = MMCIF2DictPlus(handle, assg_cols+oper_cols)
+        
+        if len(mmcif_dict) < 2:
+            return None
+        assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
+        assg_df = split_df_by_chain(assg_df, assg_cols, assg_cols[0:1]).rename(columns={col: col.split(
+            '.')[1] for col in assg_cols}).rename(columns={'asym_id_list': 'struct_asym_id'})
+        assg_df = split_df_by_chain(assg_df, assg_df.columns, ('oper_expression', ))
+        assg_dict = assg_df.groupby('assembly_id').oper_expression.unique().to_dict()
+        rank_dict = assg_df.groupby(['assembly_id', 'struct_asym_id']).struct_asym_id.count().to_dict()
+        rank_dict = {key: [value, 0] for key, value in rank_dict.items()}
+        assg_df['model_id'] = assg_df.apply(lambda x: np_where(assg_dict[x['assembly_id']] == x['oper_expression'])[0][0]+1, axis=1)
+        # assg_df.apply(lambda x: assg_dict[x['assembly_id']].index(x['oper_expression'])+1, axis=1)
+        
+        assg_df['asym_id_rank'] = assg_df.apply(lambda x: to_rank(
+            rank_dict, x['assembly_id'], x['struct_asym_id']), axis=1)
+        oper_df = DataFrame(list(zip(*[mmcif_dict[col] for col in oper_cols])), columns=oper_cols).rename(
+            columns={col: col.split('.')[1] for col in oper_cols}).rename(columns={'id': 'oper_expression'})
+        return assg_df.merge(oper_df)
+
+    @unsync
+    async def pipe_assg_data_collection(self) -> str:
+        demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}
+        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        res_dict = res_df[res_df.observed_ratio.gt(0)].head(1).to_dict('record')[0]
+        demo_dict['atom_site'][0]['label_asym_id'] = res_dict['struct_asym_id']
+        demo_dict['atom_site'][0]['label_seq_id'] = res_dict['residue_number']
+        return json.dumps(demo_dict).decode('utf-8')
 
     @classmethod
     @unsync
@@ -471,7 +544,7 @@ class PDBInterface(PDBAssemble):
             return None
         else:
             struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
-        eec_as_df = await self.pdbAssemble_ob.pdb_ob.get_eec_as_df()
+        eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
         res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
         interfacedetail_df = interfacedetail_df.merge(res_df, how="left")
@@ -514,8 +587,7 @@ class PDBInterface(PDBAssemble):
             record2 = {'struct_asym_id_in_assembly_2': saiia2}
             cur_keys = list(set(focus_cols[:-3])-set(common_keys)-{'struct_asym_id_in_assembly'})
             try:
-                cur_record = eec_as_df[eec_as_df.struct_asym_id_in_assembly.eq(saiia2) &
-                      eec_as_df.assembly_id.eq(self.assembly_id)][cur_keys].to_dict('record')[0]
+                cur_record = eec_as_df[eec_as_df.struct_asym_id_in_assembly.eq(saiia2)][cur_keys].to_dict('record')[0]
             except Exception:
                 raise ValueError(f"\n{self.get_id()},\n{saiia2},\n{eec_as_df}")
             for key, value in cur_record.items():
@@ -541,3 +613,9 @@ class PDBInterface(PDBAssemble):
         except AttributeError:
             await self.set_interface_res()
             return self.interface_res_dict
+
+'''
+TODO: Deal with carbohydrate polymer in PISA
+
+    * possible change in struct_asym_id
+'''
