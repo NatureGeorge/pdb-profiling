@@ -265,9 +265,10 @@ class MMCIF2DictPlus(dict):
     """
 
     def _check_token_with_focus_keys(self, token: Iterable[str]) -> bool:
-        return ((token[1] in self.focus_keys) or any(key in token[1] for key in self.focus_keys)) and token[0] == 0
+        is_key, key_value = token
+        return is_key == 0 and ((key_value in self.focus_keys) or any(key in key_value for key in self.focus_keys))
 
-    def __init__(self, handle, focus_keys: Iterable[str], async_handle=False):
+    def __init__(self, handle, focus_keys: Iterable[str]):
         self.focus_keys = focus_keys
         self.quote_chars = ["'", '"']
         self.whitespace_chars = [" ", "\t"]

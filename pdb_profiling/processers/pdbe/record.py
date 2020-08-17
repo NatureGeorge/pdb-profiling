@@ -156,7 +156,11 @@ class PDB(object):
             rank_dict, x['assembly_id'], x['struct_asym_id']), axis=1)
         oper_df = DataFrame(list(zip(*[mmcif_dict[col] for col in oper_cols])), columns=oper_cols).rename(
             columns={col: col.split('.')[1] for col in oper_cols}).rename(columns={'id': 'oper_expression'})
-        return assg_df.merge(oper_df)
+        assg_df = assg_df.merge(oper_df)
+        for col in ('assembly_id', 'oper_expression'):
+            assg_df[col] = assg_df[col].astype(int)
+        return assg_df
+
 
     @unsync
     async def pipe_assg_data_collection(self) -> str:
