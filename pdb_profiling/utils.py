@@ -340,9 +340,8 @@ class MMCIF2DictPlus(dict):
                     in_token = False
                     yield start_i, line[start_i:i]
             elif c in self.quote_chars:
-                if not quote_open_char:
-                    if in_token:
-                        raise ValueError("Opening quote in middle of word: " + line)
+                if not quote_open_char and not in_token:
+                    # raise ValueError(f"{self['data_']}: Opening quote in middle of word: " + line)
                     quote_open_char = c
                     in_token = True
                     start_i = i + 1

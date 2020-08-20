@@ -4,7 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union, Callable, Optional, Hashable
+from typing import Iterable, Union, Callable, Optional, Hashable, Dict
 from numpy import array, where as np_where
 from pathlib import Path
 from pandas import isna, concat, DataFrame
@@ -157,8 +157,12 @@ class PDB(object):
         oper_df = DataFrame(list(zip(*[mmcif_dict[col] for col in oper_cols])), columns=oper_cols).rename(
             columns={col: col.split('.')[1] for col in oper_cols}).rename(columns={'id': 'oper_expression'})
         assg_df = assg_df.merge(oper_df)
-        for col in ('assembly_id', 'oper_expression'):
-            assg_df[col] = assg_df[col].astype(int)
+        try:
+            for col in ('assembly_id', 'oper_expression'):
+                assg_df[col] = assg_df[col].astype(int)
+        except Exception:
+            raise ValueError(f"{mmcif_dict['data_']}： astype error: {assg_df}")
+
         return assg_df
 
 
@@ -273,7 +277,7 @@ class PDB(object):
             assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
         else:
             assemblys = sorted(assemblys)
-        self.assembly = dict(zip(
+        self.assembly: Dict[int, PDBAssemble] = dict(zip(
             assemblys, 
             (PDBAssemble(ass_id, self) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
 
@@ -409,7 +413,7 @@ class PDBAssemble(PDB):
         focus_interface_ids = related_dataframe(
             self.interface_filters, interfacelist_df).interface_id.unique()
 
-        self.interface = dict(zip(
+        self.interface: Dict[int, PDBInterface] = dict(zip(
             focus_interface_ids, (PDBInterface(if_id, self) for if_id in to_interface_id(self.get_id(), focus_interface_ids))))
 
     def get_interface(self, interface_id):
@@ -483,7 +487,6 @@ class PDBAssemble(PDB):
         self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
         await self.set_interface(obligated_class_chains=protein_type_asym, allow_same_class_interaction=False)
         
-
 
 class PDBInterface(PDBAssemble):
  
