@@ -136,7 +136,8 @@ class ProcessPDBe(Abclog):
         'interface_number': int,
         'pdb_code': str,
         'assemble_code': int,
-        'assembly_id': int
+        'assembly_id': int,
+        'oper_expression': str
         }
     
     use_existing: bool = False
@@ -686,8 +687,25 @@ class PDBeDecoder(object):
             yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
             yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
 
+    @staticmethod
+    @dispatch_on_set({'swissmodel/repository/uniprot/'})
+    def yieldSMR(data: Dict):
+        cols = ('sequence_length',
+                'ac', 'id', 'isoid')
+        uniprot_entries = data['result']['uniprot_entries']
+        
+        assert len(uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
+        
+        for col in ('ac', 'id', 'isoid'):
+            data['result'][col] = uniprot_entries[0][col]
+        
+        yield data['result']['structures'], cols, tuple(data['result'][col] for col in cols)
+
 
 class PDBeModelServer(Abclog):
+    '''
+    Implement ModelServer API
+    '''
     
     root = 'model-server/v1/'
     headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
