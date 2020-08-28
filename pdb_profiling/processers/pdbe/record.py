@@ -158,8 +158,11 @@ class PDB(object):
             columns={col: col.split('.')[1] for col in oper_cols}).rename(columns={'id': 'oper_expression'})
         assg_df = assg_df.merge(oper_df)
         try:
+            '''
             for col in ('assembly_id', 'oper_expression'):
                 assg_df[col] = assg_df[col].astype(int)
+            '''
+            assg_df.assembly_id = assg_df.assembly_id.astype(int)
         except Exception:
             raise ValueError(f"{mmcif_dict['data_']}： astype error: {assg_df}")
 
@@ -330,7 +333,68 @@ class PDB(object):
         except AttributeError:
             await self.set_eec_as_df()
             return self.eec_as_df
-        
+    
+    @staticmethod
+    def parseOperatorList(value: str) -> Iterable[Iterable[str]]:
+        '''
+        This function has been modified from `function parseOperatorList(value: string): string[][]`
+
+            * Copyright (c) 2017 - now, Mol* contributors
+            * https://github.com/molstar/molstar/
+            * src/mol-model-formats/structure/property/assembly.ts
+
+        NOTE (original notes from assembly.ts):
+
+            * '(X0)(1-5)' becomes[['X0'], ['1', '2', '3', '4', '5']]
+            * kudos to Glen van Ginkel.
+        '''
+
+        def unit(g:str) -> Iterable[str]:
+            group: Iterable[str] = []
+            for e in g.split(','):
+                try:
+                    dashIndex = e.index('-')
+                    group.extend(str(i) for i in range(
+                        int(e[0:dashIndex]), int(e[dashIndex + 1:])+1))
+                except ValueError:
+                    group.append(e.strip())
+            return group
+
+        oeRegex = re_compile(r"\(?([^\(\)]+)\)?]*")
+        return [unit(g) for g in oeRegex.findall(value)]
+
+    @staticmethod
+    def expandOperators(operatorList: Iterable[Iterable[str]]) -> Iterable[Iterable[str]]:
+        '''
+        This function has been modified from `function expandOperators(operatorList: string[][])`
+
+            * Copyright (c) 2017 - now, Mol* contributors
+            * https://github.com/molstar/molstar/
+            * src/mol-model-formats/structure/property/assembly.ts
+        '''
+        ops: Iterable[Iterable[str]] = []
+        currentOp: Iterable[str] = ['' for _ in range(len(operatorList))]
+        PDB.expandOperators1(operatorList, ops, len(operatorList) - 1, currentOp)
+        return ops
+    
+    @staticmethod
+    def expandOperators1(operatorNames: Iterable[Iterable[str]], lyst: Iterable[Iterable[str]], i: int, current: Iterable[str]) -> Iterable[Iterable[str]]:
+        '''
+        This function has been modified from `function expandOperators1(operatorNames: string[][], list: string[][], i: number, current: string[])`
+
+            * Copyright (c) 2017 - now, Mol* contributors
+            * https://github.com/molstar/molstar/
+            * src/mol-model-formats/structure/property/assembly.ts
+        '''
+        if i < 0:
+            lyst.append(current[0:])
+            return
+
+        ops = operatorNames[i]
+        for j in range(len(ops)):
+            current[i] = ops[j]
+            PDB.expandOperators1(operatorNames, lyst, i - 1, current)
+
 
 class PDBAssemble(PDB):
 
