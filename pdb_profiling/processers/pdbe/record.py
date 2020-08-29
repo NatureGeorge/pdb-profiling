@@ -347,6 +347,9 @@ class PDB(object):
 
             * '(X0)(1-5)' becomes[['X0'], ['1', '2', '3', '4', '5']]
             * kudos to Glen van Ginkel.
+        
+        >>> PDB.parseOperatorList('(X0)(1-5)')
+        >>> [['X0'], ['1', '2', '3', '4', '5']]
         '''
 
         def unit(g:str) -> Iterable[str]:

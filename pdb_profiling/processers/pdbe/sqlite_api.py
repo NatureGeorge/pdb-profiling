@@ -91,8 +91,8 @@ class Sqlite_API(object):
             FIRST_REV_DATE = orm.String(max_length=19)
             PDB_REV_DATE = orm.String(max_length=19)
             REVISION_DATE = orm.String(max_length=19)
-            resolution = orm.Float()
-            METHOD_CLASS = orm.String(max_length=5)
+            resolution = orm.Float(allow_null=True)
+            METHOD_CLASS = orm.String(max_length=50, primary_key=True)
             BOUND_LIGAND_COUNT = orm.Integer()
             BOUND_MOL_COUNT = orm.Integer()
             nucleotides_entity_type = orm.String(
@@ -261,6 +261,7 @@ async def main():
     # example = await PDBRes_Info.objects.filter(pdb_id='4loe', entity_id="1", chain_id='C', obs_ratio__lt=1).all()
     # filter(pdb_id__in=['3wwq', '5v8w'])
     example = await sqlite_api.Entry_Info.objects.limit(10).all()
+    check = await sqlite_api.Site_Info.objects.filter(from_id__contains=";").all()
     # example = await sqlite_api.SEQRES_Info.objects.filter(pdb_id='4h3k',entity_id='3',chain_id='F').all()
     # example = await sqlite_api.PDBRes_Info.objects.filter(obs_ratio__lt=1).distinct()
     # example = await sqlite_api.Site_Info.objects.filter(from_id__in=('ENST00000379410', 'ENST00000379409')).all()

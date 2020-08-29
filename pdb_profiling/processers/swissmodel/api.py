@@ -20,6 +20,9 @@ BASE_URL: str = 'https://swissmodel.expasy.org/'
 class SMR(object):
     '''
     Implement SWISS-MODEL Repository API
+
+        * <https://swissmodel.expasy.org/docs/smr_openapi>
+        * <https://swissmodel.expasy.org/docs/repository_help#smr_api>
     '''
 
     root = 'repository/uniprot/'

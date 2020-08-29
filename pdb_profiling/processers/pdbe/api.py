@@ -697,7 +697,7 @@ class PDBeDecoder(object):
         assert len(uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
         
         for col in ('ac', 'id', 'isoid'):
-            data['result'][col] = uniprot_entries[0][col]
+            data['result'][col] = uniprot_entries[0].get(col, None)
         
         yield data['result']['structures'], cols, tuple(data['result'][col] for col in cols)
 

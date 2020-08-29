@@ -141,43 +141,69 @@ class Select_API(object):
     
     @unsync
     async def process(self, sifts_path):
+
+        def score_resolution(resolution):
+            if resolution is None:
+                return -1
+            else:
+                return 1/resolution
+
         sifts_df = read_csv(sifts_path, sep="\t", converters=converters, usecols=self.usecols)[self.usecols]
         sifts_df.drop_duplicates(inplace=True)
         sifts_df.sort_values(by='UniProt', inplace=True)
-        pdbs = sifts_df.pdb_id.unique()
-        oligo_df = await SIFTS.pipe_oligo(pdbs, self.neo4j.neo4j_api, self.sqlite, **self.kwargs)
-        valid_chains = dict(zip(oligo_df.pdb_id, oligo_df.entity_chain_map.apply(
-            lambda x: list(self.yieldallchains(x)))))
-        check_chains = sifts_df[['pdb_id', 'chain_id']].apply(lambda x: x['chain_id'] in valid_chains[x['pdb_id']], axis=1)
-        sifts_df.drop(index=check_chains[check_chains.eq(False)].index, inplace=True)
-        pdbs = sifts_df.pdb_id.unique()
-        entry_info = await self.sqlite.Entry_Info.objects.filter(pdb_id__in=pdbs).all()
-        entry_info = {value.pdb_id: (1/value.resolution, value.REVISION_DATE) for value in entry_info}
-        # TODO: select
-        # dropna
-        pdbs_focus = oligo_df.dropna(subset=['oligo_state']).pdb_id
-        sifts_df = sifts_df[sifts_df.pdb_id.isin(pdbs_focus)]
-        # mo
-        pdbs_mo = oligo_df[oligo_df.oligo_state.eq('mo')].pdb_id
-        sifts_mo_df = sifts_df[sifts_df.pdb_id.isin(pdbs_mo)]
-        mo_res = self.select_o(sifts_mo_df, entry_info, self.oscutoff)
-        # ho (+he)
-        sifts_others_df = sifts_df.loc[sifts_df.index.difference(sifts_mo_df.index)]
-        ho_res = self.select_o(sifts_others_df, entry_info, self.oscutoff, True, 'ho')
-        # he
-        pdbs_he = oligo_df[oligo_df.oligo_state.eq('he')].pdb_id.to_numpy()
-        sifts_he_df = sifts_others_df[sifts_others_df.pdb_id.isin(pdbs_he)]
-        ## TODO: Partner Pipe
-        oligo_info = {key: value for key,value in zip(oligo_df.pdb_id, oligo_df.entity_unp_info) if key in pdbs_he}
-        ### -----------------------------------------------------------------
-        new_sifts_df = await self.neo4j.pipe_new_sifts(pdbs_he, 'pdb')
-        ### -----------------------------------------------------------------
-        # TODO: output
-        for col in self.json_cols:
-            oligo_df[col] = oligo_df[col].apply(lambda x: json.dumps(x) if not isna(x) else x)
-        await pipe_out(oligo_df, self.oligo_path)
-        await pipe_out(mo_res.stack(ho_res), self.moho_path)
-        await pipe_out(new_sifts_df, self.he_path)
-
+        sifts_dict = slice_series(sifts_df.UniProt.to_numpy())
         
+        @unsync
+        async def unit(sifts_df):
+            pdbs = sifts_df.pdb_id.unique()
+            oligo_df = await SIFTS.pipe_oligo(pdbs, self.neo4j.neo4j_api, self.sqlite, **self.kwargs)
+            valid_chains = dict(zip(oligo_df.pdb_id, oligo_df.entity_chain_map.apply(
+                lambda x: list(self.yieldallchains(x)))))
+            check_chains = sifts_df[['pdb_id', 'chain_id']].apply(lambda x: x['chain_id'] in valid_chains[x['pdb_id']], axis=1)
+            sifts_df.drop(index=check_chains[check_chains.eq(False)].index, inplace=True)
+            pdbs = sifts_df.pdb_id.unique()
+            entry_info = await self.sqlite.Entry_Info.objects.filter(pdb_id__in=pdbs).all()
+            entry_info = {value.pdb_id: (score_resolution(value.resolution), value.REVISION_DATE) for value in entry_info}
+            # TODO: select
+            # dropna
+            pdbs_focus = oligo_df.dropna(subset=['oligo_state']).pdb_id
+            sifts_df = sifts_df[sifts_df.pdb_id.isin(pdbs_focus)]
+            # mo
+            pdbs_mo = oligo_df[oligo_df.oligo_state.eq('mo')].pdb_id
+            sifts_mo_df = sifts_df[sifts_df.pdb_id.isin(pdbs_mo)]
+            if len(sifts_mo_df) > 0:
+                mo_res = self.select_o(sifts_mo_df, entry_info, self.oscutoff)
+            else:
+                mo_res = None
+            # ho (+he)
+            sifts_others_df = sifts_df.loc[sifts_df.index.difference(sifts_mo_df.index)]
+            if len(sifts_others_df) > 0:
+                ho_res = self.select_o(sifts_others_df, entry_info, self.oscutoff, True, 'ho')
+            else:
+                ho_res = None
+            # he
+            pdbs_he = oligo_df[oligo_df.oligo_state.eq('he')].pdb_id.to_numpy()
+            sifts_he_df = sifts_others_df[sifts_others_df.pdb_id.isin(pdbs_he)]
+            ## TODO: Partner Pipe
+            oligo_info = {key: value for key,value in zip(oligo_df.pdb_id, oligo_df.entity_unp_info) if key in pdbs_he}
+            ### -----------------------------------------------------------------
+            new_sifts_df = await self.neo4j.pipe_new_sifts(pdbs_he, 'pdb')
+            ### -----------------------------------------------------------------
+            # TODO: output
+            for col in self.json_cols:
+                oligo_df[col] = oligo_df[col].apply(lambda x: json.dumps(x) if not isna(x) else x)
+            await pipe_out(oligo_df, self.oligo_path)
+            if mo_res is not None and ho_res is not None:
+                await pipe_out(mo_res.stack(ho_res), self.moho_path)
+            elif mo_res is not None and ho_res is None:
+                await pipe_out(mo_res, self.moho_path)
+            elif mo_res is None and ho_res is not None:
+                await pipe_out(ho_res, self.moho_path)
+            else:
+                pass
+            if new_sifts_df is not None:
+                await pipe_out(new_sifts_df, self.he_path)
+
+        tasks = asyncio.as_completed([unit(sifts_df.iloc[start:end].reset_index(drop=True)) for start, end in sifts_dict.values()])
+        [await task for task in tasks]
 
