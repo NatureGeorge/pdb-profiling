@@ -164,11 +164,12 @@ async def pipe_out(df, path, **kwargs):
     if len(df) == 0:
         raise ValueError("Zero record!")
     path = Path(path)
+    path_exists = path.exists()
     var_format = kwargs.get('format', 'tsv')
     async with aiofiles.open(path, kwargs.get('mode', 'a')) as file_io:
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
-            if path.exists():
+            if path_exists:
                 headers = None
             else:
                 headers = sorted_col
@@ -176,9 +177,13 @@ async def pipe_out(df, path, **kwargs):
             dataset.extend(df[sorted_col].to_records(index=False))
             to_write = dataset.export(var_format)
         elif isinstance(df, Dataset):
+            if path_exists:
+                df.headers = None
             to_write = df.export(var_format)
         elif isinstance(df, Sheet):
             to_write = getattr(df, var_format)
+            if path_exists:
+                to_write = '\n'.join(to_write.split('\n')[1:-1])
         else:
             pass
         await file_io.write(to_write)
