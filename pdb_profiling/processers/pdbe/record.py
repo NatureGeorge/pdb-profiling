@@ -19,16 +19,74 @@ from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNC
 API_SET = {api for apiset in API_SET for api in apiset[1]}
 
 
+class PropertyRegister(object):
+    '''
+    ClassDecorator to Register Property Method
+
+        * take method/function name
+        * specified pipeline func: `get_property_suffixes`, `__call__`
+    '''
+
+    properties = []
+
+    @classmethod
+    def get_property_suffixes(cls):
+        return {key: f'api/pdb/entry/{key}/' for key in cls.properties}
+
+    def __init__(self, func):
+        self._name = func.__name__
+        PropertyRegister.properties.append(self._name)
+    
+    def __call__(self, that):
+        that.init_properties(self.get_property_suffixes())
+        return getattr(that, f'_{self._name}')
+
+
 class PDB(object):
 
     folder = None
 
-    @property
-    def status(self):
-        self._status = self.fetch_from_web_api('api/pdb/entry/status/', a_load_json, json=True).result()
-        data = self._status[self.pdb_id]
+    @unsync
+    async def prepare_property(self, raw_data):
+        raw_data = await raw_data
+        data = raw_data[self.pdb_id]
         assert len(data) == 1, f"{repr(self)}: Unexpected status data length\n{data}"
         return data[0]
+    
+    @unsync
+    async def prepare_properties(self, property_suffixes):
+        tasks = {
+            var_property: self.pdb_ob.fetch_from_web_api(
+                    suffix, a_load_json, json=True
+                ).then(self.prepare_property) for var_property, suffix in property_suffixes.items()}
+        for var_property, task in tasks.items():
+            setattr(self, f'_{var_property}', await task)
+
+    def init_properties(self, property_suffixes):
+        if not self.properties_inited:
+            self.prepare_properties(property_suffixes).result()
+            self.properties_inited = True
+
+    @property
+    @PropertyRegister
+    def summary(self):
+        pass
+
+    @property
+    @PropertyRegister
+    def status(self):
+        """
+        Check PDB Entry Status
+
+            * status_code: REL -> relase
+            * status_code: OBS -> obsole
+
+        >>> if self.status['status_code'] == 'REL':
+                logging.info(self.status['obsoletes'])
+            elif self.status['status_code'] == 'OBS':
+                logging.warning(self.status['superceded_by'])
+        """
+        pass
 
     def register_task(self, key: Hashable, task: Unfuture):
         self.tasks[key] = task
@@ -69,6 +127,8 @@ class PDB(object):
         self.check_folder()
         self.set_id(pdb_id)
         self.tasks = dict()
+        self.pdb_ob = self
+        self.properties_inited = False
     
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.get_id()}>"
@@ -177,7 +237,6 @@ class PDB(object):
             raise ValueError(f"{mmcif_dict['data_']}： astype error: {assg_df}")
 
         return assg_df
-
 
     @unsync
     async def pipe_assg_data_collection(self) -> str:
@@ -416,22 +475,11 @@ class PDBAssemble(PDB):
     rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
 
     @property
-    def status(self):
-        '''
-        Check PDB Entry Status
-
-            * status_code: REL -> relase
-            * status_code: OBS -> obsole
-        
-        >>> if self.status['status_code'] == 'REL':
-                logging.info(self.status['obsoletes'])
-            elif self.status['status_code'] == 'OBS':
-                logging.warning(self.status['superceded_by'])
-        '''
-        self._status = self.pdb_ob.fetch_from_web_api('api/pdb/entry/status/', a_load_json, json=True).result()
-        data = self._status[self.pdb_id]
-        assert len(data) == 1, f"{repr(self)}: Unexpected status data length\n{data}"
-        return data[0]
+    def assemble_summary(self) -> Dict:
+        for ass in self.summary['assemblies']:
+            if int(ass['assembly_id']) == self.assembly_id:
+                return ass
+        raise ValueError(f"{repr(self)}: Without expected assemble info\n{self.summary['assemblies']}")
 
     def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None):
         super().__init__(pdb_ass_id)
