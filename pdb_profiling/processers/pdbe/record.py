@@ -12,7 +12,7 @@ from unsync import unsync, Unfuture
 from aiofiles import open as aiofiles_open
 from re import compile as re_compile
 import orjson as json
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
 from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNCS as API_SET
 
 
@@ -22,6 +22,13 @@ API_SET = {api for apiset in API_SET for api in apiset[1]}
 class PDB(object):
 
     folder = None
+
+    @property
+    def status(self):
+        self._status = self.fetch_from_web_api('api/pdb/entry/status/', a_load_json, json=True).result()
+        data = self._status[self.pdb_id]
+        assert len(data) == 1, f"{repr(self)}: Unexpected status data length\n{data}"
+        return data[0]
 
     def register_task(self, key: Hashable, task: Unfuture):
         self.tasks[key] = task
@@ -79,17 +86,20 @@ class PDB(object):
     def set_sqlite_connection(self, api):
         pass
 
-    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
+    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False) -> Unfuture:
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
         task = self.tasks.get((api_suffix, then_func), None)
         if task is not None:
             return task
-        task = ProcessPDBe.single_retrieve(
-            pdb=self.get_id(),
-            suffix=api_suffix,
-            method='get', 
-            folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
-            semaphore=self.get_web_semaphore())
+        
+        args = dict(pdb=self.get_id(),
+                    suffix=api_suffix,
+                    method='get',
+                    folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
+                    semaphore=self.get_web_semaphore())
+        if json:
+            args['to_do_func'] = None
+        task = ProcessPDBe.single_retrieve(**args)
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((api_suffix, then_func), task)
@@ -405,9 +415,30 @@ class PDBAssemble(PDB):
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+):[0-9]+")  # e.g. [FMN]B:149 [C2E]A:301
     rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
 
+    @property
+    def status(self):
+        '''
+        Check PDB Entry Status
+
+            * status_code: REL -> relase
+            * status_code: OBS -> obsole
+        
+        >>> if self.status['status_code'] == 'REL':
+                logging.info(self.status['obsoletes'])
+            elif self.status['status_code'] == 'OBS':
+                logging.warning(self.status['superceded_by'])
+        '''
+        self._status = self.pdb_ob.fetch_from_web_api('api/pdb/entry/status/', a_load_json, json=True).result()
+        data = self._status[self.pdb_id]
+        assert len(data) == 1, f"{repr(self)}: Unexpected status data length\n{data}"
+        return data[0]
+
     def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None):
         super().__init__(pdb_ass_id)
-        self.pdb_ob = pdb_ob
+        if pdb_ob is None:
+            self.pdb_ob = PDB(self.pdb_id)
+        else:
+            self.pdb_ob = pdb_ob
         self.interface_filters = {
             'structure_2.symmetry_operator': ('eq', 'x,y,z'), 
             'css': ('ge', 0)}
@@ -561,7 +592,10 @@ class PDBInterface(PDBAssemble):
 
     def __init__(self, pdb_ass_int_id, pdbAssemble_ob: Optional[PDBAssemble]=None):
         super().__init__(pdb_ass_int_id)
-        self.pdbAssemble_ob = pdbAssemble_ob
+        if pdbAssemble_ob is None:
+            self.pdbAssemble_ob = PDBAssemble(f"{self.pdb_id}/{self.assembly_id}")
+        else:
+            self.pdbAssemble_ob = pdbAssemble_ob
 
     def set_id(self, pdb_ass_int_id: str):
         self.pdb_ass_int_id = pdb_ass_int_id.lower()

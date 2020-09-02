@@ -160,11 +160,11 @@ class ProcessPDBe(Abclog):
             raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
 
     @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, rate: float = 1.5):
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, rate: float = 1.5, **kwargs):
         return UnsyncFetch.single_task(
             task=next(cls.yieldTasks((pdb, ), suffix, method, folder)),
             semaphore=semaphore,
-            to_do_func=cls.process,
+            to_do_func=kwargs.get('to_do_func', cls.process),
             rate=rate)
 
     @classmethod
@@ -466,6 +466,9 @@ class PDBeDecoder(object):
         records, *remain = args
         if not len(records):
             return None
+        keys = {key for record in records for key in record.keys()}
+        head = records[0]
+        records[0] = {key: head.get(key, None) for key in keys}
         sheet = get_sheet(records=records, name_columns_by_row=0)
         if len(remain) > 1:
             append_header, append_value = remain

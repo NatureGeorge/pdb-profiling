@@ -7,7 +7,7 @@
 import os
 import gzip
 import shutil
-from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List
+from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine
 from logging import Logger
 from pandas import read_csv, DataFrame, isna
 import numpy as np
@@ -158,18 +158,26 @@ async def a_read_csv(path, read_mode='r',**kwargs):
             return read_csv(text_io, **kwargs)
 
 
+async def a_load_json(path):
+    if isinstance(path, (Coroutine, Unfuture)):
+        path = await path
+    async with aiofiles.open(path) as inFile:
+        return json.loads(await inFile.read())
+
+
 async def pipe_out(df, path, **kwargs):
     if not isinstance(df, (DataFrame, Dataset, Sheet)):
         raise TypeError(f"Invalid Object for pipe_out(): {type(df)}")
     if len(df) == 0:
         raise ValueError("Zero record!")
     path = Path(path)
-    path_exists = path.exists()
+    mode = kwargs.get('mode', 'a')
+    clear_headers:bool = path.exists() and mode.startswith('a')
     var_format = kwargs.get('format', 'tsv')
-    async with aiofiles.open(path, kwargs.get('mode', 'a')) as file_io:
+    async with aiofiles.open(path, mode) as file_io:
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
-            if path_exists:
+            if clear_headers:
                 headers = None
             else:
                 headers = sorted_col
@@ -177,12 +185,12 @@ async def pipe_out(df, path, **kwargs):
             dataset.extend(df[sorted_col].to_records(index=False))
             to_write = dataset.export(var_format)
         elif isinstance(df, Dataset):
-            if path_exists:
+            if clear_headers:
                 df.headers = None
             to_write = df.export(var_format)
         elif isinstance(df, Sheet):
             to_write = getattr(df, var_format)
-            if path_exists:
+            if clear_headers:
                 to_write = '\n'.join(to_write.split('\n')[1:-1])
         else:
             pass
