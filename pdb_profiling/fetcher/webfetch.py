@@ -141,10 +141,18 @@ class UnsyncFetch(Abclog):
     async def unsync_tasks(cls, tasks):
         return [await fob for fob in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
 
+    @staticmethod
+    @unsync
+    def unsync_wrap(var):
+        return var
+
     @classmethod
     def single_task(cls, task, semaphore, to_do_func: Optional[Callable] = None, rate: float = 1.5) -> Unfuture:
         method, info, path = task
-        task = cls.fetch_file(semaphore, method, info, path, rate)
+        if cls.use_existing is True and os.path.exists(path) and os.path.isfile(path):
+            task = cls.unsync_wrap(path)
+        else:
+            task = cls.fetch_file(semaphore, method, info, path, rate)
         if to_do_func is not None:
             task = task.then(to_do_func)
         return task
@@ -158,10 +166,7 @@ class UnsyncFetch(Abclog):
               semaphore = None
               ):
 
-        cls.init_logger(cls.__name__, logger)
-        cls.retry_kwargs['after'] = after_log(cls.logger, logging.WARNING)
-        cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
-        cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
+        cls.set_logger(logger)
         if semaphore is None:
             # asyncio.Semaphore(concur_req)
             semaphore = init_semaphore(concur_req).result()
