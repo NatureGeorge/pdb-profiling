@@ -215,7 +215,14 @@ class PDB(object):
         assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
         assg_df = split_df_by_chain(assg_df, assg_cols, assg_cols[0:1]).rename(columns={col: col.split(
             '.')[1] for col in assg_cols}).rename(columns={'asym_id_list': 'struct_asym_id'})
-        assg_df = split_df_by_chain(assg_df, assg_df.columns, ('oper_expression', ))
+        
+        assg_df.oper_expression = assg_df.oper_expression.apply(
+            lambda x: cls.expandOperators(cls.parseOperatorList(x)))
+        assg_df = split_df_by_chain(
+            assg_df, assg_df.columns, ('oper_expression', ), mode='list')
+        assg_df.oper_expression = assg_df.oper_expression.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
+        
         assg_dict = assg_df.groupby('assembly_id').oper_expression.unique().to_dict()
         rank_dict = assg_df.groupby(['assembly_id', 'struct_asym_id']).struct_asym_id.count().to_dict()
         rank_dict = {key: [value, 0] for key, value in rank_dict.items()}
@@ -224,24 +231,19 @@ class PDB(object):
         
         assg_df['asym_id_rank'] = assg_df.apply(lambda x: to_rank(
             rank_dict, x['assembly_id'], x['struct_asym_id']), axis=1)
-        oper_df = DataFrame(list(zip(*[mmcif_dict[col] for col in oper_cols])), columns=oper_cols).rename(
-            columns={col: col.split('.')[1] for col in oper_cols}).rename(columns={'id': 'oper_expression'})
-        assg_df = assg_df.merge(oper_df)
-        try:
-            '''
-            for col in ('assembly_id', 'oper_expression'):
-                assg_df[col] = assg_df[col].astype(int)
-            '''
-            assg_df.assembly_id = assg_df.assembly_id.astype(int)
-        except Exception:
-            raise ValueError(f"{mmcif_dict['data_']}： astype error: {assg_df}")
+        oper_dict = dict(zip(*[mmcif_dict[col] for col in oper_cols]))
+        assg_df['symmetry_operation'] = assg_df.oper_expression.apply(
+            lambda x: [oper_dict[i] for i in json.loads(x)])
+        assg_df.symmetry_operation = assg_df.symmetry_operation.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
+        assg_df.assembly_id = assg_df.assembly_id.astype(int)
 
         return assg_df
 
     @unsync
     async def pipe_assg_data_collection(self) -> str:
         demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}
-        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
         res_dict = res_df[res_df.observed_ratio.gt(0)].head(1).to_dict('record')[0]
         demo_dict['atom_site'][0]['label_asym_id'] = res_dict['struct_asym_id']
         demo_dict['atom_site'][0]['label_seq_id'] = res_dict['residue_number']
@@ -443,6 +445,9 @@ class PDB(object):
             * Copyright (c) 2017 - now, Mol* contributors
             * https://github.com/molstar/molstar/
             * src/mol-model-formats/structure/property/assembly.ts
+        
+        >>> PDB.expandOperators([['X0'], ['1', '2', '3', '4', '5']])
+        >>> [['X0', '1'], ['X0', '2'], ['X0', '3'], ['X0', '4'], ['X0', '5']]
         '''
         ops: Iterable[Iterable[str]] = []
         currentOp: Iterable[str] = ['' for _ in range(len(operatorList))]
@@ -467,6 +472,9 @@ class PDB(object):
             current[i] = ops[j]
             PDB.expandOperators1(operatorNames, lyst, i - 1, current)
 
+    @staticmethod
+    def dumpsOperators(ops: Iterable[Iterable[str]], sep1:str=',', sep2:str='&') -> str:
+        return sep1.join(sep2.join(i) for i in ops)
 
 class PDBAssemble(PDB):
 

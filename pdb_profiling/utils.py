@@ -247,12 +247,18 @@ def split_df_by_chain(df, all_cols, cols_to_split, mode='sep', sep=','):
     def chainer_json(s):
         return list(chain.from_iterable(s.apply(json.loads)))
     
+    def chainer_list(s):
+        return list(chain.from_iterable(s))
+    
     if mode == 'sep':
         chainer = chainer_sep
         lens = df[cols_to_split[0]].str.split(sep).map(len)
     elif mode == 'json-list':
         chainer = chainer_json
         lens = df[cols_to_split[0]].apply(json.loads).map(len)
+    elif mode == 'list':
+        chainer = chainer_list
+        lens = df[cols_to_split[0]].map(len)
     else:
         raise ValueError("Invalid mode!")
     

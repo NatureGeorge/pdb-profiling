@@ -60,13 +60,16 @@ class UnsyncFetch(Abclog):
         # 'after': after_log(logger, logging.WARNING)
         }
     use_existing: bool = False
+    logger_set:bool = False
 
     @classmethod
-    def set_logger(cls, logger: Optional[logging.Logger] = None):
-        cls.init_logger(cls.__name__, logger)
-        cls.retry_kwargs['after'] = after_log(cls.logger, logging.WARNING)
-        cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
-        cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
+    def init_setting(cls, logger: Optional[logging.Logger] = None):
+        if not cls.logger_set:
+            cls.init_logger(cls.__name__, logger)
+            cls.retry_kwargs['after'] = after_log(cls.logger, logging.WARNING)
+            cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
+            cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
+            cls.logger_set = True
 
     @classmethod
     async def http_download(cls, method: str, info: Dict, path: str):
@@ -166,7 +169,7 @@ class UnsyncFetch(Abclog):
               semaphore = None
               ):
 
-        cls.set_logger(logger)
+        cls.init_setting(logger)
         if semaphore is None:
             # asyncio.Semaphore(concur_req)
             semaphore = init_semaphore(concur_req).result()

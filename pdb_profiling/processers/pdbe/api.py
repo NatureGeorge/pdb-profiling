@@ -15,7 +15,6 @@ from json import JSONDecodeError
 import orjson as json
 from pathlib import Path
 import aiofiles
-from logging import Logger
 from collections import OrderedDict, defaultdict
 from unsync import unsync, Unfuture
 from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out
@@ -212,7 +211,6 @@ class ProcessPDBe(Abclog):
             cls.logger.warning(f"Without Expected Data ({suffix}): {data}")
             return None
         
-
 
 class ProcessSIFTS(ProcessPDBe):
     @classmethod
