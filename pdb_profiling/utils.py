@@ -413,7 +413,7 @@ class MMCIF2DictPlus(dict):
             raise ValueError("Empty file.")
 
 
-class DisaplayPDB(object):
+class DisplayPDB(object):
 
     a_name = 'Asymmetric unit'
 
