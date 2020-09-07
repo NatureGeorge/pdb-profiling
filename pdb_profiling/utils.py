@@ -173,7 +173,7 @@ async def pipe_out(df, path, **kwargs):
     path = Path(path)
     mode = kwargs.get('mode', 'a')
     clear_headers:bool = path.exists() and mode.startswith('a')
-    var_format = kwargs.get('format', 'tsv')
+    var_format = kwargs.get('format', 'tsv').lower()
     async with aiofiles.open(path, mode) as file_io:
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
@@ -183,15 +183,15 @@ async def pipe_out(df, path, **kwargs):
                 headers = sorted_col
             dataset = Dataset(headers=headers)
             dataset.extend(df[sorted_col].to_records(index=False))
-            to_write = dataset.export(var_format)
+            to_write = dataset.export(var_format, lineterminator='\n')
         elif isinstance(df, Dataset):
             if clear_headers:
                 df.headers = None
-            to_write = df.export(var_format)
+            to_write = df.export(var_format, lineterminator='\n')
         elif isinstance(df, Sheet):
-            to_write = getattr(df, var_format)
             if clear_headers:
-                to_write = '\n'.join(to_write.split('\n')[1:-1])
+                df.colnames = []
+            to_write = getattr(df, f"get_{var_format}")(lineterminator='\n')
         else:
             pass
         await file_io.write(to_write)
@@ -411,3 +411,57 @@ class MMCIF2DictPlus(dict):
             yield from self._splitline(line.strip())
         if empty:
             raise ValueError("Empty file.")
+
+
+class DisaplayPDB(object):
+
+    a_name = 'Asymmetric unit'
+
+    b_name = 'Biological assembly {assembly_id}'
+
+    a_code = 'model-1'
+
+    b_code = 'assembly-{assembly_id}'
+
+    header_unit = '''
+                <td>
+                    <b>{name}</b> of {pdb_id}
+                </td>
+    '''
+
+    content_unit = '''
+                <td>
+                    <img width="300em" src="https://cdn.rcsb.org/images/structures/{in_code}/{pdb_id}/{pdb_id}_{code}.jpeg"/>
+                </td>
+    '''
+
+    template = '''
+        <table align="center">
+            <tr>
+            {headers}
+            </tr>
+            <tr>
+            {content}
+            </tr>
+        </table>
+        '''
+
+    @classmethod
+    def setting(cls, pdb_id, assemblies):
+        headers = [cls.header_unit.format(name=cls.a_name, pdb_id=pdb_id)]
+        content = [cls.content_unit.format(pdb_id=pdb_id, in_code=pdb_id[1:3], code=cls.a_code)]
+        for assembly_id in assemblies:
+            headers.append(cls.header_unit.format(
+                name=cls.b_name.format(assembly_id=assembly_id),
+                pdb_id=pdb_id))
+            content.append(cls.content_unit.format(
+                pdb_id=pdb_id, 
+                in_code=pdb_id[1:3], 
+                code=cls.b_code.format(assembly_id=assembly_id)
+            ))
+        return ''.join(headers), ''.join(content)
+
+    def __init__(self, pdb_id, assemblies: Iterable[int]= [1]):
+        from IPython.display import display, HTML
+        headers, content = self.setting(pdb_id, assemblies)
+        display(HTML(self.template.format(headers=headers, content=content)))

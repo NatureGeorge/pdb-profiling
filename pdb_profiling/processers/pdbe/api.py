@@ -767,7 +767,7 @@ class PDBeModelServer(Abclog):
     @classmethod
     def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, data_collection=None, params=None, rate: float = 1.5):
         if params is None:
-            params = {'model_nums': 1, 'encoding': 'cif'}
+            params = {'encoding': 'cif'}
         if data_collection is not None:
             data_collection = (data_collection, )
         return UnsyncFetch.single_task(
