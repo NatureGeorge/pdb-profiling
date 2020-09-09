@@ -161,6 +161,8 @@ async def a_read_csv(path, read_mode='r',**kwargs):
 async def a_load_json(path):
     if isinstance(path, (Coroutine, Unfuture)):
         path = await path
+    if path is None:
+        return None
     async with aiofiles.open(path) as inFile:
         return json.loads(await inFile.read())
 
@@ -288,7 +290,7 @@ class MMCIF2DictPlus(dict):
         return is_key == 0 and ((key_value in self.focus_keys) or any(key in key_value for key in self.focus_keys))
 
     def __init__(self, handle, focus_keys: Iterable[str]):
-        self.focus_keys = focus_keys
+        self.focus_keys = set(focus_keys)
         self.quote_chars = ["'", '"']
         self.whitespace_chars = [" ", "\t"]
         # TODO: init first loop
@@ -346,6 +348,8 @@ class MMCIF2DictPlus(dict):
                 # Always returns a list
                 self[key] = [token[1]]
                 key = None
+            if self.keys() >= self.focus_keys:
+                break
 
     def _splitline(self, line: str):
         # NOTE: annotation from biopython: See https://www.iucr.org/resources/cif/spec/version1.1/cifsyntax for the syntax
@@ -461,7 +465,13 @@ class DisplayPDB(object):
             ))
         return ''.join(headers), ''.join(content)
 
-    def __init__(self, pdb_id, assemblies: Iterable[int]= [1]):
+    def display(self, pdb_id, assemblies: Iterable[int]= [1]):
         from IPython.display import display, HTML
         headers, content = self.setting(pdb_id, assemblies)
-        display(HTML(self.template.format(headers=headers, content=content)))
+        self.table = self.template.format(headers=headers, content=content)
+        display(HTML(self.table))
+    
+    def __init__(self, *args):
+        if len(args) > 0:
+            self.display(*args)
+

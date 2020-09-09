@@ -49,6 +49,8 @@ class PDB(object):
     @unsync
     async def prepare_property(self, raw_data):
         raw_data = await raw_data
+        if raw_data is None:
+            return None
         data = raw_data[self.pdb_id]
         assert len(data) == 1, f"{repr(self)}: Unexpected status data length\n{data}"
         return data[0]
@@ -242,11 +244,13 @@ class PDB(object):
 
     @unsync
     async def pipe_assg_data_collection(self) -> str:
-        demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}
+        # demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}
         res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
-        res_dict = res_df[res_df.observed_ratio.gt(0)].head(1).to_dict('record')[0]
-        demo_dict['atom_site'][0]['label_asym_id'] = res_dict['struct_asym_id']
-        demo_dict['atom_site'][0]['label_seq_id'] = res_dict['residue_number']
+        res_dict = res_df[res_df.observed_ratio.gt(0)].iloc[0].to_dict() # TODO: make it more efficient
+        demo_dict = dict(atom_site=[dict(
+            label_asym_id=res_dict['struct_asym_id'],
+            # NOTE: Fix 'TypeError: Type is not JSON serializable: numpy.int64'
+            label_seq_id=int(res_dict['residue_number']))])
         return json.dumps(demo_dict).decode('utf-8')
 
     @classmethod
