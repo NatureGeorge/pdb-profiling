@@ -12,7 +12,7 @@ from unsync import unsync, Unfuture
 from aiofiles import open as aiofiles_open
 from re import compile as re_compile
 import orjson as json
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json, iter_first
 from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNCS as API_SET
 
 
@@ -244,13 +244,12 @@ class PDB(object):
 
     @unsync
     async def pipe_assg_data_collection(self) -> str:
-        # demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}
+        '''demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}'''
         res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
-        res_dict = res_df[res_df.observed_ratio.gt(0)].iloc[0].to_dict() # TODO: make it more efficient
+        res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
         demo_dict = dict(atom_site=[dict(
-            label_asym_id=res_dict['struct_asym_id'],
-            # NOTE: Fix 'TypeError: Type is not JSON serializable: numpy.int64'
-            label_seq_id=int(res_dict['residue_number']))])
+            label_asym_id=res_dict.struct_asym_id,
+            label_seq_id=res_dict.residue_number)])
         return json.dumps(demo_dict).decode('utf-8')
 
     @classmethod

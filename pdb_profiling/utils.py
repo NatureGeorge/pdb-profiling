@@ -7,7 +7,7 @@
 import os
 import gzip
 import shutil
-from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine
+from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable
 from logging import Logger
 from pandas import read_csv, DataFrame, isna
 import numpy as np
@@ -277,6 +277,21 @@ def init_folder_from_suffix(folder: Union[Path, str], suffixes: Iterable) -> Ite
         new_path.mkdir(parents=True, exist_ok=True)
         yield new_path
 
+
+def iter_first(df: DataFrame, criteria: Callable[[NamedTuple], bool], **kwargs) -> Optional[NamedTuple]:
+    '''
+    Implement pandas.DataFrame.itertuples
+    
+    Returns the value as soon as you find the first row/record 
+    that meets the requirements and NOT iterating other rows
+
+    Originated from: https://stackoverflow.com/a/63826677/12876491
+
+    >>> iter_first(df, lambda row: row.A > 4 and row.B > 3)
+    '''
+    for row in df.itertuples(**kwargs):
+        if criteria(row):
+            return row
 
 class MMCIF2DictPlus(dict):
     """
