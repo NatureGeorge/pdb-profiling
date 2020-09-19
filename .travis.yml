@@ -10,4 +10,4 @@ install:
   - pip install pdb-profiling
 
 # command to run tests
-script: pytest test\test_load_modules.py
+script: pytest ./test/test_load_modules.py
