@@ -1,9 +1,14 @@
 # pdb-profiling
 
 [![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
-[![Downloads](https://img.shields.io/pypi/dm/pdb-profiling?style=for-the-badge)](https://pypi.org/project/pdb-profiling/)
-[![Dependences](https://img.shields.io/david/NatureGeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
+[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![LastCommit](https://img.shields.io/github/last-commit/naturegeorge/pdb-profiling/0.1.3.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge)](https://github.com/NatureGeorge/pdb-profiling/releases/)
+[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge)](https://pypi.org/project/pdb-profiling/)
+
+![cover](docs/figs/cover.png)
 
 Profiling Protein Structures from Protein Data Bank and integrate various resources.
 
