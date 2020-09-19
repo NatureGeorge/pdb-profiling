@@ -1,8 +1,13 @@
 language: python
+
 python:
   - "3.6"
   - "3.7"
   - "3.8"
+
 # command to install dependencies
 install:
   - pip install pdb-profiling
+
+# command to run tests
+script: pytest test\test_load_modules.py
