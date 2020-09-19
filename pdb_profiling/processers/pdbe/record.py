@@ -12,7 +12,7 @@ from unsync import unsync, Unfuture
 from aiofiles import open as aiofiles_open
 from re import compile as re_compile
 import orjson as json
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json, iter_first
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
 from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNCS as API_SET
 
 
@@ -246,10 +246,12 @@ class PDB(object):
     async def pipe_assg_data_collection(self) -> str:
         '''demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}'''
         res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
-        res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
+        # res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
+        # assert res_dict is not None, f"{self.pdb_ob}: Unexpected Cases, without observed residues?!"
+        res_dict = res_df.loc[res_df.observed_ratio.gt(0).idxmax()].to_dict()
         demo_dict = dict(atom_site=[dict(
-            label_asym_id=res_dict.struct_asym_id,
-            label_seq_id=res_dict.residue_number)])
+            label_asym_id=res_dict['struct_asym_id'],
+            label_seq_id=int(res_dict['residue_number']))])
         return json.dumps(demo_dict).decode('utf-8')
 
     @classmethod

@@ -304,7 +304,7 @@ class MMCIF2DictPlus(dict):
         is_key, key_value = token
         return is_key == 0 and ((key_value in self.focus_keys) or any(key in key_value for key in self.focus_keys))
 
-    def __init__(self, handle, focus_keys: Iterable[str]):
+    def __init__(self, handle, focus_keys: Iterable[str]=['']):
         self.focus_keys = set(focus_keys)
         self.quote_chars = ["'", '"']
         self.whitespace_chars = [" ", "\t"]
@@ -482,6 +482,7 @@ class DisplayPDB(object):
 
     def display(self, pdb_id, assemblies: Iterable[int]= [1]):
         from IPython.display import display, HTML
+        assemblies = sorted(int(i) for i in assemblies if int(i) > 0)
         headers, content = self.setting(pdb_id, assemblies)
         self.table = self.template.format(headers=headers, content=content)
         display(HTML(self.table))
