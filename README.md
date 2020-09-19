@@ -1,5 +1,6 @@
 # pdb-profiling
 
+[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling)
 [![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
 [![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
 [![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
