@@ -33,7 +33,8 @@ setup(
           'databases',
           'neo4j',
           'tqdm',
-          'orm'
+          'orm',
+          'smart_open'
      ],
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",

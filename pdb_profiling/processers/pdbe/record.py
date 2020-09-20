@@ -10,10 +10,11 @@ from pathlib import Path
 from pandas import isna, concat, DataFrame
 from unsync import unsync, Unfuture
 from aiofiles import open as aiofiles_open
+from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
 from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
-from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, FUNCS as API_SET
+from pdb_profiling.processers.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -186,6 +187,57 @@ class PDB(object):
         self.register_task((PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), task)
         return task
 
+    def fetch_from_PDBArchive(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
+        assert api_suffix in PDBArchive.api_sets, f"Invlaid API SUFFIX! Valid set:\n{PDBArchive.api_sets}"
+        task = self.tasks.get((PDBArchive.root, api_suffix, then_func), None)
+        if task is not None:
+            return task
+        task = PDBArchive.single_retrieve(
+            pdb=self.get_id(),
+            suffix=api_suffix,
+            folder=next(init_folder_from_suffix(
+                self.get_folder()/'pdb/data/structures', (api_suffix, ))),
+            semaphore=self.get_web_semaphore(),
+            **kwargs)
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((PDBArchive.root, api_suffix, then_func), task)
+        return task
+
+    @classmethod
+    @unsync
+    async def cif2residue_listing(cls, path: Unfuture):
+        cols = ('_pdbx_poly_seq_scheme.asym_id',
+                '_pdbx_poly_seq_scheme.entity_id',
+                '_pdbx_poly_seq_scheme.seq_id',
+                '_pdbx_poly_seq_scheme.mon_id',
+                '_pdbx_poly_seq_scheme.ndb_seq_num',
+                '_pdbx_poly_seq_scheme.pdb_seq_num',
+                '_pdbx_poly_seq_scheme.pdb_strand_id',
+                '_pdbx_poly_seq_scheme.pdb_ins_code')
+        new_cols = ('struct_asym_id',
+                    'entity_id',
+                    'residue_number',
+                    'residue_name',
+                    'residue_number?',
+                    'authore_residue_number',
+                    'chain_id',
+                    'author_insertion_code')
+        with smart_open(await path) as handle:
+            mmcif_dict = MMCIF2DictPlus(handle, cols)
+            mmcif_dict['data_'] = mmcif_dict['data_'].lower()
+            dfrm = DataFrame(mmcif_dict)
+        col_dict = dict(zip(cols, new_cols))
+        col_dict['data_'] = 'pdb_id'
+        dfrm.rename(columns=col_dict, inplace=True)
+        assert all(dfrm['residue_number'] == dfrm['residue_number?']
+                   ), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
+        dfrm.drop(columns=['residue_number?'], inplace=True)
+        for col in ('residue_number', 'authore_residue_number'):
+            dfrm[col] = dfrm[col].astype(int)
+        dfrm.author_insertion_code = dfrm.author_insertion_code.apply(lambda x: '' if x == '.' else x)
+        return dfrm
+
     @classmethod
     @unsync
     async def to_assg_oper_df(cls, path: Unfuture):
@@ -303,6 +355,11 @@ class PDB(object):
     async def set_res2eec_df(self, merge_with_molecules_info:bool=True):
         '''
         NOTE except waters
+
+        Example of chain_id != struct_asym_id:
+
+            * 6a8r
+            * 6e32
         '''
         res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
         eec_df = res_df[['pdb_id', 'entity_id', 'chain_id',

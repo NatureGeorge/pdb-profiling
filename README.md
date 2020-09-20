@@ -46,6 +46,9 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
   * Interactome3D API
     * <https://interactome3d.irbbarcelona.org/>
   * ModBase API (?)
+* Download data from PDB Archive against unexpected needs
+  * wwwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
+  * EBI: <http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/>
 
 ## Install
 
@@ -58,7 +61,8 @@ pip install pdb-profiling
 See `examples/...`
 
 1. [Introduction](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Introduction.ipynb)
-2. [DisplayPDB](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/DisplayPDB.ipynb)
+2. [Batch](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Batch.ipynb)
+3. [DisplayPDB](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/DisplayPDB.ipynb)
 3. ...
 
 ## Copyright Notice

@@ -34,6 +34,11 @@ FTP_URL: str = 'ftp://ftp.ebi.ac.uk/'
 
 FTP_DEFAULT_PATH: str = 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz'
 
+PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
+PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
+# https://ftp.wwpdb.org/pub/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
+# http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
+
 FUNCS = list()
 
 def dispatch_on_set(keys: Set):
@@ -457,6 +462,7 @@ class ProcessEntryData(ProcessPDBe):
             with Path(folder, f'clean_pdb_statistic+{i}.json').open(mode='w+') as outFile:
                 json.dump(data, outFile)
 
+
 class PDBeDecoder(object):    
 
     @staticmethod
@@ -776,6 +782,41 @@ class PDBeModelServer(Abclog):
             semaphore=semaphore,
             rate=rate)
 
+
+class PDBArchive(Abclog):
+    '''
+    Download files from PDB Archive
+
+    * wwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
+    * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
+    '''
+    root = PDB_ARCHIVE_URL_EBI
+    api_sets = {f'{i}/{j}/' for i in ('obsolete', 'divided')
+                for j in ('mmCIF', 'pdb', 'XML')}
+
+    @classmethod
+    def yieldTasks(cls, pdbs, suffix: str, file_suffix: str, folder: Path) -> Generator:
+        for pdb in pdbs:
+            args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{pdb}{file_suffix}')
+            yield 'get', args, folder/f'{pdb}{file_suffix}'
+
+    @classmethod
+    def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: str = '.cif.gz', concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+        res = UnsyncFetch.multi_tasks(
+            cls.yieldTasks(pdbs, suffix, file_suffix, folder),
+            concur_req=concur_req,
+            rate=rate,
+            logger=cls.logger,
+            ret_res=ret_res,
+            semaphore=kwargs.get('semaphore', None))
+        return res
+    
+    @classmethod
+    def single_retrieve(cls, pdb: str, suffix: str, folder: Path, semaphore, file_suffix: str = '.cif.gz', rate: float = 1.5):
+        return UnsyncFetch.single_task(
+            task=next(cls.yieldTasks((pdb, ), suffix, file_suffix, folder)),
+            semaphore=semaphore,
+            rate=rate)
 
 # TODO: Chain UniProt ID Mapping -> ProcessSIFTS -> ProcessPDBe
 # TODO: Deal with oligomeric PDB
