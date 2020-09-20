@@ -1,15 +1,55 @@
+<script>
+function copy(that){
+  var inp =document.createElement('input');
+  document.body.appendChild(inp)
+  inp.value =that.textContent
+  inp.select();
+  document.execCommand('copy',false);
+  inp.remove();
+}
+</script>
+<style>
+.selfnav{
+    display: block;
+}
+.selfnav>li{
+    display:inline-block;
+    float：left;
+    list-style:none;
+    width:15em;
+}
+.selfnav>li>a{
+  color: #222;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 5px;
+  text-align: center;
+  background-image: radial-gradient(#FFFFFF, #e5eee9);
+  border-color: rgba(255, 255, 255, 0.2);
+  transition:.5s;
+}
+.selfnavbar-nav>li>a {
+    line-height: 20px;
+}
+.selfnav>li>a {
+    position: relative;
+    display: block;
+    padding: 8px 8px;
+}
+</style>
+
 # pdb-profiling
 
-[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling)
-[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
-[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![LastCommit](https://img.shields.io/github/last-commit/naturegeorge/pdb-profiling/0.1.3.svg?style=for-the-badge)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge)](https://github.com/NatureGeorge/pdb-profiling/releases/)
-[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge)](https://pypi.org/project/pdb-profiling/)
+[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
+[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge&logo=python)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
+[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
+[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![LastCommit](https://img.shields.io/github/last-commit/naturegeorge/pdb-profiling/0.1.3.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
 
-![cover](docs/figs/cover.png)
+![cover](https://user-images.githubusercontent.com/43134199/93692609-f28f5f00-fb27-11ea-95db-6fa32771394f.png)
 
 Profiling Protein Structures from Protein Data Bank and integrate various resources.
 
@@ -46,7 +86,25 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
   * Interactome3D API
     * <https://interactome3d.irbbarcelona.org/>
   * ModBase API (?)
-* Release this project as a Python package
+
+## Install
+
+<figure>
+  <a href="https://pypi.org/project/pdb-profiling/"><img src="https://www.whitesourcesoftware.com/wp-content/uploads/2016/12/Pypi_logo.png" style="width:10em"></a>
+  <figcaption class="selfnav selfnavbar-nav">
+    <li>
+    <a title="Click to copy to clipboard" onclick="copy(this);event.preventDefault();" href="#"><font face = "consolas">pip install pdb-profiling</font></a>
+    </li>
+  </figcaption>
+</figure>
+
+## Examples
+
+See `examples/...`
+
+1. [Introduction](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Introduction.ipynb)
+2. [DisplayPDB](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/DisplayPDB.ipynb)
+3. ...
 
 ## Copyright Notice
 

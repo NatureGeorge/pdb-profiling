@@ -343,13 +343,14 @@ class PDB(object):
     async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None):
         '''
         NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
+        NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
         '''
         
         def to_assembly_id(pdb_id, assemblys):
             for assembly_id in assemblys:
                 yield f"{pdb_id}/{assembly_id}"
         
-        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.assembly2eec)
+        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.to_dataframe)
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
         assemblys = set(ass_eec_df.assembly_id) | {0}
         if focus_assembly_ids is not None:
