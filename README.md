@@ -1,43 +1,3 @@
-<script>
-function copy(that){
-  var inp =document.createElement('input');
-  document.body.appendChild(inp)
-  inp.value =that.textContent
-  inp.select();
-  document.execCommand('copy',false);
-  inp.remove();
-}
-</script>
-<style>
-.selfnav{
-    display: block;
-}
-.selfnav>li{
-    display:inline-block;
-    float：left;
-    list-style:none;
-    width:15em;
-}
-.selfnav>li>a{
-  color: #222;
-  border-width: 1px;
-  border-style: solid;
-  border-radius: 5px;
-  text-align: center;
-  background-image: radial-gradient(#FFFFFF, #e5eee9);
-  border-color: rgba(255, 255, 255, 0.2);
-  transition:.5s;
-}
-.selfnavbar-nav>li>a {
-    line-height: 20px;
-}
-.selfnav>li>a {
-    position: relative;
-    display: block;
-    padding: 8px 8px;
-}
-</style>
-
 # pdb-profiling
 
 [![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
@@ -89,14 +49,9 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
 
 ## Install
 
-<figure>
-  <a href="https://pypi.org/project/pdb-profiling/"><img src="https://www.whitesourcesoftware.com/wp-content/uploads/2016/12/Pypi_logo.png" style="width:10em"></a>
-  <figcaption class="selfnav selfnavbar-nav">
-    <li>
-    <a title="Click to copy to clipboard" onclick="copy(this);event.preventDefault();" href="#"><font face = "consolas">pip install pdb-profiling</font></a>
-    </li>
-  </figcaption>
-</figure>
+```bash
+pip install pdb-profiling
+```
 
 ## Examples
 
