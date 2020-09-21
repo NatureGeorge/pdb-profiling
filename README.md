@@ -1,12 +1,11 @@
 # pdb-profiling
 
 [![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
-[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge&logo=python)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge&logo=python)](https://pypi.org/project/pdb-profiling/)
 [![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
 [![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
 [![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![LastCommit](https://img.shields.io/github/last-commit/naturegeorge/pdb-profiling/0.1.3.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
 [![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
 
 ![cover](https://user-images.githubusercontent.com/43134199/93692609-f28f5f00-fb27-11ea-95db-6fa32771394f.png)
