@@ -82,7 +82,7 @@ class PDB(object):
         Check PDB Entry Status
 
             * status_code: REL -> relase
-            * status_code: OBS -> obsole
+            * status_code: OBS -> obsolete
 
         >>> if self.status['status_code'] == 'REL':
                 logging.info(self.status['obsoletes'])
@@ -174,7 +174,7 @@ class PDB(object):
         if task is not None:
             return task
         task = PDBeModelServer.single_retrieve(
-            pdb=self.get_id(),
+            pdb=self.pdb_id,
             suffix=api_suffix,
             method=method,
             folder=next(init_folder_from_suffix(
@@ -193,7 +193,7 @@ class PDB(object):
         if task is not None:
             return task
         task = PDBArchive.single_retrieve(
-            pdb=self.get_id(),
+            pdb=self.pdb_id,
             suffix=api_suffix,
             folder=next(init_folder_from_suffix(
                 self.get_folder()/'pdb/data/structures', (api_suffix, ))),
