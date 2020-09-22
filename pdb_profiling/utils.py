@@ -270,6 +270,13 @@ def split_df_by_chain(df, all_cols, cols_to_split, mode='sep', sep=','):
     return DataFrame({**repeat_dict, **chain_dict})
 
 
+def sinit_folder_from_suffix(folder: Union[Path, str], suffix: str):
+    folder = Path(folder)
+    new_path = folder/suffix
+    new_path.mkdir(parents=True, exist_ok=True)
+    return new_path
+
+
 def init_folder_from_suffix(folder: Union[Path, str], suffixes: Iterable) -> Iterable[Path]:
     folder = Path(folder)
     for suffix in suffixes:

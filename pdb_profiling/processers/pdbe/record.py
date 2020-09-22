@@ -149,13 +149,13 @@ class PDB(object):
     def set_sqlite_connection(self, api):
         pass
 
-    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False) -> Unfuture:
+    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id:str=None) -> Unfuture:
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
-        task = self.tasks.get((api_suffix, then_func), None)
+        task = self.tasks.get((api_suffix, then_func, json, mask_id), None)
         if task is not None:
             return task
         
-        args = dict(pdb=self.get_id(),
+        args = dict(pdb=self.get_id() if mask_id is None else mask_id,
                     suffix=api_suffix,
                     method='get',
                     folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
@@ -165,7 +165,7 @@ class PDB(object):
         task = ProcessPDBe.single_retrieve(**args)
         if then_func is not None:
             task = task.then(then_func)
-        self.register_task((api_suffix, then_func), task)
+        self.register_task((api_suffix, then_func, json, mask_id), task)
         return task
 
     def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:

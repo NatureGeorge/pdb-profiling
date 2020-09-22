@@ -4,13 +4,14 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-13 08:54:09 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-__version__ = '0.1.5'
+__version__ = '0.1.6'
 
 
 def default_config():
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
     from pdb_profiling.processers.pdbe.api import ProcessPDBe
     from pdb_profiling.processers.pdbe.record import PDB, PDBeModelServer, PDBArchive
+    from pdb_profiling.processers.uniprot.api import UniProtFASTA
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
     # Init PDBe API Logger
@@ -27,3 +28,5 @@ def default_config():
     PDBeModelServer.init_logger(logger=ProcessPDBe.logger)
     # Init PDBArchive API's Logger (pass it with PDBe API Logger)
     PDBArchive.init_logger(logger=ProcessPDBe.logger)
+    # Init UniProtFASTA API's Logger (pass it with PDBe API Logger)
+    UniProtFASTA.init_logger(logger=ProcessPDBe.logger)

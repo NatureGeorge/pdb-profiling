@@ -540,8 +540,9 @@ class PDBeDecoder(object):
     @dispatch_on_set({'api/pdb/entry/status/', 'api/pdb/entry/summary/', 'api/pdb/entry/modified_AA_or_NA/',
                       'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
                       'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/', 'api/pdb/entry/carbohydrate_polymer/',
-                      'api/pdb/entry/electron_density_statistics/',
-                      'api/pdb/entry/related_experiment_data/', 'api/pdb/entry/drugbank/'})
+                      'api/pdb/entry/electron_density_statistics/', 'api/pdb/entry/related_experiment_data/',
+                      'api/pdb/entry/drugbank/',
+                      'graph-api/pdb/mutated_AA_or_NA/', 'graph-api/pdb/modified_AA_or_NA/'})
     def yieldCommon(data: Dict) -> Generator:
         for pdb in data:
             values = data[pdb]
@@ -724,6 +725,31 @@ class PDBeDecoder(object):
             data['result'][col] = uniprot_entries[0].get(col, None)
         
         yield data['result']['structures'], cols, tuple(data['result'][col] for col in cols)
+
+    @staticmethod
+    @dispatch_on_set({'graph-api/residue_mapping/'})
+    def graph_api_residue_mapping(data: Dict):
+        '''
+        * <https://www.ebi.ac.uk/pdbe/graph-api/residue_mapping/:pdbId/:entityId/:residueNumber>
+        * <https://www.ebi.ac.uk/pdbe/graph-api/residue_mapping/:pdbId/:entityId/:residueStart/:residueEnd>
+
+        NOTE: only yield UniProt Residue Related Data
+        '''
+        cols = (
+            'pdb_id', 'entity_id', 'chain_id', 'struct_asym_id',
+            'residue_number', 'author_residue_number',
+            'author_insertion_code', 'observed', 'UniProt')
+
+        for pdb_id in data:
+            assert len(data[pdb_id]) == 1, f"Unexcepted Cases: {pdb_id}"
+            molecules = data[pdb_id][0]
+            for chain in molecules['chains']:
+                for residue in chain['residues']:
+                    yield list({**dict(zip(cols, (
+                        pdb_id, molecules['entity_id'], chain['auth_asym_id'],
+                        chain['struct_asym_id'], residue['residue_number'],
+                        residue['author_residue_number'], residue['author_insertion_code'],
+                        residue['observed'], feature_tag))), **feature} for feature_tag, feature in residue['features']['UniProt'].items()), None
 
 
 class PDBeModelServer(Abclog):
