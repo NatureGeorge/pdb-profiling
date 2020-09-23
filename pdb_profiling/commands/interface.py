@@ -28,9 +28,9 @@ else:
     sys.path.append("/data/zzf/2020/src/pdb-profiling_0706")
 
 try:
-    from pdb_profiling.processers.uniprot.api import MapUniProtID, UniProtFASTA
-    from pdb_profiling.processers.pdbe.neo4j_api import Neo4j_API
-    from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
+    from pdb_profiling.processors.uniprot.api import MapUniProtID, UniProtFASTA
+    from pdb_profiling.processors.pdbe.neo4j_api import Neo4j_API
+    from pdb_profiling.processors.pdbe.sqlite_api import Sqlite_API
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
     from pdb_profiling.fetcher.dbfetch import Neo4j
     from pdb_profiling.log import Abclog

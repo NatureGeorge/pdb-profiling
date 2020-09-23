@@ -12,8 +12,8 @@ from typing import Dict, List, Iterable, Optional
 from unsync import unsync
 import asyncio
 import orjson as json
-from pdb_profiling.processers.pdbe.neo4j_api import SIFTS, slice_series, subtract_range, interval2set, range_len, outside_range_len, add_range, overlap_range
-from pdb_profiling.processers.pdbe.sqlite_api import converters
+from pdb_profiling.processors.pdbe.neo4j_api import SIFTS, slice_series, subtract_range, interval2set, range_len, outside_range_len, add_range, overlap_range
+from pdb_profiling.processors.pdbe.sqlite_api import converters
 
 
 def geometric_mean(array: Iterable):

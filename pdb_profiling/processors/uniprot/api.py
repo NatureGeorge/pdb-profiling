@@ -17,7 +17,7 @@ from copy import deepcopy
 from collections import Counter
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
-from pdb_profiling.processers.uniprot.process import ExtractIsoAlt
+from pdb_profiling.processors.uniprot.process import ExtractIsoAlt
 
 
 QUERY_COLUMNS: List[str] = [

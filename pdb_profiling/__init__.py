@@ -9,9 +9,9 @@ __version__ = '0.1.6'
 
 def default_config():
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
-    from pdb_profiling.processers.pdbe.api import ProcessPDBe
-    from pdb_profiling.processers.pdbe.record import PDB, PDBeModelServer, PDBArchive
-    from pdb_profiling.processers.uniprot.api import UniProtFASTA
+    from pdb_profiling.processors.pdbe.api import ProcessPDBe
+    from pdb_profiling.processors.pdbe.record import PDB, PDBeModelServer, PDBArchive
+    from pdb_profiling.processors.uniprot.api import UniProtFASTA
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
     # Init PDBe API Logger

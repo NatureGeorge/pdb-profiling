@@ -6,8 +6,8 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.utils import pipe_out
-from pdb_profiling.processers.pdbe.api import PDBeDecoder
-from typing import Union, Dict, Generator
+from pdb_profiling.processors.pdbe.api import PDBeDecoder
+from typing import Union, Dict, Generator, Set, Any
 from pathlib import Path
 import logging
 from unsync import unsync
@@ -15,6 +15,26 @@ from aiofiles import open as aiofiles_open
 from orjson import loads as orjson_loads
 
 BASE_URL: str = 'https://swissmodel.expasy.org/'
+
+FUNCS = list()
+
+
+def dispatch_on_set(keys: Set):
+    '''
+    Decorator to add new dispatch functions
+    '''
+    def register(func):
+        FUNCS.append((func, set(keys)))
+        return func
+    return register
+
+
+def traverseSuffixes(query: Any, *args):
+    for func, keySet in FUNCS:
+        if query in keySet:
+            return func(*args)
+    else:
+        raise ValueError(f'Invalid query: {query}')
 
 
 class SMR(object):
@@ -24,6 +44,8 @@ class SMR(object):
         * <https://swissmodel.expasy.org/docs/smr_openapi>
         * <https://swissmodel.expasy.org/docs/repository_help#smr_api>
     '''
+
+
 
     root = 'repository/uniprot/'
     headers = {'accept': 'text/plain'}

@@ -26,7 +26,7 @@ import traceback
 from pdb_profiling.utils import pipe_out, sort_sub_cols, slice_series, to_interval
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
-from pdb_profiling.processers.pdbe.sqlite_api import Sqlite_API
+from pdb_profiling.processors.pdbe.sqlite_api import Sqlite_API
 import logging
 # logging.basicConfig(level=logging.INFO)
 

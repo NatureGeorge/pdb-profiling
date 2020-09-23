@@ -16,8 +16,8 @@ import networkx as nx
 from tablib import Dataset
 from typing import Dict
 from textdistance import overlap
-from pdb_profiling.processers.pdbe.sqlite_api import converters
-from pdb_profiling.processers.pdbe.neo4j_api import SIFTS, slice_series, lyst2range, related_dataframe
+from pdb_profiling.processors.pdbe.sqlite_api import converters
+from pdb_profiling.processors.pdbe.neo4j_api import SIFTS, slice_series, lyst2range, related_dataframe
 from pdb_profiling.utils import pipe_out
 import logging
 
