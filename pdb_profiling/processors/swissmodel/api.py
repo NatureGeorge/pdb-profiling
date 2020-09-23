@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.utils import pipe_out
-from pdb_profiling.processors.pdbe.api import PDBeDecoder
+from pdb_profiling.processors.transformer import Dict2Tabular
 from typing import Union, Dict, Generator, Set, Any
 from pathlib import Path
 import logging
@@ -16,26 +16,6 @@ from orjson import loads as orjson_loads
 
 BASE_URL: str = 'https://swissmodel.expasy.org/'
 
-FUNCS = list()
-
-
-def dispatch_on_set(keys: Set):
-    '''
-    Decorator to add new dispatch functions
-    '''
-    def register(func):
-        FUNCS.append((func, set(keys)))
-        return func
-    return register
-
-
-def traverseSuffixes(query: Any, *args):
-    for func, keySet in FUNCS:
-        if query in keySet:
-            return func(*args)
-    else:
-        raise ValueError(f'Invalid query: {query}')
-
 
 class SMR(object):
     '''
@@ -43,13 +23,29 @@ class SMR(object):
 
         * <https://swissmodel.expasy.org/docs/smr_openapi>
         * <https://swissmodel.expasy.org/docs/repository_help#smr_api>
+    
+    >>> SMR.retrieve(
+        ('Q6NZ36', 'P12755'), 
+        init_folder_from_suffix(yourfolder, 'swissmodel/repository/uniprot/'))
     '''
-
-
 
     root = 'repository/uniprot/'
     headers = {'accept': 'text/plain'}
     use_existing: bool = False
+
+    @staticmethod
+    def yieldSMR(data: Dict):
+        cols = ('sequence_length',
+                'ac', 'id', 'isoid')
+        uniprot_entries = data['result']['uniprot_entries']
+
+        assert len(
+            uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
+
+        for col in ('ac', 'id', 'isoid'):
+            data['result'][col] = uniprot_entries[0].get(col, None)
+
+        yield data['result']['structures'], cols, tuple(data['result'][col] for col in cols)
 
     @classmethod
     def yieldTasks(cls, unps, params: Dict, file_format: str, folder: Union[Path, str]) -> Generator:
@@ -61,7 +57,7 @@ class SMR(object):
             yield 'get', args, Path(folder)/f'{unp}.{file_format}'
 
     @classmethod
-    def retrieve(cls, unps, params: Dict, folder: Union[Path, str], concur_req: int = 20, rate: float = 1.5, file_format: str = 'json', ret_res: bool = True, **kwargs):
+    def retrieve(cls, unps, folder: Union[Path, str], params: Dict = dict(provider='swissmodel'), concur_req: int = 20, rate: float = 1.5, file_format: str = 'json', ret_res: bool = True, **kwargs):
         assert file_format in ('json', 'pdb'), "Invalid file format"
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(unps, params, file_format, folder),
@@ -74,7 +70,7 @@ class SMR(object):
         return res
 
     @classmethod
-    def single_retrieve(cls, unp: str, params: Dict, folder: Union[Path, str], semaphore, rate: float = 1.5, file_format: str = 'json'):
+    def single_retrieve(cls, unp: str, folder: Union[Path, str], semaphore, params: Dict = dict(provider='swissmodel'), rate: float = 1.5, file_format: str = 'json'):
         assert file_format in ('json', 'pdb'), "Invalid file format"
 
         return UnsyncFetch.single_task(
@@ -100,7 +96,7 @@ class SMR(object):
             except Exception as e:
                 logging.error(f"Error in {path}")
                 raise e
-        res = PDBeDecoder.pyexcel_io(suffix='swissmodel/repository/uniprot/', data=data)
+        res = Dict2Tabular.pyexcel_io(cls.yieldSMR(data))
         if res is not None:
             await pipe_out(
                 df=res, path=new_path,

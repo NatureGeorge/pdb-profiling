@@ -13,6 +13,7 @@ from aiofiles import open as aiofiles_open
 from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
+from pdb_profiling import default_id_tag
 from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 
@@ -137,7 +138,7 @@ class PDB(object):
         return f"<{self.__class__.__name__} {self.get_id()}>"
     
     def set_id(self, pdb_id: str):
-        assert len(pdb_id) == 4, "Invalid PDB ID!"
+        assert default_id_tag(pdb_id) == 'pdb_id', "Invalid PDB ID!"
         self.pdb_id = pdb_id.lower()
 
     def get_id(self):
@@ -158,7 +159,7 @@ class PDB(object):
         args = dict(pdb=self.get_id() if mask_id is None else mask_id,
                     suffix=api_suffix,
                     method='get',
-                    folder=next(init_folder_from_suffix(self.get_folder(), (api_suffix, ))),
+                    folder=init_folder_from_suffix(self.get_folder(), api_suffix),
                     semaphore=self.get_web_semaphore())
         if json:
             args['to_do_func'] = None
@@ -177,8 +178,7 @@ class PDB(object):
             pdb=self.pdb_id,
             suffix=api_suffix,
             method=method,
-            folder=next(init_folder_from_suffix(
-                self.get_folder()/'model-server', (api_suffix, ))),
+            folder=init_folder_from_suffix(self.get_folder()/'model-server', api_suffix),
             semaphore=self.get_web_semaphore(),
             data_collection=data_collection,
             params=params)
@@ -195,8 +195,7 @@ class PDB(object):
         task = PDBArchive.single_retrieve(
             pdb=self.pdb_id,
             suffix=api_suffix,
-            folder=next(init_folder_from_suffix(
-                self.get_folder()/'pdb/data/structures', (api_suffix, ))),
+            folder=init_folder_from_suffix(self.get_folder()/'pdb/data/structures', api_suffix),
             semaphore=self.get_web_semaphore(),
             **kwargs)
         if then_func is not None:
@@ -539,6 +538,7 @@ class PDB(object):
     def dumpsOperators(ops: Iterable[Iterable[str]], sep1:str=',', sep2:str='&') -> str:
         return sep1.join(sep2.join(i) for i in ops)
 
+
 class PDBAssemble(PDB):
 
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
@@ -840,6 +840,37 @@ class PDBInterface(PDBAssemble):
         except AttributeError:
             await self.set_interface_res()
             return self.interface_res_dict
+
+
+class SIFTS(PDB):
+
+    def set_id(self, identifier: str):
+        tag = default_id_tag(identifier, None)
+        if tag == 'pdb_id':
+            self.level = 'PDB Entry'
+            self.identifier = identifier.lower()
+        elif tag == 'UniProt':
+            self.level = tag
+            self.identifier = identifier.upper()
+        else:
+            raise AssertionError(f"Invalid identifier: <{identifier}, {tag}>")
+        
+
+    def get_id(self):
+        return self.identifier
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
+
+
+class Compounds(PDB):
+
+    def set_id(self, identifier: str):
+        assert len(identifier) > 0, "Empty string is not a valid identifier!"
+        self.identifier = identifier.upper()
+
+    def get_id(self):
+        return self.identifier
 
 '''
 TODO: Deal with carbohydrate polymer in PISA

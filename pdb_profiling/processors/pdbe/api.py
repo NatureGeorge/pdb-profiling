@@ -7,15 +7,15 @@
 import os
 import numpy as np
 import pandas as pd
-import tablib
-from tablib import InvalidDimensions, UnsupportedFormat
+from tablib import Dataset, InvalidDimensions, UnsupportedFormat
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from json import JSONDecodeError
 import orjson as json
 from pathlib import Path
-import aiofiles
+from aiofiles import open as aiofiles_open
 from collections import defaultdict
 from unsync import unsync, Unfuture
+from pdb_profiling import default_id_tag
 from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
@@ -41,6 +41,14 @@ PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
 
 FUNCS = list()
 
+
+def residue_number_converter(x):
+    try:
+        return int(x)
+    except ValueError:
+        return -1
+
+
 def dispatch_on_set(keys: Set):
     '''
     Decorator to add new dispatch functions
@@ -62,7 +70,7 @@ def traverseSuffixes(query: Any, *args):
 def convertJson2other(
         data: Union[List, str, None], 
         append_data: Union[Iterable, Iterator],
-        converter: Optional[tablib.Dataset] = None, 
+        converter: Optional[Dataset] = None, 
         export_format: str = 'tsv', 
         ignore_headers: Union[bool, int] = False, 
         log_func=print) -> Any:
@@ -70,7 +78,7 @@ def convertJson2other(
     Convert valid json-string/dict into specified format via `tablib.Dataset.export`
     '''
     if converter is None:
-        converter = tablib.Dataset()
+        converter = Dataset()
     try:
         if isinstance(data, str):
             converter.json = data
@@ -133,7 +141,7 @@ class ProcessPDBe(Abclog):
         'struct_asym_id': str,
         'entity_id': str,
         'author_residue_number': int,
-        'residue_number': int,
+        'residue_number': residue_number_converter,
         'author_insertion_code': str,
         'id': int,
         'interface_id': int,
@@ -157,7 +165,7 @@ class ProcessPDBe(Abclog):
                 yield method, params, os.path.join(folder, f'{file_prefix}+{task_id}+{i}.json')
         elif method == 'get':
             for pdb in pdbs:
-                pdb = pdb.lower()
+                # pdb = pdb.lower()
                 identifier = pdb.replace('/', '%')
                 yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, os.path.join(folder, f'{file_prefix}+{identifier}.json')
         else:
@@ -199,7 +207,7 @@ class ProcessPDBe(Abclog):
         new_path = str(path).replace('.json', '.tsv')
         if Path(new_path).exists() and cls.use_existing:
             return new_path
-        async with aiofiles.open(path) as inFile:
+        async with aiofiles_open(path) as inFile:
             try:
                 data = json.loads(await inFile.read())
             except Exception as e:
@@ -470,8 +478,13 @@ class PDBeDecoder(object):
                       'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
                       'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/', 'api/pdb/entry/carbohydrate_polymer/',
                       'api/pdb/entry/electron_density_statistics/', 'api/pdb/entry/related_experiment_data/',
-                      'api/pdb/entry/drugbank/',
-                      'graph-api/pdb/mutated_AA_or_NA/', 'graph-api/pdb/modified_AA_or_NA/'})
+                      'api/pdb/entry/drugbank/', 'api/mappings/best_structures/',
+                      'graph-api/pdb/mutated_AA_or_NA/', 'graph-api/pdb/modified_AA_or_NA/',
+                      'graph-api/mappings/best_structures/', 'graph-api/compound/atoms/',
+                      'graph-api/compound/bonds/', 'graph-api/compound/summary/',
+                      'graph-api/compound/cofactors/', 'graph-api/pdb/funpdbe/',
+                      'graph-api/pdb/bound_excluding_branched/',
+                      'graph-api/pdb/bound_molecules/', 'graph-api/pdb/ligand_monomers/'})
     def yieldCommon(data: Dict) -> Generator:
         for pdb in data:
             values = data[pdb]
@@ -479,7 +492,7 @@ class PDBeDecoder(object):
                 for key in value:
                     if isinstance(value[key], (Dict, List)):
                         value[key] = json.dumps(value[key]).decode('utf-8')
-            yield values, ('pdb_id',), (pdb,)
+            yield values, (default_id_tag(pdb, '_code_'),), (pdb,)
 
     @staticmethod
     @dispatch_on_set({'api/pdb/entry/polymer_coverage/'})
@@ -519,7 +532,7 @@ class PDBeDecoder(object):
                     yield residues, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
-    @dispatch_on_set({'api/pdb/entry/secondary_structure/'})
+    @dispatch_on_set({'api/pdb/entry/secondary_structure/', 'graph-api/pdb/secondary_structure/'})
     def yieldSecondaryStructure(data: Dict) -> Generator:
         for pdb in data:
             molecules = data[pdb]['molecules']
@@ -576,37 +589,54 @@ class PDBeDecoder(object):
                         continue
 
     @staticmethod
-    @dispatch_on_set({'api/mappings/all_isoforms/'})
-    def yieldSIFTSRange(data: Dict) -> Generator:
-        top_root = next(iter(data))  # PDB_ID or UniProt Isoform ID
-        sec_root = next(iter(data[top_root]))  # 'UniProt' or 'PDB'
-        child = data[top_root][sec_root]
-        thi_root = next(iter(child))
-        test_value = child[thi_root]
-        # from PDB to UniProt
-        if isinstance(test_value, Dict) and sec_root == 'UniProt':
-            for uniprot in child:
-                name = child[uniprot]['name']
-                identifier = child[uniprot]['identifier']
-                chains = child[uniprot]['mappings']
-                for chain in chains:
-                    chain['start'] = json.dumps(chain['start']).decode('utf-8')
-                    chain['end'] = json.dumps(chain['end']).decode('utf-8')
-                    chain['pdb_id'] = top_root
-                    chain[sec_root] = uniprot
-                    chain['identifier'] = identifier
-                    chain['name'] = name
-                yield chains, None
-        # from UniProt to PDB
-        elif isinstance(test_value, List) and sec_root == 'PDB':
-            for pdb in child:
-                chains = child[pdb]
-                for chain in chains:
-                    chain['start'] = json.dumps(chain['start']).decode('utf-8')
-                    chain['end'] = json.dumps(chain['end']).decode('utf-8')
-                yield chains, ('pdb_id', 'UniProt'), (pdb, top_root)
-        else:
-            raise ValueError(f'Unexpected data structure for inputted data: {data}')
+    @dispatch_on_set({'api/mappings/all_isoforms/', 'api/mappings/uniprot/',
+                      'api/mappings/uniprot_segments/', 'api/mappings/isoforms/',
+                      'api/mappings/uniref90/', 'api/mappings/homologene_uniref90/',
+                      'api/mappings/interpro/', 'api/mappings/pfam/',
+                      'api/mappings/cath/', 'api/mappings/cath_b/',
+                      'api/mappings/scop/', 'api/mappings/go/',
+                      'api/mappings/ec/', 'api/mappings/ensembl/',
+                      'api/mappings/hmmer/', 'api/mappings/sequence_domains/',
+                      'api/mappings/structural_domains/', 'api/mappings/homologene/',
+                      'api/mappings/uniprot_to_pfam/', 'api/mappings/uniprot_publications/',
+                      'graph-api/mappings/uniprot/', 'graph-api/mappings/uniprot_segments/',
+                      'graph-api/mappings/all_isoforms/', 'graph-api/mappings/',
+                      'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
+                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/'})
+    def yieldSIFTSAnnotation(data: Dict) -> Generator:
+        valid_annotation_set = {'UniProt', 'Ensembl', 'Pfam', 'CATH', 'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER'}
+        for top_root in data:
+            # top_root: PDB_ID or else ID
+            if data[top_root].keys() <= valid_annotation_set:
+                # from PDB to ('UniProt', 'Ensembl', 'Pfam', 'CATH', 'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER')
+                # from PDB_ENTITY (i.e. graph-api/mappings/homologene/)
+                # OR: from Uniprot (i.e. api/mappings/uniprot_to_pfam/)
+                for sec_root in data[top_root]:
+                    child = data[top_root][sec_root]
+                    for annotation in child:
+                        chains = child[annotation]['mappings']
+                        for chain in chains:
+                            for key, value in chain.items():
+                                chain[key] = json.dumps(value).decode('utf-8') if isinstance(value, Dict) else value
+                            for key, value in child[annotation].items():
+                                if key == 'mappings':
+                                    continue
+                                chain[key] = json.dumps(value).decode('utf-8') if isinstance(value, Dict) else value
+                            chain[default_id_tag(top_root, raise_error=True)] = top_root
+                            chain[sec_root] = annotation
+                        yield chains, None
+            elif len(data[top_root].keys()) == 1 and 'PDB' in data[top_root].keys():
+                # from UniProt to PDB
+                for sec_root in data[top_root]:
+                    child = data[top_root][sec_root]
+                    for pdb in child:
+                        chains = child[pdb]
+                        for chain in chains:
+                            chain['start'] = json.dumps(chain['start']).decode('utf-8')
+                            chain['end'] = json.dumps(chain['end']).decode('utf-8')
+                        yield chains, ('pdb_id', 'UniProt'), (pdb, top_root)
+            else:
+                raise ValueError(f'Unexpected data structure for inputted data: {data}')
 
     @staticmethod
     @dispatch_on_set({'api/pisa/interfacelist/'})
@@ -640,20 +670,6 @@ class PDBeDecoder(object):
             cols = sorted(i for i in data[pdb].keys() if i != 'interface_detail.residues')
             yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
             yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
-
-    @staticmethod
-    @dispatch_on_set({'swissmodel/repository/uniprot/'})
-    def yieldSMR(data: Dict):
-        cols = ('sequence_length',
-                'ac', 'id', 'isoid')
-        uniprot_entries = data['result']['uniprot_entries']
-        
-        assert len(uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
-        
-        for col in ('ac', 'id', 'isoid'):
-            data['result'][col] = uniprot_entries[0].get(col, None)
-        
-        yield data['result']['structures'], cols, tuple(data['result'][col] for col in cols)
 
     @staticmethod
     @dispatch_on_set({'graph-api/residue_mapping/'})

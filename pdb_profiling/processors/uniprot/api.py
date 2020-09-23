@@ -374,6 +374,13 @@ class MapUniProtID(Abclog):
 
 
 class UniProtFASTA(Abclog):
+    '''
+    Download UniProt Fasta Sequences
+
+    >>> UniProtFASTA.retrieve(
+        ('Q6NZ36', 'P12755'),
+        init_folder_from_suffix(yourfolder, 'UniProt/fasta/'))
+    '''
 
     params = {'include': 'yes'}
     obj = {}

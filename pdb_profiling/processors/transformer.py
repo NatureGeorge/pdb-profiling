@@ -5,7 +5,7 @@
 # @Last Modified: 2020-02-11 04:22:22 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pyexcel import get_sheet, Sheet
-import tablib
+from tablib import Dataset
 from collections import OrderedDict
 from typing import Dict, Iterable, Tuple
 
@@ -57,12 +57,12 @@ class Dict2Tabular(object):
         return cur_sheet
 
     @staticmethod
-    def sync_with_tablib(*args) -> tablib.Dataset:
+    def sync_with_tablib(*args) -> Dataset:
         records, *remain = args
         if not len(records):
             return None
         keys = {key for record in records for key in record.keys()}
-        ob = tablib.Dataset()
+        ob = Dataset()
         records = [OrderedDict(sorted((key, record.get(key, None)) for key in keys))
                    for record in records]
         ob.dict = records
@@ -73,7 +73,7 @@ class Dict2Tabular(object):
         return ob
 
     @classmethod
-    def tablib_io(cls, data: Iterable[Tuple]) -> tablib.Dataset:
+    def tablib_io(cls, data: Iterable[Tuple]) -> Dataset:
         cur_ob = None
         for res in data:
             try:
