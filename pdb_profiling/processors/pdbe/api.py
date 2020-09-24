@@ -54,7 +54,7 @@ def dispatch_on_set(keys: Set):
     Decorator to add new dispatch functions
     '''
     def register(func):
-        FUNCS.append((func, set(keys)))
+        FUNCS.append((func, frozenset(keys)))
         return func
     return register
 
@@ -704,8 +704,8 @@ class PDBeModelServer(Abclog):
     
     root = 'model-server/v1/'
     headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
-    api_sets = {'atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
-                'residueSurroundings', 'symmetryMates', 'query-many'}
+    api_sets = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
+                'residueSurroundings', 'symmetryMates', 'query-many'))
     
     @classmethod
     def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params) -> Generator:
@@ -762,8 +762,8 @@ class PDBArchive(Abclog):
     * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
     '''
     root = PDB_ARCHIVE_URL_EBI
-    api_sets = {f'{i}/{j}/' for i in ('obsolete', 'divided')
-                for j in ('mmCIF', 'pdb', 'XML')}
+    api_sets = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
+                for j in ('mmCIF', 'pdb', 'XML'))
 
     @classmethod
     def yieldTasks(cls, pdbs, suffix: str, file_suffix: str, folder: Path) -> Generator:
