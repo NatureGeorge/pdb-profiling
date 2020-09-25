@@ -32,7 +32,7 @@ def default_config():
     from pdb_profiling.log import Abclog
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
     from pdb_profiling.processors.pdbe.api import ProcessPDBe
-    from pdb_profiling.processors.pdbe.record import PDB, PDBeModelServer, PDBArchive
+    from pdb_profiling.processors.pdbe.record import Base, PDBeModelServer, PDBArchive
     from pdb_profiling.processors.uniprot.api import UniProtFASTA
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
@@ -45,9 +45,9 @@ def default_config():
     # Init WebFetcher's Logger (pass it with Abclog Logger)
     UnsyncFetch.init_setting(ProcessPDBe.logger)
     # Set WebFetcher's Semaphore
-    PDB.set_web_semaphore(30)
+    Base.set_web_semaphore(30)
     # Set Folder that store downloaded and handled files
-    PDB.set_folder('./')
+    Base.set_folder('./')
     # Init ModelServer API's Logger (pass it with Abclog Logger)
     PDBeModelServer.init_logger(logger=ProcessPDBe.logger)
     # Init PDBArchive API's Logger (pass it with Abclog Logger)

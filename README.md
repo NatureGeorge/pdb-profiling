@@ -48,6 +48,7 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
 * Download data from PDB Archive against unexpected needs
   * wwwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
   * EBI: <http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/>
+  * wwwPDB Versioned: <http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/>
 
 ## Install
 

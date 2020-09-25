@@ -36,8 +36,11 @@ FTP_DEFAULT_PATH: str = 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.g
 
 PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
 PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
+PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/
+
 # https://ftp.wwpdb.org/pub/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
 # http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
+# http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/wm/pdb_00002wmg/pdb_00002wmg_xyz_v1-2.cif.gz
 
 FUNCS = list()
 
@@ -758,7 +761,7 @@ class PDBArchive(Abclog):
     '''
     Download files from PDB Archive
 
-    * wwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
+    * wwwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
     * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
     '''
     root = PDB_ARCHIVE_URL_EBI
@@ -766,10 +769,14 @@ class PDBArchive(Abclog):
                 for j in ('mmCIF', 'pdb', 'XML'))
 
     @classmethod
+    def task_unit(cls, pdb: str, suffix: str, file_suffix: str, folder: Path):
+        args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{pdb}{file_suffix}')
+        return 'get', args, folder/f'{pdb}{file_suffix}'
+
+    @classmethod
     def yieldTasks(cls, pdbs, suffix: str, file_suffix: str, folder: Path) -> Generator:
         for pdb in pdbs:
-            args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{pdb}{file_suffix}')
-            yield 'get', args, folder/f'{pdb}{file_suffix}'
+            yield task_unit(pdb, suffix, file_suffix, folder)
 
     @classmethod
     def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: str = '.cif.gz', concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
@@ -783,11 +790,29 @@ class PDBArchive(Abclog):
         return res
     
     @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, folder: Path, semaphore, file_suffix: str = '.cif.gz', rate: float = 1.5):
+    def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: str = '.cif.gz', rate: float = 1.5):
         return UnsyncFetch.single_task(
-            task=next(cls.yieldTasks((pdb, ), suffix, file_suffix, folder)),
+            task=cls.task_unit(pdb, suffix, file_suffix, folder),
             semaphore=semaphore,
             rate=rate)
+
+
+class PDBVersioned(PDBArchive):
+    '''
+    Download files from PDB Versioned
+
+    * wwwPDB Versioned: PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/'
+    '''
+    root = PDB_ARCHIVE_VERSIONED_URL
+    api_sets = frozenset(('entries/', 'removed/'))
+
+    @classmethod
+    def task_unit(cls, pdb_with_version: Tuple, suffix: str, file_suffix: str, folder: Path):
+        pdb, version_info = pdb_with_version
+        file_name = f'pdb_0000{pdb}_xyz{version_info}{file_suffix}'
+        args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/pdb_0000{pdb}/{file_name}')
+        return 'get', args, folder/file_name
+
 
 # TODO: Chain UniProt ID Mapping -> ProcessSIFTS -> ProcessPDBe
 # TODO: Deal with oligomeric PDB

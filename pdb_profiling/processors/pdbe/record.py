@@ -44,9 +44,102 @@ class PropertyRegister(object):
         return getattr(that, f'_{self._name}')
 
 
-class PDB(object):
-
+class Base(object):
+    
     folder = None
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.get_id()}>"
+
+    def register_task(self, key: Hashable, task: Unfuture):
+        self.tasks[key] = task
+
+    def set_neo4j_connection(self, api):
+        pass
+
+    def set_sqlite_connection(self, api):
+        pass
+
+    @classmethod
+    def set_web_semaphore(cls, web_semaphore_value):
+        cls.web_semaphore = init_semaphore(web_semaphore_value).result()
+
+    @classmethod
+    def get_web_semaphore(cls):
+        return cls.web_semaphore
+
+    @classmethod
+    def set_db_semaphore(cls, db_semaphore_value):
+        cls.db_semaphore = init_semaphore(db_semaphore_value).result()
+
+    @classmethod
+    def get_db_semaphore(cls):
+        return cls.db_semaphore
+
+    @classmethod
+    def set_folder(cls, folder: Union[Path, str]):
+        folder = Path(folder)
+        assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
+        cls.folder = folder
+
+    @classmethod
+    def get_folder(cls) -> Path:
+        cls.check_folder()
+        return cls.folder
+
+    @classmethod
+    def check_folder(cls):
+        if cls.folder is None:
+            raise ValueError("Please set folder via PDB.set_folder(folder: Union[Path, str])")
+    
+    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
+        assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
+        task = self.tasks.get((api_suffix, then_func, json, mask_id), None)
+        if task is not None:
+            return task
+
+        args = dict(pdb=self.get_id() if mask_id is None else mask_id,
+                    suffix=api_suffix,
+                    method='get',
+                    folder=init_folder_from_suffix(
+                        self.get_folder(), api_suffix),
+                    semaphore=self.get_web_semaphore())
+        if json:
+            args['to_do_func'] = None
+        task = ProcessPDBe.single_retrieve(**args)
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((api_suffix, then_func, json, mask_id), task)
+        return task
+
+    @classmethod
+    @unsync
+    async def to_dataframe(cls, path):
+        path = await path
+        if path is None:
+            return None
+        df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters)
+        return df
+
+    @classmethod
+    @unsync
+    async def to_dataframe_with_kwargs(cls, path):
+        path = await path
+        if path is None:
+            return None
+        df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters, **cls.get_to_df_kwargs())
+        return df
+
+    @classmethod
+    def set_to_df_kwargs(cls, **kwargs):
+        cls.to_df_kwargs = kwargs
+
+    @classmethod
+    def get_to_df_kwargs(cls):
+        return cls.to_df_kwargs
+
+
+class PDB(Base):
 
     @unsync
     async def prepare_property(self, raw_data):
@@ -92,41 +185,6 @@ class PDB(object):
         """
         pass
 
-    def register_task(self, key: Hashable, task: Unfuture):
-        self.tasks[key] = task
-
-    @classmethod
-    def set_web_semaphore(cls, web_semaphore_value):
-        cls.web_semaphore = init_semaphore(web_semaphore_value).result()
-
-    @classmethod
-    def get_web_semaphore(cls):
-        return cls.web_semaphore
-
-    @classmethod
-    def set_db_semaphore(cls, db_semaphore_value):
-        cls.db_semaphore = init_semaphore(db_semaphore_value).result()
-
-    @classmethod
-    def get_db_semaphore(cls):
-        return cls.db_semaphore
-
-    @classmethod
-    def set_folder(cls, folder: Union[Path, str]):
-        folder = Path(folder)
-        assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
-        cls.folder = folder
-    
-    @classmethod
-    def get_folder(cls) -> Path:
-        cls.check_folder()
-        return cls.folder
-
-    @classmethod
-    def check_folder(cls):
-        if cls.folder is None:
-            raise ValueError("Please set folder via PDB.set_folder(folder: Union[Path, str])")
-
     def __init__(self, pdb_id: str):
         self.check_folder()
         self.set_id(pdb_id)
@@ -134,40 +192,12 @@ class PDB(object):
         self.pdb_ob = self
         self.properties_inited = False
     
-    def __repr__(self):
-        return f"<{self.__class__.__name__} {self.get_id()}>"
-    
     def set_id(self, pdb_id: str):
         assert default_id_tag(pdb_id) == 'pdb_id', "Invalid PDB ID!"
         self.pdb_id = pdb_id.lower()
 
     def get_id(self):
         return self.pdb_id
-
-    def set_neo4j_connection(self, api):
-        pass
-
-    def set_sqlite_connection(self, api):
-        pass
-
-    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id:str=None) -> Unfuture:
-        assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
-        task = self.tasks.get((api_suffix, then_func, json, mask_id), None)
-        if task is not None:
-            return task
-        
-        args = dict(pdb=self.get_id() if mask_id is None else mask_id,
-                    suffix=api_suffix,
-                    method='get',
-                    folder=init_folder_from_suffix(self.get_folder(), api_suffix),
-                    semaphore=self.get_web_semaphore())
-        if json:
-            args['to_do_func'] = None
-        task = ProcessPDBe.single_retrieve(**args)
-        if then_func is not None:
-            task = task.then(then_func)
-        self.register_task((api_suffix, then_func, json, mask_id), task)
-        return task
 
     def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_sets, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_sets}"
@@ -304,32 +334,6 @@ class PDB(object):
             label_asym_id=res_dict['struct_asym_id'],
             label_seq_id=int(res_dict['residue_number']))])
         return json.dumps(demo_dict).decode('utf-8')
-
-    @classmethod
-    @unsync
-    async def to_dataframe(cls, path):
-        path = await path
-        if path is None:
-            return None
-        df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters)
-        return df
-    
-    @classmethod
-    @unsync
-    async def to_dataframe_with_kwargs(cls, path):
-        path = await path
-        if path is None:
-            return None
-        df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters, **cls.get_to_df_kwargs())
-        return df
-
-    @classmethod
-    def set_to_df_kwargs(cls, **kwargs):
-        cls.to_df_kwargs = kwargs
-
-    @classmethod
-    def get_to_df_kwargs(cls):
-        return cls.to_df_kwargs
 
     @classmethod
     @unsync
@@ -854,7 +858,6 @@ class SIFTS(PDB):
             self.identifier = identifier.upper()
         else:
             raise AssertionError(f"Invalid identifier: <{identifier}, {tag}>")
-        
 
     def get_id(self):
         return self.identifier
@@ -863,7 +866,7 @@ class SIFTS(PDB):
         return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
 
 
-class Compounds(PDB):
+class Compounds(Base):
 
     def set_id(self, identifier: str):
         assert len(identifier) > 0, "Empty string is not a valid identifier!"
@@ -871,6 +874,11 @@ class Compounds(PDB):
 
     def get_id(self):
         return self.identifier
+
+    def __init__(self, identifier:str):
+        self.check_folder()
+        self.set_id(identifier)
+        self.tasks = dict()
 
 '''
 TODO: Deal with carbohydrate polymer in PISA
