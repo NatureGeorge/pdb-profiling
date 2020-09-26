@@ -21,11 +21,12 @@ class ProteinsAPI(Abclog):
     '''
     
     headers = {'Accept': 'application/json'}
-    api_sets = frozenset((
-                'coordinates', 'coordinates/', 'coordinates/location/',
-                'uniparc', 'uniparc/accession/', 'uniparc/best/guess',
-                'uniparc/dbreference/', 'uniparc/proteome/', 'uniparc/sequence',  # NOTE: uniparc/sequence use POST method!
-                'uniparc/upi/'))
+    api_set = frozenset((
+        'proteins', 'proteins/covid-19/entries', 'proteins/interaction/', 'proteins/',
+        'coordinates', 'coordinates/', 'coordinates/location/',
+        'uniparc', 'uniparc/accession/', 'uniparc/best/guess',
+        'uniparc/dbreference/', 'uniparc/proteome/', 'uniparc/sequence',  # NOTE: uniparc/sequence use POST method!
+        'uniparc/upi/'))
     
     @classmethod
     def get_file_suffix(cls) -> str:
@@ -43,7 +44,7 @@ class ProteinsAPI(Abclog):
             url=f'{BASE_URL}{suffix}' if identifier is None else f'{BASE_URL}{suffix}{identifier}',
             headers=cls.headers,
             params=params)
-        return 'get', args, folder/f'{identifier if identifier is not None else cls.dumpsParams(params)}.{cls.get_file_suffix()}'
+        return 'get', args, folder/f'{identifier.replace(":", "_")+"_"+cls.dumpsParams(params) if identifier is not None else cls.dumpsParams(params)}.{cls.get_file_suffix()}'
 
     @classmethod
     def yieldTasks(cls, suffix: str, params_collection: Iterable[Dict], folder: Path, identifiers: Optional[Iterable[str]]) -> Generator:
@@ -57,7 +58,7 @@ class ProteinsAPI(Abclog):
 
     @classmethod
     def retrieve(cls, suffix: str, params_collection: Iterable[Dict], folder: Union[Path, str], identifiers: Optional[Iterable[str]] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
-        assert suffix in cls.api_sets, f"Invalid suffix! Valid set is \n{cls.api_sets}"
+        assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(suffix, params_collection, folder, identifiers),
@@ -70,7 +71,7 @@ class ProteinsAPI(Abclog):
     
     @classmethod
     def single_retrieve(cls, suffix: str, params:Dict, folder: Union[Path, str], semaphore, identifier:Optional[str]=None, rate: float = 1.5):
-        assert suffix in cls.api_sets, f"Invalid suffix! Valid set is \n{cls.api_sets}"
+        assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
         return UnsyncFetch.single_task(
             task=cls.task_unit(suffix, params, folder, identifier),

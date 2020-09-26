@@ -12,6 +12,8 @@
 
 Profiling Protein Structures from Protein Data Bank and integrate various resources.
 
+[![HitCount](http://hits.dwyl.com/naturegeorge/pdb-profiling.svg)](http://hits.dwyl.com/naturegeorge/pdb-profiling)
+
 ## Goal
 
 * Gather helpful/insightful indexes to evaluate a PDB structure's usefulness in:
@@ -45,6 +47,12 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
   * Interactome3D API
     * <https://interactome3d.irbbarcelona.org/>
   * ModBase API (?)
+  * Ensembl REST API
+    * <https://rest.ensembl.org/documentation>
+    * NOTE: currently only support <https://rest.ensembl.org/documentation/info/sequence_id> to retrieve ensembl sequences
+  * Eutils API
+    * <https://eutils.ncbi.nlm.nih.gov/entrez/eutils/>
+    * NOTE: currently only support minimum use
 * Download data from PDB Archive against unexpected needs
   * wwwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
   * EBI: <http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/>

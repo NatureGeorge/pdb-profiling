@@ -12,7 +12,8 @@ from logging import Logger
 from pandas import read_csv, DataFrame, isna
 import numpy as np
 from pathlib import Path
-import aiofiles
+from aiofiles import open as aiofiles_open
+from re import compile as re_compile
 from tablib import Dataset
 from pyexcel import Sheet
 import asyncio
@@ -153,7 +154,7 @@ async def a_read_csv(path, read_mode='r',**kwargs):
     '''
     only suitable for small dataframe
     '''
-    async with aiofiles.open(path, read_mode) as file_io:
+    async with aiofiles_open(path, read_mode) as file_io:
         with StringIO(await file_io.read()) as text_io:
             return read_csv(text_io, **kwargs)
 
@@ -163,7 +164,7 @@ async def a_load_json(path):
         path = await path
     if path is None:
         return None
-    async with aiofiles.open(path) as inFile:
+    async with aiofiles_open(path) as inFile:
         return json.loads(await inFile.read())
 
 
@@ -176,7 +177,7 @@ async def pipe_out(df, path, **kwargs):
     mode = kwargs.get('mode', 'a')
     clear_headers:bool = path.exists() and mode.startswith('a')
     var_format = kwargs.get('format', 'tsv').lower()
-    async with aiofiles.open(path, mode) as file_io:
+    async with aiofiles_open(path, mode) as file_io:
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
             if clear_headers:
@@ -498,3 +499,75 @@ class DisplayPDB(object):
         if len(args) > 0:
             self.display(*args)
 
+
+fasta_pat = re_compile(r'(>.+)\n([A-Z\*\n]+)')
+unp_header_pat = re_compile(r'>sp\|(.+)\|')
+
+async def  a_seq_reader(path: Union[Unfuture, Union[Path, str]]):
+    if isinstance(path, Unfuture):
+        path = await path
+    async with aiofiles_open(path, 'rt') as handle:
+        header, content = fasta_pat.match(await handle.read()).groups()
+        return header, content.replace('\n', '')
+
+
+@unsync
+async def get_seq_from_parser(res, identifier, seq_only:bool = True):
+    async for header, content in await res:
+        if identifier in header:
+            return content if seq_only else (header, content)
+
+
+@unsync
+async def get_seqs_from_parser(res, identifiers:Optional[Iterable[str]]=None):
+    ret = []
+    async for header, content in await res:
+        header = unp_header_pat.match(header).group(1)
+        if identifiers is None or header in identifiers:
+            ret.append((header, content))
+    return ret
+
+
+async def a_seq_parser(path: Union[Unfuture, Union[Path, str]]):
+    if isinstance(path, Unfuture):
+        path = await path
+    async with aiofiles_open(path, 'rt') as handle:
+        header, content = None, ''
+        async for line in handle:
+            if line.startswith('>'):
+                if header is not None:
+                    yield header.strip(), content.replace('\n', '')
+                header, content = line, ''
+            else:
+                content += line
+        yield header.strip(), content.replace('\n', '')
+
+nu2aa_dict = {
+    'ATA': 'I', 'ATC': 'I', 'ATT': 'I', 'ATG': 'M',
+    'ACA': 'T', 'ACC': 'T', 'ACG': 'T', 'ACT': 'T',
+    'AAC': 'N', 'AAT': 'N', 'AAA': 'K', 'AAG': 'K',
+    'AGC': 'S', 'AGT': 'S', 'AGA': 'R', 'AGG': 'R',
+    'CTA': 'L', 'CTC': 'L', 'CTG': 'L', 'CTT': 'L',
+    'CCA': 'P', 'CCC': 'P', 'CCG': 'P', 'CCT': 'P',
+    'CAC': 'H', 'CAT': 'H', 'CAA': 'Q', 'CAG': 'Q',
+    'CGA': 'R', 'CGC': 'R', 'CGG': 'R', 'CGT': 'R',
+    'GTA': 'V', 'GTC': 'V', 'GTG': 'V', 'GTT': 'V',
+    'GCA': 'A', 'GCC': 'A', 'GCG': 'A', 'GCT': 'A',
+    'GAC': 'D', 'GAT': 'D', 'GAA': 'E', 'GAG': 'E',
+    'GGA': 'G', 'GGC': 'G', 'GGG': 'G', 'GGT': 'G',
+    'TCA': 'S', 'TCC': 'S', 'TCG': 'S', 'TCT': 'S',
+    'TTC': 'F', 'TTT': 'F', 'TTA': 'L', 'TTG': 'L',
+    'TAC': 'Y', 'TAT': 'Y', 'TAA': '_', 'TAG': '_',
+    'TGC': 'C', 'TGT': 'C', 'TGA': '_', 'TGG': 'W',
+}
+
+def translate2aa(seq:str, check:bool=False):
+    assert len(seq) % 3 == 0, "Invalid length of dna OR rna sequence!"
+    seq = seq.replace('U', 'T')
+    p_seq = ""
+    for i in range(0, len(seq), 3):
+        codon = seq[i:i + 3]
+        p_seq += nu2aa_dict[codon]
+    if check:
+        assert "_" not in p_seq, "Invalid Sequence!"
+    return p_seq

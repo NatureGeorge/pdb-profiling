@@ -406,11 +406,15 @@ class UniProtFASTA(Abclog):
         return path
 
     @classmethod
+    def task_unit(cls, unp:str, folder: Union[str, Path]):
+        cur_fileName = f'{unp}.fasta'
+        cur_filePath = str(Path(folder, cur_fileName))
+        return ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': cls.params}, cur_filePath)
+
+    @classmethod
     def yieldTasks(cls, lyst: Iterable, folder: Union[str, Path]) -> Generator:
         for unp in lyst:
-            cur_fileName = f'{unp}.fasta'
-            cur_filePath = str(Path(folder, cur_fileName))
-            yield ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': cls.params}, cur_filePath)
+            return cls.task_unit(unp, folder)
 
     @classmethod
     def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, semaphore=None):
@@ -421,3 +425,10 @@ class UniProtFASTA(Abclog):
             logger=cls.logger,
             ret_res=ret_res,
             semaphore=semaphore)
+    
+    @classmethod
+    def single_retrieve(cls, identifier: str, folder: Union[str, Path], semaphore, rate: float = 1.5):
+        return UnsyncFetch.single_task(
+            task=cls.task_unit(identifier, folder),
+            semaphore=semaphore,
+            rate=rate)

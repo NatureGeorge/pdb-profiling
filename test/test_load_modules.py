@@ -12,8 +12,8 @@ def import_self_modules():
     return all((
         importlib.import_module("pdb_profiling.fetcher.webfetch") is not None,
         importlib.import_module("pdb_profiling.utils") is not None,
-        importlib.import_module("pdb_profiling.processers.pdbe.api") is not None,
-        importlib.import_module("pdb_profiling.processers.pdbe.record") is not None))
+        importlib.import_module("pdb_profiling.processors.pdbe.api") is not None,
+        importlib.import_module("pdb_profiling.processors.pdbe.record") is not None))
 
 
 def test_import():
@@ -21,5 +21,5 @@ def test_import():
     assert import_self_modules()
 
 def test_retrieve():
-    from pdb_profiling.processers.pdbe.record import PDB
+    from pdb_profiling.processors.pdbe.record import PDB
     assert PDB('1a01').status['status_code'] == 'REL'

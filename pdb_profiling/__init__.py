@@ -36,21 +36,13 @@ def default_config():
     from pdb_profiling.processors.uniprot.api import UniProtFASTA
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
-    # Init Abclog Logger
-    Abclog.init_logger(logName='PDB-Profiling')
-    # Init ProcessPDBe's Logger (pass it with Abclog Logger)
-    ProcessPDBe.init_logger(logger=Abclog.logger)
     # Use Existing API Results (e.g. json format results downloaded from web)
     UnsyncFetch.use_existing = True
+    # Init Abclog Logger
+    Abclog.init_logger(logName='PDB-Profiling')
     # Init WebFetcher's Logger (pass it with Abclog Logger)
-    UnsyncFetch.init_setting(ProcessPDBe.logger)
+    UnsyncFetch.init_setting(Abclog.logger)
     # Set WebFetcher's Semaphore
     Base.set_web_semaphore(30)
     # Set Folder that store downloaded and handled files
     Base.set_folder('./')
-    # Init ModelServer API's Logger (pass it with Abclog Logger)
-    PDBeModelServer.init_logger(logger=ProcessPDBe.logger)
-    # Init PDBArchive API's Logger (pass it with Abclog Logger)
-    PDBArchive.init_logger(logger=ProcessPDBe.logger)
-    # Init UniProtFASTA API's Logger (pass it with Abclog Logger)
-    UniProtFASTA.init_logger(logger=ProcessPDBe.logger)

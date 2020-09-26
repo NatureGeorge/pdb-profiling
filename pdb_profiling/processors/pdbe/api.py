@@ -36,7 +36,7 @@ FTP_DEFAULT_PATH: str = 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.g
 
 PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
 PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
-PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/
+PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/'
 
 # https://ftp.wwpdb.org/pub/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
 # http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
@@ -707,7 +707,7 @@ class PDBeModelServer(Abclog):
     
     root = 'model-server/v1/'
     headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
-    api_sets = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
+    api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
                 'residueSurroundings', 'symmetryMates', 'query-many'))
     
     @classmethod
@@ -765,7 +765,7 @@ class PDBArchive(Abclog):
     * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
     '''
     root = PDB_ARCHIVE_URL_EBI
-    api_sets = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
+    api_set = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
                 for j in ('mmCIF', 'pdb', 'XML'))
 
     @classmethod
@@ -802,9 +802,14 @@ class PDBVersioned(PDBArchive):
     Download files from PDB Versioned
 
     * wwwPDB Versioned: PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/'
+
+    >>> PDBVersioned.single_retrieve(
+        ('2wmg', '_v1-2'), 'entries/', 
+        init_folder_from_suffix(Base.get_folder(), 'pdb-versioned/entries'), 
+        Base.get_web_semaphore()).result()
     '''
     root = PDB_ARCHIVE_VERSIONED_URL
-    api_sets = frozenset(('entries/', 'removed/'))
+    api_set = frozenset(('entries/', 'removed/'))
 
     @classmethod
     def task_unit(cls, pdb_with_version: Tuple, suffix: str, file_suffix: str, folder: Path):

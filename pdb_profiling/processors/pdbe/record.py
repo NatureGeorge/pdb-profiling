@@ -200,7 +200,7 @@ class PDB(Base):
         return self.pdb_id
 
     def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
-        assert api_suffix in PDBeModelServer.api_sets, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_sets}"
+        assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
         task = self.tasks.get((PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), None)
         if task is not None:
             return task
@@ -218,7 +218,7 @@ class PDB(Base):
         return task
 
     def fetch_from_PDBArchive(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
-        assert api_suffix in PDBArchive.api_sets, f"Invlaid API SUFFIX! Valid set:\n{PDBArchive.api_sets}"
+        assert api_suffix in PDBArchive.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBArchive.api_set}"
         task = self.tasks.get((PDBArchive.root, api_suffix, then_func), None)
         if task is not None:
             return task
@@ -879,6 +879,7 @@ class Compounds(Base):
         self.check_folder()
         self.set_id(identifier)
         self.tasks = dict()
+
 
 '''
 TODO: Deal with carbohydrate polymer in PISA
