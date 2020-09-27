@@ -6,6 +6,8 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from pathlib import Path
+from numpy import nan
+from pandas import DataFrame
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 
@@ -94,3 +96,53 @@ class ProteinsAPI(Abclog):
             semaphore=semaphore,
             rate=rate)
         
+    @classmethod
+    def flat_data(cls, data, surface=False, except_keys=[]):
+        if isinstance(data, dict):
+            if len(data) == 1 and 'value' in data:
+                return cls.flat_data(data['value'], except_keys=except_keys)
+            else:
+                new = dict()
+                for key, value in data.items():
+                    if key in except_keys:
+                        new[key] = value
+                    else:
+                        new[key] = cls.flat_data(value, except_keys=except_keys)
+                return new
+        elif isinstance(data, list):
+            if len(data) == 1 and not surface:
+                return cls.flat_data(data[0], except_keys=except_keys)
+            else:
+                return [cls.flat_data(i, except_keys=except_keys) for i in data]
+        else:
+            return data
+
+    @classmethod
+    def pipe_summary(cls, data: Dict):
+        if len(data) != 1:
+            cls.logger.warning(
+                f"Unexcepted Length from ProteinsAPI.pipe_summary: {len(data)}")
+            return None, None
+        data = data[0]
+        dbReferences_lyst = []
+        common_cols = ('type', 'isoform')
+        for i in data['dbReferences']:
+            if i['type'] == 'RefSeq':
+                dbReferences_lyst.append({
+                    **{key: i.get(key, nan) for key in common_cols},
+                    **dict(Entry=data['accession'], protein=i['id'], transcript=i['properties']['nucleotide sequence ID'], gene=nan),
+                })
+            elif i['type'] == 'Ensembl':
+                dbReferences_lyst.append({
+                    **{key: i.get(key, nan) for key in common_cols},
+                    **dict(Entry=data['accession'], protein=i['properties']['protein sequence ID'], transcript=i['id'], gene=i['properties']['gene ID'])})
+        dbReferences_df = DataFrame(dbReferences_lyst)
+        # features_df = pd.DataFrame(data['features']); features_df['Entry'] = data['accession']
+        iso_df = None
+        for comment in data['comments']:
+            if comment['type'] == 'ALTERNATIVE_PRODUCTS':
+                iso_df = DataFrame(
+                    cls.flat_data(comment['isoforms'], surface=True, except_keys={'sequence'}))
+                iso_df['Entry'] = data['accession']
+                break
+        return dbReferences_df, iso_df  # features_df

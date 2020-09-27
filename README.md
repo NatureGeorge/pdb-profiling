@@ -44,12 +44,16 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
     * <https://swissmodel.expasy.org/docs/smr_openapi>
   * EBI Proteins API
     * <https://www.ebi.ac.uk/proteins/api/doc/>
+  * UniProt API
+    * <https://www.uniprot.org/uploadlists/>
+    * <https://www.uniprot.org/uniprot/*.fasta>
   * Interactome3D API
     * <https://interactome3d.irbbarcelona.org/>
   * ModBase API (?)
   * Ensembl REST API
     * <https://rest.ensembl.org/documentation>
-    * NOTE: currently only support <https://rest.ensembl.org/documentation/info/sequence_id> to retrieve ensembl sequences
+    * <https://rest.ensembl.org/documentation/info/sequence_id>
+    * <https://rest.ensembl.org/documentation/info/archive_id_get>
   * Eutils API
     * <https://eutils.ncbi.nlm.nih.gov/entrez/eutils/>
     * NOTE: currently only support minimum use

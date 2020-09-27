@@ -571,3 +571,10 @@ def translate2aa(seq:str, check:bool=False):
     if check:
         assert "_" not in p_seq, "Invalid Sequence!"
     return p_seq
+
+
+def unsync_run(arg):
+    @unsync
+    async def unsync_wrap(arg):
+        return await arg 
+    return unsync_wrap(arg).result()
