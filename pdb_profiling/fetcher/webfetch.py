@@ -54,24 +54,10 @@ class UnsyncFetch(Abclog):
         * https://tenacity.readthedocs.io/en/latest/
     '''
 
-    retry_kwargs = {
-        'wait': wait_random(max=10),
-        'stop': stop_after_attempt(3),
-        # 'after': after_log(logger, logging.WARNING)
-        }
     use_existing: bool = False
-    logger_set:bool = False
 
     @classmethod
-    def init_setting(cls, logger: Optional[logging.Logger] = None):
-        if not cls.logger_set:
-            cls.init_logger(cls.__name__, logger)
-            cls.retry_kwargs['after'] = after_log(cls.logger, logging.WARNING)
-            cls.http_download = retry(cls.http_download, **cls.retry_kwargs)
-            cls.ftp_download = retry(cls.ftp_download, **cls.retry_kwargs)
-            cls.logger_set = True
-
-    @classmethod
+    @retry(wait=wait_random(max=10), stop=stop_after_attempt(3))
     async def http_download(cls, method: str, info: Dict, path: str):
         if cls.use_existing is True and os.path.exists(path):
             return path
@@ -96,6 +82,7 @@ class UnsyncFetch(Abclog):
                     raise Exception(mes)
 
     @classmethod
+    @retry(wait=wait_random(max=10), stop=stop_after_attempt(3))
     async def ftp_download(cls, method: str, info: Dict, path: str):
         url = furl(info['url'])
         fileName = url.path.segments[-1]

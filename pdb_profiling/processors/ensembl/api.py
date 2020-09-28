@@ -25,27 +25,31 @@ class EnsemblAPI(Abclog):
 
     @classmethod
     def get_file_suffix(cls, headers: Optional[Dict]) -> str:
-        if headers is None:
-            headers = cls.headers
         res = headers["Content-Type"].split('/')[1]
         assert res in ('plain', 'x-seqxml+xml', 'x-fasta', 'json'), f"Unexcepted Case: {cls.headers}"
         return res.replace('x-', '').replace('seqxml+', '')
 
     @classmethod
-    def task_unit(cls, suffix: str, identifier: str, params: Dict, folder: Path, headers:Optional[Dict]) -> Tuple:
-        args = dict(
-            url=f'{BASE_URL}{suffix}{identifier}',
-            headers=cls.headers if headers is None else headers,
-            params=params)
+    def task_unit(cls, suffix: str, identifier: str, params: Optional[Dict], folder: Path, headers:Optional[Dict]) -> Tuple:
+        headers = cls.headers if headers is None else headers
+        if params is not None:
+            args = dict(
+                url=f'{BASE_URL}{suffix}{identifier}',
+                headers=headers,
+                params=params)
+        else:
+            args = dict(
+                url=f'{BASE_URL}{suffix}{identifier}',
+                headers=headers)
         return 'get', args, folder/f'{identifier}.{cls.get_file_suffix(headers)}'
 
     @classmethod
-    def yieldTasks(cls, suffix: str, identifiers: Iterable[str], params_collection: Iterable[Dict], folder: Path, headers: Optional[Dict]) -> Generator:
+    def yieldTasks(cls, suffix: str, identifiers: Iterable[str], params_collection: Iterable[Optional[Dict]], folder: Path, headers: Optional[Dict]) -> Generator:
         for identifier, params in zip(identifiers, params_collection):
             yield cls.task_unit(suffix, identifier, params, folder, headers)
     
     @classmethod
-    def retrieve(cls, suffix: str, identifiers: Iterable[str], params_collection: Iterable[Dict], folder: Union[Path, str], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, headers: Optional[Dict] = None, **kwargs):
+    def retrieve(cls, suffix: str, identifiers: Iterable[str], params_collection: Iterable[Optional[Dict]], folder: Union[Path, str], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, headers: Optional[Dict] = None, **kwargs):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
         res = UnsyncFetch.multi_tasks(
@@ -58,7 +62,7 @@ class EnsemblAPI(Abclog):
         return res
 
     @classmethod
-    def single_retrieve(cls, suffix: str, identifier: str, params: Dict, folder: Union[Path, str], semaphore, rate: float = 1.5, headers: Optional[Dict] = None):
+    def single_retrieve(cls, suffix: str, identifier: str, params: Optional[Dict], folder: Union[Path, str], semaphore, rate: float = 1.5, headers: Optional[Dict] = None):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
         return UnsyncFetch.single_task(

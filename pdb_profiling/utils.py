@@ -503,7 +503,7 @@ class DisplayPDB(object):
 fasta_pat = re_compile(r'(>.+)\n([A-Z\*\n]+)')
 unp_header_pat = re_compile(r'>sp\|(.+)\|')
 
-async def  a_seq_reader(path: Union[Unfuture, Union[Path, str]]):
+async def a_seq_reader(path: Union[Unfuture, Union[Path, str]]):
     if isinstance(path, Unfuture):
         path = await path
     async with aiofiles_open(path, 'rt') as handle:

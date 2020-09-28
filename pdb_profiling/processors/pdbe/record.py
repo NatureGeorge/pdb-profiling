@@ -48,6 +48,12 @@ class Base(object):
     
     folder = None
 
+    def __init__(self):
+        self.tasks = dict()
+
+    def get_id(self):
+        pass
+
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.get_id()}>"
 
@@ -61,16 +67,18 @@ class Base(object):
         pass
 
     @classmethod
-    def set_web_semaphore(cls, web_semaphore_value):
-        cls.web_semaphore = init_semaphore(web_semaphore_value).result()
+    @unsync
+    async def set_web_semaphore(cls, web_semaphore_value):
+        cls.web_semaphore = await init_semaphore(web_semaphore_value)
 
     @classmethod
     def get_web_semaphore(cls):
         return cls.web_semaphore
 
     @classmethod
-    def set_db_semaphore(cls, db_semaphore_value):
-        cls.db_semaphore = init_semaphore(db_semaphore_value).result()
+    @unsync
+    async def set_db_semaphore(cls, db_semaphore_value):
+        cls.db_semaphore = await init_semaphore(db_semaphore_value)
 
     @classmethod
     def get_db_semaphore(cls):
