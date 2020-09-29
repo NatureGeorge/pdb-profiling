@@ -73,8 +73,7 @@ class Identifier(Abclog):
         except AttributeError:
             raise AttributeError(
                 "Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")
-        self.ensembl_status = None
-        self.refseq_status = None
+        self.status = None
 
     def __repr__(self):
         return f'<{self.source} {self.level} {self.identifier} {self.version}>'
@@ -89,9 +88,9 @@ class Identifier(Abclog):
                 self.ensembl_api_web_semaphore,
                 headers={'Content-Type': 'application/json'})
             if res is None:
-                self.ensembl_status = False
+                self.status = False
             else:
-                self.ensembl_status = await a_load_json(res)
+                self.status = await a_load_json(res)
 
     @unsync
     async def fetch_from_ProteinsAPI(self):
@@ -116,7 +115,17 @@ class Identifier(Abclog):
                 f"Can't find dbReference with {self.identifier}")
 
     @unsync
-    async def map2unp(self):
+    async def get_all_level_identifiers(self):
+        try:
+            return dict(zip(('protein', 'transcript', 'gene'), await self.sqlite_api.database.fetch_one(
+                query=f"""
+                    SELECT protein,transcript,gene FROM dbReferences
+                    WHERE type == '{self.source}' AND {self.level} == '{self.raw_identifier}'""")))
+        except TypeError:
+            return
+
+    @unsync
+    async def map2unp_from_localDB(self):
         try:
             entry, isoform = await self.sqlite_api.database.fetch_one(
                 query=f"""
@@ -149,19 +158,21 @@ class Identifier(Abclog):
                 self.seq_folder['RefSeq'],
                 self.eutils_api_web_semaphore)
             if res is not None:
+                self.status = True
                 return await a_seq_reader(res)
             else:
+                self.status = False
                 self.logger.warning(f'Invalid Identifier!')
         
         elif self.source == 'Ensembl':
-            if self.ensembl_status is None:
+            if self.status is None:
                 await self.set_status()
-            if self.ensembl_status is False:
+            if self.status is False:
                 self.logger.warning(f'Invalid Identifier!')
                 return
-            elif self.ensembl_status['is_current'] != '1':
+            elif self.status['is_current'] != '1':
                 self.logger.warning(
-                    f'Not exists in current archive: \n{self.ensembl_status}')
+                    f'Not exists in current archive: \n{self.status}')
                 return
             if not newest:
                 self.logger.warning(
@@ -171,3 +182,11 @@ class Identifier(Abclog):
                 dict(type='protein'),
                 self.seq_folder['Ensembl'],
                 self.ensembl_api_web_semaphore).then(a_seq_reader)
+
+    @unsync
+    async def map2unp(self):
+        res = await self.map2unp_from_localDB()
+        if res is None:
+            await self.fetch_from_ProteinsAPI()
+            res = await self.map2unp_from_localDB()
+        return res

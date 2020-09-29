@@ -22,7 +22,7 @@ class EutilsAPI(Abclog):
     '''
     headers = {"Content-Type": "text/plain"}
     api_set = frozenset(('efetch.fcgi', 'einfo.fcgi', 'esearch.fcgi',
-                         'epost.fcgi', 'esummary.fcgi'))
+                         'epost.fcgi', 'esummary.fcgi', 'egquery.fcgi'))
 
     @classmethod
     def dumpsParams(cls, params: Dict) -> str:
@@ -34,7 +34,7 @@ class EutilsAPI(Abclog):
             url=f'{BASE_URL}{suffix}',
             headers=cls.headers,
             params=params)
-        return 'get', args, folder/f'{cls.dumpsParams(params)}.{params.get("retmode", params.get("rettype", "txt"))}'
+        return 'get', args, folder/f'{cls.dumpsParams(params)}.{params.get("retmode", params.get("rettype", "xml"))}'
 
     @classmethod
     def yieldTasks(cls, suffix: str, params_collection: Iterable[Dict], folder: Path) -> Generator:

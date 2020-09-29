@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from re import compile as re_compile
 
-__version__ = '0.1.6'
+__version__ = '0.1.7'
 
 
 common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'
@@ -34,6 +34,7 @@ def default_config(folder='./'):
     from pdb_profiling.processors.pdbe.record import Base
     from pdb_profiling.processors.pdbe.api import ProcessPDBe
     from pdb_profiling.processors.proteins.record import Identifier
+    from pdb_profiling.processors import UniProtFASTA
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
     # Use Existing API Results (e.g. json format results downloaded from web)
@@ -43,6 +44,8 @@ def default_config(folder='./'):
     # Set WebFetcher's Semaphore
     Base.set_web_semaphore(30).result()
     Identifier.set_web_semaphore(30).result()
+    UniProtFASTA.set_web_semaphore(30).result()
     # Set Folder that store downloaded and handled files
     Base.set_folder(folder)
     Identifier.set_folder(folder)
+    UniProtFASTA.set_folder(folder)

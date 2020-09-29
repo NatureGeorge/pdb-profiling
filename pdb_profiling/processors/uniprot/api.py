@@ -18,6 +18,7 @@ from collections import Counter
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.uniprot.process import ExtractIsoAlt
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix
 
 
 QUERY_COLUMNS: List[str] = [
@@ -384,6 +385,15 @@ class UniProtFASTA(Abclog):
 
     params = {'include': 'yes'}
     obj = {}
+
+    @classmethod
+    @unsync
+    async def set_web_semaphore(cls, web_semaphore_value:int):
+        cls.web_semaphore = await init_semaphore(web_semaphore_value)
+    
+    @classmethod
+    def set_folder(cls, folder: Union[Path, str]):
+        cls.folder = init_folder_from_suffix(folder, 'UniProt/fasta/')
 
     @classmethod
     @unsync

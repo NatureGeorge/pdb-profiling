@@ -58,9 +58,9 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
     * <https://eutils.ncbi.nlm.nih.gov/entrez/eutils/>
     * NOTE: currently only support minimum use
 * Download data from PDB Archive against unexpected needs
-  * wwwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
+  * wwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
   * EBI: <http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/>
-  * wwwPDB Versioned: <http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/>
+  * wwPDB Versioned: <http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/>
 
 ## Install
 

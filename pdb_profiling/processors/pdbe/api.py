@@ -115,8 +115,8 @@ class SeqRangeReader(object):
 
     def output(self):
         if self.pdb_range:
-            pdb_range = json.dumps(self.pdb_range)
-            unp_range = json.dumps(self.unp_range)
+            pdb_range = json.dumps(self.pdb_range).decode('utf-8')
+            unp_range = json.dumps(self.unp_range).decode('utf-8')
             return pdb_range, unp_range
         else:
             return self.default_pdb_range, self.default_unp_range
@@ -261,12 +261,13 @@ class ProcessSIFTS(ProcessPDBe):
             return set(pdb_list), set(dfrm['SP_PRIMARY'])
 
     @classmethod
-    def reformat(cls, path: str) -> pd.DataFrame:
-        dfrm = pd.read_csv(path, sep='\t', converters=cls.converters)
+    def reformat(cls, path: Optional[str]=None, dfrm:Optional[pd.DataFrame]=None) -> pd.DataFrame:
+        if path is not None:
+            dfrm = pd.read_csv(path, sep='\t', converters=cls.converters)
         group_info_col = ['pdb_id', 'chain_id', 'UniProt']
         range_info_col = ['pdb_start', 'pdb_end', 'unp_start', 'unp_end']
         reader = SeqRangeReader(group_info_col)
-        dfrm[['sifts_pdb_range', 'sifts_unp_range']] = pd.DataFrame(dfrm.apply(
+        dfrm[['pdb_range', 'unp_range']] = pd.DataFrame(dfrm.apply(
             lambda x: reader.check(tuple(x[i] for i in group_info_col), tuple(
                 x[i] for i in range_info_col)),
             axis=1).values.tolist(), index=dfrm.index)
@@ -276,52 +277,72 @@ class ProcessSIFTS(ProcessPDBe):
         return dfrm
 
     @staticmethod
-    def dealWithInDe(dfrm: pd.DataFrame) -> pd.DataFrame:
+    def sort_2_range(unp_range: List, pdb_range: List):
+        unp_range, pdb_range = zip(
+            *sorted(zip(unp_range, pdb_range), key=lambda x: x[0][0]))
+        return unp_range, pdb_range
+
+    @classmethod
+    def dealWithInDel(cls, dfrm: pd.DataFrame, sort_by_unp:bool=True) -> pd.DataFrame:
         def get_gap_list(li: List):
             return [li[i+1][0] - li[i][1] - 1 for i in range(len(li)-1)]
 
         def get_range_diff(lyst_a: List, lyst_b: List):
-            array_a = np.array([ran[1] - ran[0] + 1 for ran in lyst_a])
-            array_b = np.array([ran[1] - ran[0] + 1 for ran in lyst_b])
-            return (array_a - array_b).tolist()
+            array_a = np.array([right - left + 1 for left, right in lyst_a])
+            array_b = np.array([right - left + 1 for left, right in lyst_b])
+            return array_a - array_b
 
         def add_tage_to_range(df: pd.DataFrame, tage_name: str):
             # ADD TAGE FOR SIFTS
             df[tage_name] = 'Safe'
             # No Insertion But Deletion[Pure Deletion]
             df.loc[df[(df['group_info'] == 1) & (
-                df['sifts_unp_pdb_var'] > 0)].index, tage_name] = 'Deletion'
+                df['diff+'] > 0)].index, tage_name] = 'Deletion'
             # Insertion & No Deletion
             df.loc[df[
-                (df['group_info'] != 1) &
-                (df['var_0_count'] == df['group_info']) &
-                (df['unp_GAP_0_count'] == (df['group_info'] - 1))].index, tage_name] = 'Insertion'
+                (df['group_info'] == 1) &
+                (df['diff-'] > 0)].index, tage_name] = 'Insertion (Specail Case)'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] == df['group_info']) &
+                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'Insertion'
             # Insertion & Deletion
             df.loc[df[
-                (df['group_info'] != 1) &
-                ((df['var_0_count'] != df['group_info']) |
-                 (df['unp_GAP_0_count'] != (df['group_info'] - 1)))].index, tage_name] = 'Insertion & Deletion'
+                (df['group_info'] > 1) &
+                ((df['diff0'] != df['group_info']) |
+                 (df['unp_gaps0'] != (df['group_info'] - 1)))].index, tage_name] = 'Insertion & Deletion'
 
-        dfrm['pdb_GAP_list'] = dfrm.apply(lambda x: json.dumps(
-            get_gap_list(json.loads(x['sifts_pdb_range']))), axis=1)
-        dfrm['unp_GAP_list'] = dfrm.apply(lambda x: json.dumps(
-            get_gap_list(json.loads(x['sifts_unp_range']))), axis=1)
-        dfrm['var_list'] = dfrm.apply(lambda x: json.dumps(get_range_diff(
-            json.loads(x['sifts_unp_range']), json.loads(x['sifts_pdb_range']))), axis=1)
-        dfrm['delete'] = dfrm.apply(
-            lambda x: '-' in x['var_list'], axis=1)
-        dfrm['delete'] = dfrm.apply(
-            lambda x: True if '-' in x['unp_GAP_list'] else x['delete'], axis=1)
-        dfrm['var_0_count'] = dfrm.apply(
-            lambda x: json.loads(x['var_list']).count(0), axis=1)
-        dfrm['unp_GAP_0_count'] = dfrm.apply(
-            lambda x: json.loads(x['unp_GAP_list']).count(0), axis=1)
+        dfrm.pdb_range = dfrm.pdb_range.apply(json.loads)
+        dfrm.unp_range = dfrm.unp_range.apply(json.loads)
         dfrm['group_info'] = dfrm.apply(lambda x: len(
-            json.loads(x['sifts_pdb_range'])), axis=1)
-        dfrm['sifts_unp_pdb_var'] = dfrm.apply(
-            lambda x: json.loads(x['var_list'])[0], axis=1)
-        add_tage_to_range(dfrm, tage_name='sifts_range_tage')
-        return dfrm
+            x['pdb_range']), axis=1)
+
+        focus_index = dfrm[dfrm.group_info.gt(1)].index
+        if sort_by_unp and (len(focus_index) > 0):
+            focus_df = dfrm.loc[focus_index].apply(lambda x: cls.sort_2_range(
+                x['unp_range'], x['pdb_range']), axis=1, result_type='expand')
+            focus_df.index = focus_index
+            focus_df.columns = ['unp_range', 'pdb_range']
+            dfrm.loc[focus_index, ['unp_range', 'pdb_range']] = focus_df
+
+        dfrm['pdb_gaps'] = dfrm.pdb_range.apply(get_gap_list)
+        dfrm['unp_gaps'] = dfrm.unp_range.apply(get_gap_list)
+        dfrm['range_diff'] = dfrm.apply(lambda x: get_range_diff(x['unp_range'], x['pdb_range']), axis=1)
+        dfrm['diff0'] = dfrm.range_diff.apply(lambda x: np.count_nonzero(x == 0))
+        dfrm['diff+'] = dfrm.range_diff.apply(lambda x: np.count_nonzero(x > 0))
+        dfrm['diff-'] = dfrm.range_diff.apply(lambda x: np.count_nonzero(x < 0))
+        dfrm['unp_gaps0'] = dfrm.unp_gaps.apply(lambda x: x.count(0))
+        add_tage_to_range(dfrm, tage_name='sifts_range_tag')
+        dfrm['repeated'] = dfrm.apply(
+            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion (Specail Case)', axis=1)
+        dfrm['repeated'] = dfrm.apply(
+            lambda x: True if any(i < 0 for i in x['unp_gaps']) else x['repeated'], axis=1)
+        dfrm['reversed'] = dfrm.pdb_gaps.apply(lambda x: any(i < 0 for i in x))
+        dfrm.pdb_range = dfrm.pdb_range.apply(lambda x: json.dumps(x).decode('utf-8'))
+        dfrm.unp_range = dfrm.unp_range.apply(lambda x: json.dumps(x).decode('utf-8'))
+        temp_cols = ['start', 'end', 'group_info', 'pdb_gaps', 'unp_gaps', 'range_diff',
+                     'diff0', 'diff+', 'diff-', 'unp_gaps0']
+        return dfrm.drop(columns=temp_cols), dfrm[temp_cols]
     
     '''
     @staticmethod
@@ -761,7 +782,7 @@ class PDBArchive(Abclog):
     '''
     Download files from PDB Archive
 
-    * wwwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
+    * wwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
     * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
     '''
     root = PDB_ARCHIVE_URL_EBI
@@ -801,7 +822,7 @@ class PDBVersioned(PDBArchive):
     '''
     Download files from PDB Versioned
 
-    * wwwPDB Versioned: PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/'
+    * wwPDB Versioned: PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/'
 
     >>> PDBVersioned.single_retrieve(
         ('2wmg', '_v1-2'), 'entries/', 
