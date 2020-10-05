@@ -16,7 +16,7 @@ from aiofiles import open as aiofiles_open
 from collections import defaultdict
 from unsync import unsync, Unfuture
 from pdb_profiling import default_id_tag
-from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out
+from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out, SeqRangeReader, sort_2_range
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
@@ -105,35 +105,6 @@ def convertJson2other(
         log_func('Invalid data or append_data')
     except UnsupportedFormat:
         log_func(f'Invalid export_format: {export_format}')
-
-
-class SeqRangeReader(object):
-    def __init__(self, name_group):
-        self.name = name_group  # ('pdb_id', 'chain_id', 'UniProt')
-        self.pdb_range = []
-        self.unp_range = []
-
-    def output(self):
-        if self.pdb_range:
-            pdb_range = json.dumps(self.pdb_range).decode('utf-8')
-            unp_range = json.dumps(self.unp_range).decode('utf-8')
-            return pdb_range, unp_range
-        else:
-            return self.default_pdb_range, self.default_unp_range
-
-    def check(self, name_group_to_check, data_group):
-        self.default_pdb_range = '[[%s, %s]]' % data_group[:2]
-        self.default_unp_range = '[[%s, %s]]' % data_group[2:4]
-
-        if self.name == name_group_to_check:
-            self.pdb_range.append([int(data_group[0]), int(data_group[1])])
-            self.unp_range.append([int(data_group[2]), int(data_group[3])])
-        else:
-            self.name = name_group_to_check
-            self.pdb_range = [[int(data_group[0]), int(data_group[1])]]
-            self.unp_range = [[int(data_group[2]), int(data_group[3])]]
-
-        return self.output()
 
 
 class ProcessPDBe(Abclog):
@@ -276,12 +247,6 @@ class ProcessSIFTS(ProcessPDBe):
         dfrm["Entry"] = dfrm["UniProt"].apply(lambda x: x.split('-')[0])
         return dfrm
 
-    @staticmethod
-    def sort_2_range(unp_range: List, pdb_range: List):
-        unp_range, pdb_range = zip(
-            *sorted(zip(unp_range, pdb_range), key=lambda x: x[0][0]))
-        return unp_range, pdb_range
-
     @classmethod
     def dealWithInDel(cls, dfrm: pd.DataFrame, sort_by_unp:bool=True) -> pd.DataFrame:
         def get_gap_list(li: List):
@@ -301,7 +266,7 @@ class ProcessSIFTS(ProcessPDBe):
             # Insertion & No Deletion
             df.loc[df[
                 (df['group_info'] == 1) &
-                (df['diff-'] > 0)].index, tage_name] = 'Insertion (Specail Case)'
+                (df['diff-'] > 0)].index, tage_name] = 'Insertion_Undivided'
             df.loc[df[
                 (df['group_info'] > 1) &
                 (df['diff0'] == df['group_info']) &
@@ -309,8 +274,16 @@ class ProcessSIFTS(ProcessPDBe):
             # Insertion & Deletion
             df.loc[df[
                 (df['group_info'] > 1) &
-                ((df['diff0'] != df['group_info']) |
-                 (df['unp_gaps0'] != (df['group_info'] - 1)))].index, tage_name] = 'Insertion & Deletion'
+                (df['diff0'] == df['group_info']) &
+                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_1'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] != df['group_info']) &
+                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_2'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] != df['group_info']) &
+                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'InDel_3'
 
         dfrm.pdb_range = dfrm.pdb_range.apply(json.loads)
         dfrm.unp_range = dfrm.unp_range.apply(json.loads)
@@ -626,7 +599,9 @@ class PDBeDecoder(object):
                       'graph-api/mappings/uniprot/', 'graph-api/mappings/uniprot_segments/',
                       'graph-api/mappings/all_isoforms/', 'graph-api/mappings/',
                       'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
-                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/'})
+                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/'
+                      # 'graph-api/uniprot/'
+                      })
     def yieldSIFTSAnnotation(data: Dict) -> Generator:
         valid_annotation_set = {'UniProt', 'Ensembl', 'Pfam', 'CATH', 'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER'}
         for top_root in data:
@@ -797,7 +772,7 @@ class PDBArchive(Abclog):
     @classmethod
     def yieldTasks(cls, pdbs, suffix: str, file_suffix: str, folder: Path) -> Generator:
         for pdb in pdbs:
-            yield task_unit(pdb, suffix, file_suffix, folder)
+            yield cls.task_unit(pdb, suffix, file_suffix, folder)
 
     @classmethod
     def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: str = '.cif.gz', concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):

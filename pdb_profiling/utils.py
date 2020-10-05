@@ -9,7 +9,7 @@ import gzip
 import shutil
 from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable
 from logging import Logger
-from pandas import read_csv, DataFrame, isna
+from pandas import read_csv, DataFrame, isna, Series
 import numpy as np
 from pathlib import Path
 from aiofiles import open as aiofiles_open
@@ -76,6 +76,27 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
                 min_edge = min(li)
                 true_interval_lyst.append((min_edge, max_edge))
         return true_interval_lyst
+
+
+def lyst22intervel(x, y):
+    # x, y = sorted(x), sorted(y)
+    x, y = zip(*sorted(zip(x, y), key=lambda cur: cur[0]))
+    start_x, start_y = x[0], y[0]
+    index_x, index_y = x[0]-1, y[0]-1
+    interval_x, interval_y = [], []
+    for i, j in zip(x, y):
+        pre_x = index_x + 1
+        pre_y = index_y + 1
+        if pre_x == i and pre_y == j:
+            index_x, index_y = i, j
+        else:
+            interval_x.append((start_x, index_x))
+            interval_y.append((start_y, index_y))
+            start_x, start_y = i, j
+            index_x, index_y = i, j
+    interval_x.append((start_x, index_x))
+    interval_y.append((start_y, index_y))
+    return interval_x, interval_y
 
 
 @unsync
@@ -458,8 +479,17 @@ class DisplayPDB(object):
 
     content_unit = '''
                 <td>
-                    <img width="300em" src="https://cdn.rcsb.org/images/structures/{in_code}/{pdb_id}/{pdb_id}_{code}.jpeg"/>
+                    <img class="display" width="300em" src="https://cdn.rcsb.org/images/structures/{in_code}/{pdb_id}/{pdb_id}_{code}.jpeg"/>
                 </td>
+    '''
+
+    css = '''
+        <style>
+            img.display {
+                -webkit-filter: invert(1);
+                filter: invert(1);
+                }
+        </style>
     '''
 
     template = '''
@@ -488,16 +518,17 @@ class DisplayPDB(object):
             ))
         return ''.join(headers), ''.join(content)
 
-    def display(self, pdb_id, assemblies: Iterable[int]= [1]):
+    def show(self, pdb_id, assemblies: Iterable[int]= [1]):
         from IPython.display import display, HTML
         assemblies = sorted(int(i) for i in assemblies if int(i) > 0)
         headers, content = self.setting(pdb_id, assemblies)
         self.table = self.template.format(headers=headers, content=content)
+        if self.dark:
+            self.table = self.css + self.table
         display(HTML(self.table))
     
-    def __init__(self, *args):
-        if len(args) > 0:
-            self.display(*args)
+    def __init__(self, dark:bool=False):
+        self.dark = dark
 
 
 fasta_pat = re_compile(r'(>.+)\n([A-Z\*\n]+)')
@@ -578,3 +609,121 @@ def unsync_run(arg):
     async def unsync_wrap(arg):
         return await arg 
     return unsync_wrap(arg).result()
+
+
+class SeqRangeReader(object):
+    def __init__(self, name_group):
+        self.name = name_group  # ('pdb_id', 'chain_id', 'UniProt')
+        self.pdb_range = []
+        self.unp_range = []
+
+    def output(self):
+        if self.pdb_range:
+            pdb_range = json.dumps(self.pdb_range).decode('utf-8')
+            unp_range = json.dumps(self.unp_range).decode('utf-8')
+            return pdb_range, unp_range
+        else:
+            return self.default_pdb_range, self.default_unp_range
+
+    def check(self, name_group_to_check, data_group):
+        self.default_pdb_range = '[[%s, %s]]' % data_group[:2]
+        self.default_unp_range = '[[%s, %s]]' % data_group[2:4]
+
+        if self.name == name_group_to_check:
+            self.pdb_range.append([int(data_group[0]), int(data_group[1])])
+            self.unp_range.append([int(data_group[2]), int(data_group[3])])
+        else:
+            self.name = name_group_to_check
+            self.pdb_range = [[int(data_group[0]), int(data_group[1])]]
+            self.unp_range = [[int(data_group[2]), int(data_group[3])]]
+
+        return self.output()
+
+
+def sort_2_range(unp_range: List, pdb_range: List):
+    unp_range, pdb_range = zip(
+        *sorted(zip(unp_range, pdb_range), key=lambda x: x[0][0]))
+    return unp_range, pdb_range
+
+
+def flat_dict_in_df(dfrm:DataFrame, targetCol:Union[str, Series], cols:List):
+    try:
+        new_cols = list(f'{targetCol.name}.{col}' for col in cols)
+        dfrm[new_cols] = DataFrame(
+            targetCol.apply(lambda x: list(x[col] for col in cols)).to_list(),
+            columns=new_cols)
+        return dfrm.drop(columns=[targetCol.name])
+    except AttributeError:
+        assert isinstance(targetCol, str)
+        new_cols = list(f'{targetCol}.{col}' for col in cols)
+        dfrm[cols] = DataFrame(
+            dfrm[targetCol].apply(lambda x: list(x[col] for col in cols)).to_list(),
+            columns=new_cols)
+        return dfrm.drop(columns=[targetCol])
+    
+
+SEQ_DICT = {
+    "GLY": "G", "ALA": "A", "SER": "S", "THR": "T", "CYS": "C", "VAL": "V", "LEU": "L",
+    "ILE": "I", "MET": "M", "PRO": "P", "PHE": "F", "TYR": "Y", "TRP": "W", "ASP": "D",
+    "GLU": "E", "ASN": "N", "GLN": "Q", "HIS": "H", "LYS": "K", "ARG": "R"}
+
+standardAA = list(SEQ_DICT.keys())
+
+standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
+
+
+def range_len(lyst: Union[List, str, float]) -> int:
+    if isinstance(lyst, float) or lyst is None:
+        return 0
+    elif isinstance(lyst, str):
+        lyst = json.loads(lyst)
+    length = 0
+    for left, right in lyst:
+        assert right >= left
+        length += right - left + 1
+    return length
+
+
+def interval2set(lyst: Union[Iterable, Iterator, str]):
+    if isinstance(lyst, str):
+        lyst = json.loads(lyst)
+    range_set = set()
+    for left, right in lyst:
+        range_set = range_set | set(range(left, right+1))
+    return range_set
+
+
+def lyst2range(lyst, add_end=1):
+    for start, end in lyst:
+        yield from range(int(start), int(end)+add_end)
+
+
+def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
+    if isinstance(mis_range, float) or mis_range is None:
+        return pdb_range
+    if len(pdb_range) == 0:
+        return []
+    pdb_range_set = interval2set(pdb_range)
+    mis_range_set = interval2set(mis_range)
+    return to_interval(pdb_range_set - mis_range_set)
+
+
+def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
+    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left or left == 'nan' or right == 'nan':
+        return None
+    try:
+        left_range_set = interval2set(left)
+        right_range_set = interval2set(right)
+        return to_interval(left_range_set | right_range_set)
+    except Exception as e:
+        print(left, right)
+        print(type(left), type(right))
+        raise e
+
+
+def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable]) -> List:
+    if isinstance(unk_range, float) or unk_range is None:
+        return None
+    obs_range_set = interval2set(obs_range)
+    unk_range_set = interval2set(unk_range)
+    return to_interval(obs_range_set & unk_range_set)

@@ -23,89 +23,15 @@ import asyncio
 import aiofiles
 from tablib import Dataset
 import traceback
-from pdb_profiling.utils import pipe_out, sort_sub_cols, slice_series, to_interval
+from pdb_profiling.utils import (pipe_out, sort_sub_cols, slice_series, to_interval, 
+                                 lyst22intervel, SEQ_DICT, standardAA, standardNu, range_len,
+                                 interval2set, lyst2range, subtract_range,
+                                 add_range, overlap_range)
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processors.pdbe.sqlite_api import Sqlite_API
 import logging
 # logging.basicConfig(level=logging.INFO)
-
-
-SEQ_DICT = {
-    "GLY": "G", "ALA": "A", "SER": "S", "THR": "T", "CYS": "C", "VAL": "V", "LEU": "L",
-    "ILE": "I", "MET": "M", "PRO": "P", "PHE": "F", "TYR": "Y", "TRP": "W", "ASP": "D",
-    "GLU": "E", "ASN": "N", "GLN": "Q", "HIS": "H", "LYS": "K", "ARG": "R"}
-
-standardAA = list(SEQ_DICT.keys())
-
-standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
-
-
-
-def lyst22intervel(x, y):
-    # x, y = sorted(x), sorted(y)
-    x, y = zip(*sorted(zip(x, y), key=lambda cur: cur[0]))
-    start_x, start_y = x[0], y[0]
-    index_x, index_y = x[0]-1, y[0]-1
-    interval_x, interval_y = [], []
-    for i, j in zip(x, y):
-        pre_x = index_x + 1
-        pre_y = index_y + 1
-        if pre_x == i and pre_y == j:
-            index_x, index_y = i, j
-        else:
-            interval_x.append((start_x, index_x))
-            interval_y.append((start_y, index_y))
-            start_x, start_y = i, j
-            index_x, index_y = i, j
-    interval_x.append((start_x, index_x))
-    interval_y.append((start_y, index_y))
-    return interval_x, interval_y
-
-
-def interval2set(lyst: Union[Iterable, Iterator, str]):
-    if isinstance(lyst, str):
-        lyst = json.loads(lyst)
-    range_set = set()
-    for left, right in lyst:
-        range_set = range_set | set(range(left, right+1))
-    return range_set
-
-
-def lyst2range(lyst, add_end=1):
-    for start, end in lyst:
-        yield from range(int(start), int(end)+add_end)
-
-
-def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
-    if isinstance(mis_range, float) or mis_range is None:
-        return pdb_range
-    if len(pdb_range) == 0:
-        return []
-    pdb_range_set = interval2set(pdb_range)
-    mis_range_set = interval2set(mis_range)
-    return to_interval(pdb_range_set - mis_range_set)
-
-
-def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
-    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left or left == 'nan' or right == 'nan':
-        return None
-    try:
-        left_range_set = interval2set(left)
-        right_range_set = interval2set(right)
-        return to_interval(left_range_set | right_range_set)
-    except Exception as e:
-        print(left, right)
-        print(type(left), type(right))
-        raise e
-
-
-def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable]) -> List:
-    if isinstance(unk_range, float) or unk_range is None:
-        return None
-    obs_range_set = interval2set(obs_range)
-    unk_range_set = interval2set(unk_range)
-    return to_interval(obs_range_set & unk_range_set)
 
 
 def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:
@@ -124,17 +50,6 @@ def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: in
     else:
         out_tail -= omit
     return out_head + out_tail
-
-
-def range_len(lyst: Union[List, str, float]) -> int:
-    if isinstance(lyst, float) or lyst is None:
-        return 0
-    elif isinstance(lyst, str):
-        lyst = json.loads(lyst)
-    length = 0
-    for left, right in lyst:
-        length += right - left + 1
-    return length
 
 
 def lyst2dict(lyst: List) -> Dict:

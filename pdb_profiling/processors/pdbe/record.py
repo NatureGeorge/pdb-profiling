@@ -4,8 +4,8 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union, Callable, Optional, Hashable, Dict
-from numpy import array, where as np_where
+from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List
+from numpy import array, where as np_where, count_nonzero, nan
 from pathlib import Path
 from pandas import isna, concat, DataFrame
 from unsync import unsync, Unfuture
@@ -13,8 +13,16 @@ from aiofiles import open as aiofiles_open
 from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
+from collections import defaultdict, namedtuple
+from itertools import product
 from pdb_profiling import default_id_tag
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv, split_df_by_chain, related_dataframe, slice_series, to_interval, MMCIF2DictPlus, a_load_json
+from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
+                                 a_read_csv, split_df_by_chain, 
+                                 related_dataframe, slice_series, 
+                                 to_interval, MMCIF2DictPlus, 
+                                 a_load_json, SeqRangeReader,
+                                 sort_2_range, range_len,
+                                 overlap_range)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 
 
@@ -148,6 +156,12 @@ class Base(object):
 
 
 class PDB(Base):
+
+    protein_sequence_pat = re_compile(r'([A-Z]{1}|\([A-Z0-9]+\))')
+    nucleotide_sequence_pat = re_compile(r'([AUCG]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(UNK\))')
+    StatsProteinEntitySeq = namedtuple('StatsProteinEntitySeq', 'pdb_id molecule_type entity_id SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
+    StatsNucleotideEntitySeq = namedtuple('StatsNucleotideEntitySeq', 'pdb_id molecule_type entity_id SEQRES_COUNT dNTP_INDEX dNTP_COUNT NTP_INDEX NTP_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
+    StatsChainSeq = namedtuple('StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT')
 
     @unsync
     async def prepare_property(self, raw_data):
@@ -372,12 +386,12 @@ class PDB(Base):
             * 6a8r
             * 6e32
         '''
-        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         eec_df = res_df[['pdb_id', 'entity_id', 'chain_id',
                          'struct_asym_id']].drop_duplicates().reset_index(drop=True)
         eec_df['struct_asym_id_in_assembly'] = eec_df.struct_asym_id
         if merge_with_molecules_info:
-            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', PDB.to_dataframe)
+            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
             self.res2eec_df = eec_df.merge(mol_df, how='left')
         else:
             self.res2eec_df = eec_df
@@ -549,6 +563,109 @@ class PDB(Base):
     @staticmethod
     def dumpsOperators(ops: Iterable[Iterable[str]], sep1:str=',', sep2:str='&') -> str:
         return sep1.join(sep2.join(i) for i in ops)
+
+    @unsync
+    async def stats_protein_entity_seq(self):
+        store = []
+
+        def regist_info(record):
+            if record['molecule_type'] not in ('polypeptide(L)', 'polypeptide(D)'):
+                return
+            seq = array(list(len(i) if i != '(UNK)' else
+                             -1 for i in self.protein_sequence_pat.findall(record['pdb_sequence'])))
+            
+            std_mask = seq == 1
+            std_res = np_where(std_mask)[0]+1
+            non_res = np_where(~std_mask)[0]+1
+            unk_res = np_where(seq == -1)[0]+1
+            
+            store.append(self.StatsProteinEntitySeq(
+                record['pdb_id'],
+                record['molecule_type'],
+                record['entity_id'],
+                len(seq),
+                to_interval(std_res),
+                len(std_res),
+                to_interval(non_res),
+                len(non_res),
+                to_interval(unk_res),
+                len(unk_res)))
+            # assert len(seq)-len(std_res) == len(non_res)
+
+        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
+        mol_df.apply(regist_info, axis=1)
+        return store
+
+    @unsync
+    async def stats_nucleotide_entity_seq(self):
+        store = []
+
+        def regist_info(record):
+            if record['molecule_type'] not in ('polydeoxyribonucleotide', 'polyribonucleotide', 'polydeoxyribonucleotide/polyribonucleotide'):
+                return
+            seq = array(list(len(i) if i != '(UNK)' else
+                             -1 for i in self.nucleotide_sequence_pat.findall(record['pdb_sequence'])))
+            rna_mask = seq == 1
+            dna_mask = seq == 4
+            unk_mask = seq == -1
+            non_mask = ~(dna_mask | rna_mask)
+            rna_res = np_where(rna_mask)[0]+1
+            dna_res = np_where(dna_mask)[0]+1
+            non_res = np_where(non_mask)[0]+1
+            unk_res = np_where(unk_mask)[0]+1
+
+            store.append(self.StatsNucleotideEntitySeq(
+                record['pdb_id'],
+                record['molecule_type'],
+                record['entity_id'],
+                len(seq),
+                to_interval(dna_res),
+                len(dna_res),
+                to_interval(rna_res),
+                len(rna_res),
+                to_interval(non_res),
+                len(non_res),
+                to_interval(unk_res),
+                len(unk_res)))
+
+        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
+        mol_df.apply(regist_info, axis=1)
+        return store
+
+    @unsync
+    async def stats_poly_chain_obs_seq(self):
+        store = defaultdict(list)
+        def regist_info(record):
+            store[(record['pdb_id'], record['entity_id'], record['chain_id'], record['struct_asym_id'])
+            ].append(
+                (json.loads(record['start'])['residue_number'], json.loads(record['end'])['residue_number']))
+
+        c_df = await self.fetch_from_web_api('api/pdb/entry/polymer_coverage/', self.to_dataframe)
+        c_df.apply(regist_info, axis=1)
+        return [self.StatsChainSeq(*key, value, range_len(value)) for key, value in store.items()]
+    
+    @unsync
+    async def stats_chain_obs_seq_from_res(self):
+        store = defaultdict(list)
+        def regist_info(record):
+            store[(record['pdb_id'], record['entity_id'], record['chain_id'], record['struct_asym_id'])
+            ].append(record['residue_number'])
+        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
+        # mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
+        # res_df = res_df.merge(mol_df[mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))][['entity_id']])
+        res_df[res_df.observed_ratio.gt(0)].apply(lambda x: regist_info(x), axis=1)
+        return [self.StatsChainSeq(*key, to_interval(value), len(value)) for key, value in store.items()]
+
+    @unsync
+    async def stats_chain(self):
+        pe_df = DataFrame(await self.stats_protein_entity_seq())
+        ne_df = DataFrame(await self.stats_nucleotide_entity_seq())
+        c_df = DataFrame(await self.stats_chain_obs_seq_from_res())
+        pec_df = c_df.merge(pe_df)
+        pec_df['OBS_STD_INDEX'] = pec_df.apply(lambda x: overlap_range(x['OBS_INDEX'], x['STD_INDEX']), axis=1)
+        pec_df['OBS_STD_COUNT'] = pec_df.OBS_STD_INDEX.apply(range_len)
+        nec_df = c_df.merge(ne_df) if len(ne_df) > 0 else None
+        return pec_df, nec_df
 
 
 class PDBAssemble(PDB):
@@ -856,11 +973,17 @@ class PDBInterface(PDBAssemble):
 
 class SIFTS(PDB):
 
+    EntityChain = namedtuple('EntityChain', 'pdb_id entity_chain_info entity_count chain_count')
+    UniProtEntity = namedtuple('UniProtEntity', 'pdb_id unp_entity_info entity_unp_info entity_with_unp_count min_unp_count')
+    OligoState = namedtuple('OligoState', 'pdb_id oligo_state has_unmapped_protein')
+    MappingMeta = namedtuple('MappingMeta', 'UniProt species identity')
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
             self.level = 'PDB Entry'
             self.identifier = identifier.lower()
+            self.pdb_id = self.identifier
         elif tag == 'UniProt':
             self.level = tag
             self.identifier = identifier.upper()
@@ -872,6 +995,150 @@ class SIFTS(PDB):
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
+
+    @staticmethod
+    @unsync
+    async def reformat(dfrm: Union[DataFrame, Unfuture, Coroutine]) -> DataFrame:
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        group_info_col = ['pdb_id', 'chain_id', 'UniProt']
+        range_info_col = ['pdb_start', 'pdb_end', 'unp_start', 'unp_end']
+        reader = SeqRangeReader(group_info_col)
+        dfrm[['pdb_range', 'unp_range']] = DataFrame(dfrm.apply(
+            lambda x: reader.check(tuple(x[i] for i in group_info_col), tuple(
+                x[i] for i in range_info_col)),
+            axis=1).values.tolist(), index=dfrm.index)
+        dfrm = dfrm.drop(columns=range_info_col).drop_duplicates(
+            subset=group_info_col, keep='last').reset_index(drop=True)
+        dfrm["Entry"] = dfrm["UniProt"].apply(lambda x: x.split('-')[0])
+        return dfrm
+    
+    @staticmethod
+    @unsync
+    async def dealWithInDel(dfrm: Union[DataFrame, Unfuture, Coroutine], sort_by_unp: bool = True) -> DataFrame:
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        def get_gap_list(li: List):
+            return [li[i+1][0] - li[i][1] - 1 for i in range(len(li)-1)]
+
+        def get_range_diff(lyst_a: List, lyst_b: List):
+            array_a = array([right - left + 1 for left, right in lyst_a])
+            array_b = array([right - left + 1 for left, right in lyst_b])
+            return array_a - array_b
+
+        def add_tage_to_range(df: DataFrame, tage_name: str):
+            # ADD TAGE FOR SIFTS
+            df[tage_name] = 'Safe'
+            # No Insertion But Deletion[Pure Deletion]
+            df.loc[df[(df['group_info'] == 1) & (
+                df['diff+'] > 0)].index, tage_name] = 'Deletion'
+            # Insertion & No Deletion
+            df.loc[df[
+                (df['group_info'] == 1) &
+                (df['diff-'] > 0)].index, tage_name] = 'Insertion_Undivided'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] == df['group_info']) &
+                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'Insertion'
+            # Insertion & Deletion
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] == df['group_info']) &
+                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_1'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] != df['group_info']) &
+                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_2'
+            df.loc[df[
+                (df['group_info'] > 1) &
+                (df['diff0'] != df['group_info']) &
+                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'InDel_3'
+
+        dfrm.pdb_range = dfrm.pdb_range.apply(json.loads)
+        dfrm.unp_range = dfrm.unp_range.apply(json.loads)
+        dfrm['group_info'] = dfrm.apply(lambda x: len(
+            x['pdb_range']), axis=1)
+
+        focus_index = dfrm[dfrm.group_info.gt(1)].index
+        if sort_by_unp and (len(focus_index) > 0):
+            focus_df = dfrm.loc[focus_index].apply(lambda x: sort_2_range(
+                x['unp_range'], x['pdb_range']), axis=1, result_type='expand')
+            focus_df.index = focus_index
+            focus_df.columns = ['unp_range', 'pdb_range']
+            dfrm.loc[focus_index, ['unp_range', 'pdb_range']] = focus_df
+
+        dfrm['pdb_gaps'] = dfrm.pdb_range.apply(get_gap_list)
+        dfrm['unp_gaps'] = dfrm.unp_range.apply(get_gap_list)
+        dfrm['range_diff'] = dfrm.apply(lambda x: get_range_diff(
+            x['unp_range'], x['pdb_range']), axis=1)
+        dfrm['diff0'] = dfrm.range_diff.apply(
+            lambda x: count_nonzero(x == 0))
+        dfrm['diff+'] = dfrm.range_diff.apply(
+            lambda x: count_nonzero(x > 0))
+        dfrm['diff-'] = dfrm.range_diff.apply(
+            lambda x: count_nonzero(x < 0))
+        dfrm['unp_gaps0'] = dfrm.unp_gaps.apply(lambda x: x.count(0))
+        add_tage_to_range(dfrm, tage_name='sifts_range_tag')
+        dfrm['repeated'] = dfrm.apply(
+            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion (Specail Case)', axis=1)
+        dfrm['repeated'] = dfrm.apply(
+            lambda x: True if any(i < 0 for i in x['unp_gaps']) else x['repeated'], axis=1)
+        dfrm['reversed'] = dfrm.pdb_gaps.apply(lambda x: any(i < 0 for i in x))
+        dfrm.pdb_range = dfrm.pdb_range.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
+        dfrm.unp_range = dfrm.unp_range.apply(
+            lambda x: json.dumps(x).decode('utf-8'))
+        temp_cols = ['start', 'end', 'group_info', 'pdb_gaps', 'unp_gaps', 'range_diff',
+                     'diff0', 'diff+', 'diff-', 'unp_gaps0']
+        return dfrm.drop(columns=temp_cols), dfrm[temp_cols]
+
+    @unsync
+    async def summary_ec_ue(self):
+        def regist_info(store, record):
+            store[self.MappingMeta(record['UniProt'], record['name'].split('_')[-1], record['identity'])][record['entity_id']] = record['unp_range']
+
+        def reverse_dict(info_dict):
+            res = defaultdict(list)
+            for key, valueDict in info_dict.items():
+                for innerKey in valueDict.keys():
+                    res[innerKey].append(key)
+            return res
+
+        def min_unp(info_dict):
+            return min(len(set(res)) for res in product(*info_dict.values()))
+        
+        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
+        mol_df = mol_df[mol_df.molecule_type.eq('polypeptide(L)')]
+        info_dict = dict(zip(mol_df.entity_id,mol_df.in_chains))
+        entity_count = len(info_dict)
+        chain_count = sum(i.count(',')+1 for i in info_dict.values())
+
+        try:
+            best_iso = await self.fetch_from_web_api('api/mappings/isoforms/', self.to_dataframe).then(self.reformat)
+            # best_iso = best_iso.sort_values(by='identity', ascending=False).drop_duplicates(subset='entity_id')
+            unp_entity_info = defaultdict(dict)
+            best_iso.apply(lambda x: regist_info(unp_entity_info, x), axis=1)
+            entity_unp_info = reverse_dict(unp_entity_info)
+            entity_with_unp_count = len(entity_unp_info)
+            min_unp_count = min_unp(entity_unp_info)
+        except AttributeError:
+            unp_entity_info, entity_unp_info, entity_with_unp_count, min_unp_count = nan, nan, 0, 0
+
+        return self.EntityChain(self.pdb_id, info_dict, entity_count, chain_count), self.UniProtEntity(self.pdb_id, unp_entity_info, entity_unp_info, entity_with_unp_count, min_unp_count)
+
+    @unsync
+    async def get_oligo_state(self):
+        ec, ue = await self.summary_ec_ue()
+        assert ec.entity_count >= ue.entity_with_unp_count
+        has_unmapped_protein = ec.entity_count > ue.entity_with_unp_count
+        if ((ec.entity_count > ue.entity_with_unp_count) and (ue.min_unp_count == 1)) or (ue.min_unp_count > 1):
+            return self.OligoState(self.pdb_id, 'he', has_unmapped_protein)
+        elif (ec.entity_count == ue.entity_with_unp_count) and (ue.min_unp_count == 1) and (ec.chain_count > 1):
+            return self.OligoState(self.pdb_id, 'ho', has_unmapped_protein)
+        elif ec.chain_count == 1:
+            return self.OligoState(self.pdb_id, 'mo', has_unmapped_protein)
+        else:
+            raise ValueError('Unexpected cases for get_oligo_state!')
 
 
 class Compounds(Base):
