@@ -45,7 +45,7 @@ PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/d
 FUNCS = list()
 
 
-def residue_number_converter(x):
+def str_number_converter(x):
     try:
         return int(x)
     except ValueError:
@@ -113,9 +113,9 @@ class ProcessPDBe(Abclog):
         'pdb_id': str,
         'chain_id': str,
         'struct_asym_id': str,
-        'entity_id': str,
+        'entity_id': str_number_converter,
         'author_residue_number': int,
-        'residue_number': residue_number_converter,
+        'residue_number': str_number_converter,
         'author_insertion_code': str,
         'id': int,
         'interface_id': int,
@@ -189,9 +189,11 @@ class ProcessPDBe(Abclog):
                 raise e
         res = Dict2Tabular.pyexcel_io(traverseSuffixes(suffix, data))
         if res is not None:
-            await pipe_out(
-                df=res, path=new_path, 
-                format='tsv', mode='w')
+            if isinstance(res, Generator):
+                for r in res:
+                    await pipe_out(df=r, path=new_path, format='tsv', mode='a')
+            else:
+                await pipe_out(df=res, path=new_path, format='tsv', mode='w')
             cls.logger.debug(f'Decoded file in {new_path}')
             return new_path
         else:
@@ -292,7 +294,7 @@ class ProcessSIFTS(ProcessPDBe):
 
         focus_index = dfrm[dfrm.group_info.gt(1)].index
         if sort_by_unp and (len(focus_index) > 0):
-            focus_df = dfrm.loc[focus_index].apply(lambda x: cls.sort_2_range(
+            focus_df = dfrm.loc[focus_index].apply(lambda x: sort_2_range(
                 x['unp_range'], x['pdb_range']), axis=1, result_type='expand')
             focus_df.index = focus_index
             focus_df.columns = ['unp_range', 'pdb_range']
@@ -523,7 +525,7 @@ class PDBeDecoder(object):
                     residues = chain['residues']
                     for res in residues:
                         if 'multiple_conformers' not in res:
-                            res['multiple_conformers'] = None
+                            res['multiple_conformers'] = ''
                         else:
                             res['multiple_conformers'] = json.dumps(res['multiple_conformers']).decode('utf-8')
                     yield residues, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)

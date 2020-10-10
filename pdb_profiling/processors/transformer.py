@@ -6,6 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pyexcel import get_sheet, Sheet
 from tablib import Dataset
+from pandas import DataFrame, concat
 from collections import OrderedDict
 from typing import Dict, Iterable, Tuple
 
@@ -14,6 +15,21 @@ class Dict2Tabular(object):
     """
     Convert Json-Dict to Tabular format
     """
+
+    @staticmethod
+    def sync_with_pandas(*args) -> DataFrame:
+        records, *remain = args
+        if not len(records):
+            return None
+        df = DataFrame(records)
+        if len(remain) > 1:
+            for append_header, append_value in zip(*remain):
+                df[append_header] = append_value
+        return df
+
+    @classmethod
+    def pandas_io(cls, data: Iterable[Tuple]):
+        return concat((cls.sync_with_pandas(*res) for res in data), ignore_index=True, sort=False)
 
     @staticmethod
     def sync_with_pyexcel(*args) -> Sheet:
@@ -35,9 +51,12 @@ class Dict2Tabular(object):
     @classmethod
     def pyexcel_io(cls, data: Iterable[Tuple]) -> Sheet:
         cur_sheet = None
+        new_sheets = []
         for res in data:  # traverseSuffixes(suffix, data)
-            try:
+            if cur_sheet is None:
+                cur_sheet = cls.sync_with_pyexcel(*res)
                 cur_cols = set(cur_sheet.colnames)
+            else:
                 new_sheet = cls.sync_with_pyexcel(*res)
                 new_cols = set(new_sheet.colnames)
                 # assert cur_cols >= new_cols, f"Unexpected new columns: {new_cols-cur_cols}"
@@ -47,14 +66,18 @@ class Dict2Tabular(object):
                         tuple('' for _ in range(len(append_header))) for _ in range(len(cur_sheet))]
                     # NOTE: cur_sheet and new_sheet have colnames while the new Sheet does not
                     cur_sheet.column += Sheet(append_data)
-                cur_sheet = get_sheet(
-                    records=list(cur_sheet.records)+list(new_sheet.records), 
-                    name_columns_by_row=0)
-            except AttributeError:
-                cur_sheet = cls.sync_with_pyexcel(*res)
-            # except TypeError:
-            #     continue
-        return cur_sheet
+                    cur_cols |= new_cols
+                new_sheets.append(new_sheet)
+                for sheet in new_sheets:
+                    e_cols = set(sheet.colnames)
+                    x_cols = cur_cols-e_cols
+                    if len(x_cols) > 0:
+                        append_header = tuple(x_cols)
+                        append_data = [append_header] + [
+                            tuple('' for _ in range(len(append_header))) for _ in range(len(sheet))]
+                        sheet.column += Sheet(append_data)
+        yield cur_sheet
+        yield from new_sheets
 
     @staticmethod
     def sync_with_tablib(*args) -> Dataset:

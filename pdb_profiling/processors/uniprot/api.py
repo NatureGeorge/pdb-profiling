@@ -437,8 +437,8 @@ class UniProtFASTA(Abclog):
             semaphore=semaphore)
     
     @classmethod
-    def single_retrieve(cls, identifier: str, folder: Union[str, Path], semaphore, rate: float = 1.5):
+    def single_retrieve(cls, identifier: str, folder: Optional[Union[str, Path]]=None, semaphore=None, rate: float = 1.5):
         return UnsyncFetch.single_task(
-            task=cls.task_unit(identifier, folder),
-            semaphore=semaphore,
+            task=cls.task_unit(identifier, cls.folder if folder is None else folder),
+            semaphore=cls.web_semaphore if semaphore is None else semaphore,
             rate=rate)

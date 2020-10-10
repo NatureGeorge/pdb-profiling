@@ -37,18 +37,18 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
             else:
                 return True
     if not pass_check(lyst):
-        return []
+        return ()
     else:
-        lyst = set(int(i) for i in lyst)
+        if not isinstance(lyst, set):
+            lyst = frozenset(int(i) for i in lyst)
         if not pass_check(lyst):
-            return []
+            return ()
         start = []
         interval_lyst = []
-        true_interval_lyst = []
         max_edge = max(lyst)
         min_edge = min(lyst)
         if len(lyst) == (max_edge + 1 - min_edge):
-            true_interval_lyst.append((min_edge, max_edge))
+            return ((min_edge, max_edge),)
         else:
             lyst_list = sorted(lyst)
             for j in lyst_list:
@@ -71,11 +71,7 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
                     else:
                         start.append(j)
                         i += 1
-            for li in interval_lyst:
-                max_edge = max(li)
-                min_edge = min(li)
-                true_interval_lyst.append((min_edge, max_edge))
-        return true_interval_lyst
+            return tuple((min(li), max(li)) for li in interval_lyst)
 
 
 def lyst22intervel(x, y):
@@ -213,6 +209,7 @@ async def pipe_out(df, path, **kwargs):
                 df.headers = None
             to_write = df.export(var_format, lineterminator='\n')
         elif isinstance(df, Sheet):
+            df = df.project(sorted(df.colnames))
             if clear_headers:
                 df.colnames = []
             to_write = getattr(df, f"get_{var_format}")(lineterminator='\n')
@@ -545,7 +542,7 @@ async def a_seq_reader(path: Union[Unfuture, Union[Path, str]]):
 @unsync
 async def get_seq_from_parser(res, identifier, seq_only:bool = True):
     async for header, content in await res:
-        if identifier in header:
+        if (identifier in header) and (f'{identifier}-' not in header):
             return content if seq_only else (header, content)
 
 
@@ -687,10 +684,15 @@ def range_len(lyst: Union[List, str, float]) -> int:
 def interval2set(lyst: Union[Iterable, Iterator, str]):
     if isinstance(lyst, str):
         lyst = json.loads(lyst)
-    range_set = set()
+    range_set = frozenset()
     for left, right in lyst:
-        range_set = range_set | set(range(left, right+1))
+        range_set |= frozenset(range(left, right+1))
     return range_set
+
+
+def expand_interval(lyst: Union[Iterable, Iterator, str]):
+    lyst = json.loads(lyst) if isinstance(lyst, str) else lyst
+    yield from (i for start, end in lyst for i in range(start, end+1))
 
 
 def lyst2range(lyst, add_end=1):
@@ -702,7 +704,7 @@ def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterab
     if isinstance(mis_range, float) or mis_range is None:
         return pdb_range
     if len(pdb_range) == 0:
-        return []
+        return ()
     pdb_range_set = interval2set(pdb_range)
     mis_range_set = interval2set(mis_range)
     return to_interval(pdb_range_set - mis_range_set)
@@ -724,6 +726,48 @@ def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
 def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable]) -> List:
     if isinstance(unk_range, float) or unk_range is None:
         return None
+    '''
     obs_range_set = interval2set(obs_range)
     unk_range_set = interval2set(unk_range)
-    return to_interval(obs_range_set & unk_range_set)
+    return to_interval(obs_range_set.intersection(unk_range_set))
+    '''
+    def unit(i1,i2):
+        for start1, end1 in i1:
+            for start2, end2 in i2:
+                sl = start2 >= start1
+                sr = start2 <= end1
+                el = end2 >= start1
+                er = end2 <= end1
+                s_in = sl and sr
+                e_in = el and er
+                ini = s_in or e_in
+                # out = (sl and el) or (sr and er)
+                cov = (not sl) and (not er)
+                start = start2 if s_in else start1
+                end = end2 if e_in else end1
+                if ini or cov:
+                    yield start, end
+
+    return tuple(unit(obs_range, unk_range))
+
+
+def get_seq_seg(seq, ranges):
+    for start,end in ranges:
+        yield start, seq[start-1:end]
+
+
+def get_diff_index(lseq, lrange, rseq, rrange, on_left:bool=True):
+    if isinstance(lrange, str):
+        lrange = json.loads(lrange)
+    if isinstance(rrange, str):
+        rrange = json.loads(rrange)
+    for (lstart, lseg), (rstart, rseg) in zip(get_seq_seg(lseq, lrange), get_seq_seg(rseq, rrange)):
+        yield from (lstart+index if on_left else rstart+index for index, (r1, r2) in enumerate(zip(lseg, rseg)) if r1 != r2)
+
+
+def red_seq_seg(seq, ranges):
+    edge = 0
+    for start, end in ranges:
+        yield f"{seq[edge:start-1]}\x1b[31m{seq[start-1:end]}\x1b[0m"
+        edge = end
+    yield seq[end:]

@@ -4,11 +4,12 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List
+from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from numpy import array, where as np_where, count_nonzero, nan
 from pathlib import Path
-from pandas import isna, concat, DataFrame
+from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
+from asyncio import as_completed
 from aiofiles import open as aiofiles_open
 from smart_open import open as smart_open
 from re import compile as re_compile
@@ -22,8 +23,12 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  to_interval, MMCIF2DictPlus, 
                                  a_load_json, SeqRangeReader,
                                  sort_2_range, range_len,
-                                 overlap_range)
+                                 overlap_range, flat_dict_in_df,
+                                 a_seq_parser, get_seq_from_parser,
+                                 get_diff_index)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
+from pdb_profiling.processors.uniprot.api import UniProtFASTA
+from pdb_profiling.processors.pdbe import PDBeDB
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -159,9 +164,12 @@ class PDB(Base):
 
     protein_sequence_pat = re_compile(r'([A-Z]{1}|\([A-Z0-9]+\))')
     nucleotide_sequence_pat = re_compile(r'([AUCG]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(UNK\))')
-    StatsProteinEntitySeq = namedtuple('StatsProteinEntitySeq', 'pdb_id molecule_type entity_id SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
-    StatsNucleotideEntitySeq = namedtuple('StatsNucleotideEntitySeq', 'pdb_id molecule_type entity_id SEQRES_COUNT dNTP_INDEX dNTP_COUNT NTP_INDEX NTP_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
-    StatsChainSeq = namedtuple('StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT')
+    StatsProteinEntitySeq = namedtuple(
+        'StatsProteinEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT ARTIFACT_INDEX')
+    StatsNucleotideEntitySeq = namedtuple(
+        'StatsNucleotideEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT dNTP_INDEX dNTP_COUNT NTP_INDEX NTP_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
+    StatsChainSeq = namedtuple(
+        'StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT OBS_RATIO_SUM BINDING_LIGAND_INDEX BINDING_LIGAND_COUNT')
 
     @unsync
     async def prepare_property(self, raw_data):
@@ -567,7 +575,17 @@ class PDB(Base):
     @unsync
     async def stats_protein_entity_seq(self):
         store = []
-
+        self.set_to_df_kwargs(usecols=lambda x: not x.startswith('author') and not x in ('struct_asym_id', 'chain_id'))
+        muta_df = await self.fetch_from_web_api('api/pdb/entry/mutated_AA_or_NA/', self.to_dataframe_with_kwargs)
+        if muta_df is not None:
+            muta_df = muta_df.drop_duplicates().reset_index(drop=True)
+            muta_df = flat_dict_in_df(muta_df, muta_df.mutation_details.apply(json.loads), ['type', 'from','to'])
+            muta_dict = muta_df[muta_df['mutation_details.type'].isin(
+                ('Cloning artifact', 'Expression tag', 'Initiating methionine', 'Linker'))].groupby(
+                'entity_id').residue_number.apply(to_interval).to_dict()
+        else:
+            muta_dict = dict()
+        
         def regist_info(record):
             if record['molecule_type'] not in ('polypeptide(L)', 'polypeptide(D)'):
                 return
@@ -583,15 +601,17 @@ class PDB(Base):
                 record['pdb_id'],
                 record['molecule_type'],
                 record['entity_id'],
+                record['ca_p_only'],
                 len(seq),
                 to_interval(std_res),
                 len(std_res),
                 to_interval(non_res),
                 len(non_res),
                 to_interval(unk_res),
-                len(unk_res)))
+                len(unk_res),
+                muta_dict.get(record['entity_id'], tuple())))
             # assert len(seq)-len(std_res) == len(non_res)
-
+        
         mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
         mol_df.apply(regist_info, axis=1)
         return store
@@ -618,6 +638,7 @@ class PDB(Base):
                 record['pdb_id'],
                 record['molecule_type'],
                 record['entity_id'],
+                record['ca_p_only'],
                 len(seq),
                 to_interval(dna_res),
                 len(dna_res),
@@ -645,27 +666,57 @@ class PDB(Base):
         return [self.StatsChainSeq(*key, value, range_len(value)) for key, value in store.items()]
     
     @unsync
-    async def stats_chain_obs_seq_from_res(self):
+    async def stats_chain_seq(self):
         store = defaultdict(list)
+        
         def regist_info(record):
             store[(record['pdb_id'], record['entity_id'], record['chain_id'], record['struct_asym_id'])
-            ].append(record['residue_number'])
+                  ].append((record['residue_number'], record['observed_ratio']))
+        
         res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         # mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
         # res_df = res_df.merge(mol_df[mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))][['entity_id']])
         res_df[res_df.observed_ratio.gt(0)].apply(lambda x: regist_info(x), axis=1)
-        return [self.StatsChainSeq(*key, to_interval(value), len(value)) for key, value in store.items()]
+
+        self.set_to_df_kwargs(usecols=lambda x: not x.startswith('author'))
+        br_df = await self.fetch_from_web_api('api/pdb/entry/binding_sites/', PDB.to_dataframe_with_kwargs)
+        br_dict = br_df[br_df.entity_id.ne(-1)].groupby('struct_asym_id').residue_number.apply(lambda x: (to_interval(x), len(frozenset(x)))).to_dict()
+
+        return [self.StatsChainSeq(*key, 
+                                   to_interval(i[0] for i in value), 
+                                   len(value), 
+                                   sum(i[1] for i in value),
+                                   *br_dict.get(key[-1], (tuple(), 0))
+                                   ) for key, value in store.items()]
 
     @unsync
     async def stats_chain(self):
         pe_df = DataFrame(await self.stats_protein_entity_seq())
         ne_df = DataFrame(await self.stats_nucleotide_entity_seq())
-        c_df = DataFrame(await self.stats_chain_obs_seq_from_res())
+        c_df = DataFrame(await self.stats_chain_seq())
         pec_df = c_df.merge(pe_df)
         pec_df['OBS_STD_INDEX'] = pec_df.apply(lambda x: overlap_range(x['OBS_INDEX'], x['STD_INDEX']), axis=1)
         pec_df['OBS_STD_COUNT'] = pec_df.OBS_STD_INDEX.apply(range_len)
         nec_df = c_df.merge(ne_df) if len(ne_df) > 0 else None
         return pec_df, nec_df
+
+    @unsync
+    async def get_sequence(self, **kwargs):
+        '''
+        Get SEQRES Sequence via entity_id | chain_id (default protein) | struct_asym_id
+        '''
+        sequence_col = 'sequence' if kwargs.get('one_letter_code', True) else 'pdb_sequence'
+        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
+        if 'entity_id' in kwargs:
+            return mol_df.loc[mol_df.entity_id.eq(kwargs['entity_id']).idxmax(), sequence_col]
+        elif 'struct_asym_id' in kwargs:
+            struct_asym_id = kwargs['struct_asym_id']
+            return mol_df.loc[mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x).idxmax(), sequence_col]
+        elif 'chain_id' in kwargs:
+            chain_id = kwargs['chain_id']
+            return mol_df.loc[(mol_df.molecule_type.eq('polypeptide(L)') & mol_df.in_chains.apply(lambda x: f'"{chain_id}"' in x)).idxmax(), sequence_col]
+        else:
+            raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
 
 
 class PDBAssemble(PDB):
@@ -978,6 +1029,12 @@ class SIFTS(PDB):
     OligoState = namedtuple('OligoState', 'pdb_id oligo_state has_unmapped_protein')
     MappingMeta = namedtuple('MappingMeta', 'UniProt species identity')
 
+    @classmethod
+    def set_folder(cls, folder: Union[Path, str]):
+        super().set_folder(folder)
+        cls.sqlite_api = PDBeDB(
+            "sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -1001,6 +1058,12 @@ class SIFTS(PDB):
     async def reformat(dfrm: Union[DataFrame, Unfuture, Coroutine]) -> DataFrame:
         if isinstance(dfrm, (Coroutine, Unfuture)):
             dfrm = await dfrm
+        if 'pdb_start' not in dfrm.columns:
+            flat_dict_in_df(dfrm, dfrm.start.apply(json.loads), ('residue_number',))
+            flat_dict_in_df(dfrm, dfrm.end.apply(json.loads), ('residue_number',))
+            dfrm.rename(columns={
+                'start.residue_number': 'pdb_start', 
+                'end.residue_number': 'pdb_end'}, inplace=True)
         group_info_col = ['pdb_id', 'chain_id', 'UniProt']
         range_info_col = ['pdb_start', 'pdb_end', 'unp_start', 'unp_end']
         reader = SeqRangeReader(group_info_col)
@@ -1140,6 +1203,99 @@ class SIFTS(PDB):
         else:
             raise ValueError('Unexpected cases for get_oligo_state!')
 
+    @staticmethod
+    def convert_index(lrange: Union[List, Tuple, str], rrange: Union[List,Tuple, str], sites: Iterable[int], nan_value=None):
+        '''convert from rrange to lrange'''
+        def unit(lrange, rrange, site):
+            for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range"
+                if (site >= rstart) and (site <= rend):
+                    return int(site + lstart - rstart)
+                else:
+                    continue
+            return nan_value
+        lrange = json.loads(lrange) if isinstance(lrange, str) else lrange
+        rrange = json.loads(rrange) if isinstance(rrange, str) else rrange
+        return tuple(unit(lrange, rrange, site) for site in sites)
+
+    @staticmethod
+    @unsync
+    async def get_residue_conflict(pdb_id, entity_id, pdb_range, Entry, UniProt, unp_range, on_pdb: bool = True):
+        pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
+        unp_seq = await get_seq_from_parser(UniProtFASTA.single_retrieve(Entry).then(a_seq_parser), UniProt)
+        return to_interval(get_diff_index(pdb_seq, pdb_range, unp_seq, unp_range, on_pdb))
+
+    @classmethod
+    @unsync
+    async def add_residue_conflict(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine], on_pdb: bool = True):
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        if isinstance(dfrm, Tuple):
+            dfrm = dfrm[0]
+        f_dfrm = dfrm.drop(columns=['chain_id', 'struct_asym_id']
+            ).drop_duplicates(subset=['UniProt', 'entity_id', 'pdb_id']).reset_index(drop=True)
+        tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
+            x['pdb_id'], x['entity_id'], x['pdb_range'], x['Entry'], x['UniProt'], x['unp_range']), axis=1)
+        f_dfrm['conflict_pdb_range'] = [await i for i in tasks]
+        dfrm_ed = merge(dfrm, f_dfrm)
+        assert dfrm_ed.shape[0] == dfrm.shape[0]
+        return dfrm_ed
+
+    @unsync
+    async def fetch_new_residue_mapping(self, entity_id, start, end):
+        df = await self.fetch_from_web_api(
+            'graph-api/residue_mapping/', 
+            self.to_dataframe, 
+            mask_id=f'{self.pdb_id}/{entity_id}/{start}/{end}')
+        if df is not None:
+            await self.sqlite_api.async_insert(self.sqlite_api.ResidueMapping, df.to_dict('records'))
+        return df
+
+    @unsync
+    async def fetch_residue_mapping(self, entity_id:int, start:int, end:int, columns:str='UniProt,residue_number,unp_residue_number', usecols:bool=True, UniProt:Optional[str]=None):
+        unp = "" if UniProt is None else f"UniProt == '{UniProt}' AND"
+        query=f"""
+            SELECT DISTINCT {columns} FROM ResidueMapping
+            WHERE {unp} pdb_id == '{self.pdb_id}' AND entity_id == {entity_id}
+                AND residue_number >= {start} AND residue_number <= {end}"""
+        res = await self.sqlite_api.database.fetch_all(query=query)
+        columns = columns.split(',')
+
+        if len(res) > 0:
+            df = DataFrame(res, columns=columns)
+            start_diff = start - df.residue_number.min()
+            end_diff = end - df.residue_number.max()
+            new_range = []
+            dfs = [df]
+            if start_diff < 0:
+                new_range.append((start, start-start_diff-1))
+            if end_diff > 0:
+                new_range.append((end-end_diff+1, end))
+            for s, e in new_range:
+                new_df = await self.fetch_new_residue_mapping(entity_id, s, e)
+                new_df = new_df[new_df.UniProt.eq(UniProt)] if ((new_df is not None) and (UniProt is not None)) else new_df
+                dfs.append(new_df)
+            return concat(dfs, ignore_index=True)
+        else:
+            df = await self.fetch_new_residue_mapping(entity_id, start, end)
+            if df is not None:
+                df = df[df.UniProt.eq(UniProt)] if UniProt is not None else df
+                return df[columns] if usecols else df
+            else:
+                return
+    
+    @classmethod
+    @unsync
+    async def fix_range(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine]):
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        if isinstance(dfrm, Tuple):
+            dfrm = dfrm[0]
+        f_dfrm = dfrm.drop(columns=['chain_id', 'struct_asym_id']
+            ).drop_duplicates(subset=['UniProt', 'entity_id', 'pdb_id']).reset_index(drop=True)
+        tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
+            x['pdb_id'], x['entity_id'], x['pdb_range'], x['Entry'], x['UniProt'], x['unp_range']), axis=1)
+
 
 class Compounds(Base):
 
@@ -1155,6 +1311,40 @@ class Compounds(Base):
         self.set_id(identifier)
         self.tasks = dict()
 
+
+class PDBs(list):
+    
+    def __init__(self, iterable:Iterable):
+        super().__init__((PDB(i) if isinstance(i, str) else i for i in iterable))
+
+    @staticmethod
+    @unsync
+    async def fetch_exp_pipe(pdb_ob:PDB):
+        exp_data = await pdb_ob.fetch_from_web_api('api/pdb/entry/experiment/', a_load_json, json=True)
+        multi_method = len(exp_data[pdb_ob.pdb_id]) > 1
+        return ((pdb_ob.pdb_id, 
+                i.get('resolution', None), 
+                i['experimental_method_class'], 
+                i['experimental_method'],
+                multi_method) for i in exp_data[pdb_ob.pdb_id])
+    
+    def fetch(self, func:Union[Callable[[PDB], List], str]):
+        if isinstance(func, str):
+            self.tasks = [getattr(pdb_ob, func)() for pdb_ob in self]
+        else:
+            self.tasks = [func(pdb_ob) for pdb_ob in self]
+        return self
+
+    @unsync
+    async def run(self, tqdm=None):
+        if tqdm is None:
+            return [await fob for fob in as_completed(self.tasks)]
+        else:
+            return [await fob for fob in tqdm(as_completed(self.tasks), total=len(self.tasks))]
+
+
+class SIFTSs(PDBs):
+    pass
 
 '''
 TODO: Deal with carbohydrate polymer in PISA

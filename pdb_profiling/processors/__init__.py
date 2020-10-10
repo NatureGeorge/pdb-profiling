@@ -10,7 +10,8 @@ from pdb_profiling.processors.pdbe.record import (
     PDBAssemble,
     PDBInterface,
     SIFTS,
-    Compounds
+    Compounds,
+    PDBs
     )
 from pdb_profiling.processors.pdbe.api import PDBeModelServer, PDBArchive,PDBVersioned
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
