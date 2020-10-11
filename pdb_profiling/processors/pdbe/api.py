@@ -190,14 +190,20 @@ class ProcessPDBe(Abclog):
         res = Dict2Tabular.pyexcel_io(traverseSuffixes(suffix, data))
         if res is not None:
             if isinstance(res, Generator):
+                one = False
                 for r in res:
-                    await pipe_out(df=r, path=new_path, format='tsv', mode='a')
+                    if r is not None:
+                        await pipe_out(df=r, path=new_path, format='tsv', mode='a')
+                        one = True
+                if not one:
+                    cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
+                    return None
             else:
                 await pipe_out(df=res, path=new_path, format='tsv', mode='w')
             cls.logger.debug(f'Decoded file in {new_path}')
             return new_path
         else:
-            cls.logger.warning(f"Without Expected Data ({suffix}): {data}")
+            cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
             return None
         
 
@@ -309,7 +315,7 @@ class ProcessSIFTS(ProcessPDBe):
         dfrm['unp_gaps0'] = dfrm.unp_gaps.apply(lambda x: x.count(0))
         add_tage_to_range(dfrm, tage_name='sifts_range_tag')
         dfrm['repeated'] = dfrm.apply(
-            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion (Specail Case)', axis=1)
+            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion_Undivided', axis=1)
         dfrm['repeated'] = dfrm.apply(
             lambda x: True if any(i < 0 for i in x['unp_gaps']) else x['repeated'], axis=1)
         dfrm['reversed'] = dfrm.pdb_gaps.apply(lambda x: any(i < 0 for i in x))

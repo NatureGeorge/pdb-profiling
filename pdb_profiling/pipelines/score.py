@@ -73,6 +73,9 @@ class AHP(object):
     INI_LIST = [1, 1, 2, 3, 4, 1, 2, 3, 4, 2, 3, 4, 2, 3, 2]
     factor = -1
     
+    def __init__(self, weight=None):
+        self._weight = weight
+
     @property
     def weight(self) -> List:
         com_list = list(combinations(self.ELE_LIST, 2))
@@ -93,9 +96,13 @@ class AHP(object):
         return select_vector * self.factor
     
     def raw_score(self, array):
-        weight = self.weight/self.weight[0]
-        score = array[0]*weight[0]
-        return score + np.dot(array[1:], -weight[1:])
+        if self._weight is not None:
+            weight = self._weight
+        else:
+            weight = self.weight
+            weight = weight/weight[0]
+            weight[1:] = -weight[1:]
+        return np.dot(array, weight)
 
     def score(self, array):
         '''

@@ -25,10 +25,16 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  sort_2_range, range_len,
                                  overlap_range, flat_dict_in_df,
                                  a_seq_parser, get_seq_from_parser,
-                                 get_diff_index)
+                                 get_diff_index, get_seq_seg,
+                                 get_gap_list,get_range_diff,
+                                 outside_range_len,add_range,
+                                 subtract_range, select_range,
+                                 interval2set)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
+from pdb_profiling.data import blosum62
+from pdb_profiling.pipelines.score import AHP
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -679,24 +685,35 @@ class PDB(Base):
         res_df[res_df.observed_ratio.gt(0)].apply(lambda x: regist_info(x), axis=1)
 
         self.set_to_df_kwargs(usecols=lambda x: not x.startswith('author'))
-        br_df = await self.fetch_from_web_api('api/pdb/entry/binding_sites/', PDB.to_dataframe_with_kwargs)
-        br_dict = br_df[br_df.entity_id.ne(-1)].groupby('struct_asym_id').residue_number.apply(lambda x: (to_interval(x), len(frozenset(x)))).to_dict()
-
-        return [self.StatsChainSeq(*key, 
-                                   to_interval(i[0] for i in value), 
-                                   len(value), 
-                                   sum(i[1] for i in value),
-                                   *br_dict.get(key[-1], (tuple(), 0))
-                                   ) for key, value in store.items()]
+        br_df = await self.fetch_from_web_api('api/pdb/entry/binding_sites/', self.to_dataframe_with_kwargs)
+        if br_df is None:
+            return [self.StatsChainSeq(*key,
+                                       to_interval(i[0] for i in value),
+                                       len(value),
+                                       sum(i[1] for i in value),
+                                       tuple(),
+                                       0
+                                       ) for key, value in store.items()]
+        else:
+            br_dict = br_df[br_df.entity_id.ne(-1)].groupby('struct_asym_id').residue_number.apply(lambda x: (to_interval(x), len(frozenset(x)))).to_dict()
+            return [self.StatsChainSeq(*key, 
+                                    to_interval(i[0] for i in value), 
+                                    len(value), 
+                                    sum(i[1] for i in value),
+                                    *br_dict.get(key[-1], (tuple(), 0))
+                                    ) for key, value in store.items()]
 
     @unsync
     async def stats_chain(self):
         pe_df = DataFrame(await self.stats_protein_entity_seq())
         ne_df = DataFrame(await self.stats_nucleotide_entity_seq())
         c_df = DataFrame(await self.stats_chain_seq())
-        pec_df = c_df.merge(pe_df)
-        pec_df['OBS_STD_INDEX'] = pec_df.apply(lambda x: overlap_range(x['OBS_INDEX'], x['STD_INDEX']), axis=1)
-        pec_df['OBS_STD_COUNT'] = pec_df.OBS_STD_INDEX.apply(range_len)
+        try:
+            pec_df = c_df.merge(pe_df)
+            pec_df['OBS_STD_INDEX'] = pec_df.apply(lambda x: overlap_range(x['OBS_INDEX'], x['STD_INDEX']), axis=1)
+            pec_df['OBS_STD_COUNT'] = pec_df.OBS_STD_INDEX.apply(range_len)
+        except Exception:
+            pec_df = None
         nec_df = c_df.merge(ne_df) if len(ne_df) > 0 else None
         return pec_df, nec_df
 
@@ -1081,13 +1098,6 @@ class SIFTS(PDB):
     async def dealWithInDel(dfrm: Union[DataFrame, Unfuture, Coroutine], sort_by_unp: bool = True) -> DataFrame:
         if isinstance(dfrm, (Coroutine, Unfuture)):
             dfrm = await dfrm
-        def get_gap_list(li: List):
-            return [li[i+1][0] - li[i][1] - 1 for i in range(len(li)-1)]
-
-        def get_range_diff(lyst_a: List, lyst_b: List):
-            array_a = array([right - left + 1 for left, right in lyst_a])
-            array_b = array([right - left + 1 for left, right in lyst_b])
-            return array_a - array_b
 
         def add_tage_to_range(df: DataFrame, tage_name: str):
             # ADD TAGE FOR SIFTS
@@ -1151,7 +1161,8 @@ class SIFTS(PDB):
             lambda x: json.dumps(x).decode('utf-8'))
         dfrm.unp_range = dfrm.unp_range.apply(
             lambda x: json.dumps(x).decode('utf-8'))
-        temp_cols = ['start', 'end', 'group_info', 'pdb_gaps', 'unp_gaps', 'range_diff',
+        dfrm['InDel_sum'] = dfrm.pdb_gaps.apply(sum) + dfrm.unp_gaps.apply(sum) + dfrm.range_diff.apply(sum)
+        temp_cols = ['start', 'end', 'group_info', 'pdb_gaps', 'unp_gaps',
                      'diff0', 'diff+', 'diff-', 'unp_gaps0']
         return dfrm.drop(columns=temp_cols), dfrm[temp_cols]
 
@@ -1232,10 +1243,12 @@ class SIFTS(PDB):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
-        f_dfrm = dfrm.drop(columns=['chain_id', 'struct_asym_id']
-            ).drop_duplicates(subset=['UniProt', 'entity_id', 'pdb_id']).reset_index(drop=True)
+        pdb_range_col = 'new_pdb_range' if 'new_pdb_range' in dfrm.columns else 'pdb_range'
+        unp_range_col = 'new_unp_range' if 'new_unp_range' in dfrm.columns else 'unp_range'
+        focus = ['UniProt', 'entity_id', 'pdb_id']
+        f_dfrm = dfrm[focus+[pdb_range_col, 'Entry', unp_range_col]].drop_duplicates(subset=focus).reset_index(drop=True)
         tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
-            x['pdb_id'], x['entity_id'], x['pdb_range'], x['Entry'], x['UniProt'], x['unp_range']), axis=1)
+            x['pdb_id'], x['entity_id'], x[pdb_range_col], x['Entry'], x['UniProt'], x[unp_range_col]), axis=1)
         f_dfrm['conflict_pdb_range'] = [await i for i in tasks]
         dfrm_ed = merge(dfrm, f_dfrm)
         assert dfrm_ed.shape[0] == dfrm.shape[0]
@@ -1291,10 +1304,160 @@ class SIFTS(PDB):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
-        f_dfrm = dfrm.drop(columns=['chain_id', 'struct_asym_id']
-            ).drop_duplicates(subset=['UniProt', 'entity_id', 'pdb_id']).reset_index(drop=True)
-        tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
-            x['pdb_id'], x['entity_id'], x['pdb_range'], x['Entry'], x['UniProt'], x['unp_range']), axis=1)
+        
+        focus = ['UniProt', 'entity_id', 'pdb_id']
+        f_dfrm = dfrm[focus+['pdb_range', 'unp_range', 'Entry', 'range_diff', 'sifts_range_tag']].drop_duplicates(subset=focus)
+        f_dfrm = f_dfrm[f_dfrm.sifts_range_tag.isin(('Deletion', 'Insertion_Undivided', 'InDel_2', 'InDel_3'))].reset_index(drop=True)
+
+        if len(f_dfrm) > 0:
+            tasks = f_dfrm.apply(lambda x: cls.a_sliding_alignment(
+                x['range_diff'], x['pdb_range'], x['unp_range'], x['pdb_id'], x['entity_id'], x['UniProt'], x['Entry']), axis=1)
+            res = [await i for i in tasks]
+            f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame(list(zip(*i)) for i in res)
+            dfrm_ed = merge(dfrm, f_dfrm.drop(columns=['range_diff']), how='left')
+            assert dfrm_ed.shape[0] == dfrm.shape[0]
+            dfrm_ed.new_pdb_range = dfrm_ed.apply(lambda x: x['pdb_range'] if isna(x['new_pdb_range']) else x['new_pdb_range'],axis=1)
+            dfrm_ed.new_unp_range = dfrm_ed.apply(lambda x: x['unp_range'] if isna(x['new_unp_range']) else x['new_unp_range'],axis=1)
+            return dfrm_ed
+        else:
+            dfrm_ed = dfrm.copy()
+            dfrm_ed['new_pdb_range'] = dfrm.pdb_range
+            dfrm_ed['new_unp_range'] = dfrm.unp_range
+            return dfrm_ed
+
+    @staticmethod
+    def sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, **kwargs):
+        def get_optimal_range(abs_diff, seg_to_add, seg_to_ori, lstart, lend, rstart, rend, on_left):
+            gap_seg = '-' * abs_diff
+            res = tuple(sum(blosum62.get((l, r), blosum62.get((r, l), 0)
+                                        ) for l, r in zip(seg_to_add[:i] + gap_seg + seg_to_add[i:], seg_to_ori)
+                            ) for i in range(len(seg_to_add)+1))
+            max_val = max(res)
+            index = res.index(max_val)
+            assert index > 0
+            # assert max_val not in res[index+1:]
+            '''
+            if max_val in res[index+1:]:
+                import matplotlib.pyplot as plt
+                plt.figure(figsize=(10,8))
+                plt.ylim(max_val-100, max_val+30)
+                plt.xlim(index-50, index+50)
+                plt.scatter(tuple(range(len(res))),res, label=f"{kwargs}")
+                plt.plot(tuple(range(len(res))), res)
+                plt.legend()
+                plt.show()
+            '''
+            yield (lstart, lstart+index), (rstart, rstart+index)
+            if on_left:
+                yield (lstart+index+1, lend), (rstart+index+1+abs_diff, rend)
+            else:
+                yield (lstart+index+1+abs_diff, lend), (rstart+index+1, rend)
+
+        for diff, (lstart, lseg), (rstart, rseg) in zip(range_diff, get_seq_seg(pdb_seq, pdb_range), get_seq_seg(unp_seq, unp_range)):
+
+            lend = lstart + len(lseg) - 1
+            rend = rstart + len(rseg) - 1
+
+            if diff > 0:
+                yield from get_optimal_range(diff, lseg, rseg, lstart, lend, rstart, rend, True)
+            elif diff < 0:
+                yield from get_optimal_range(-diff, rseg, lseg, lstart, lend, rstart, rend, False)
+            else:
+                yield (lstart, lend), (rstart, rend)
+                continue
+
+    @classmethod
+    @unsync
+    async def a_sliding_alignment(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt, Entry):
+        pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
+        unp_seq = await get_seq_from_parser(UniProtFASTA.single_retrieve(Entry).then(a_seq_parser), UniProt)
+        pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
+        unp_range = json.loads(unp_range) if isinstance(unp_range, str) else unp_range
+        return cls.sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
+                pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
+
+    @classmethod
+    async def add_unp_len(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine]):
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        if isinstance(dfrm, Tuple):
+            dfrm = dfrm[0]
+        f_dfrm = dfrm[['UniProt', 'Entry']].drop_duplicates().reset_index(drop=True)
+        tasks = f_dfrm.apply(lambda x: get_seq_from_parser(UniProtFASTA.single_retrieve(x['Entry']).then(a_seq_parser), x['UniProt']), axis=1)
+        f_dfrm['unp_len'] = [len(await i) for i in tasks]
+        dfrm_ed = merge(dfrm, f_dfrm)
+        assert dfrm_ed.shape[0] == dfrm.shape[0]
+        return dfrm_ed
+
+    @unsync
+    async def pipe_score(self):
+        try:
+            sifts_df = await self.fetch_from_web_api('api/mappings/all_isoforms/', self.to_dataframe
+                ).then(self.reformat
+                ).then(self.dealWithInDel
+                ).then(self.fix_range
+                ).then(self.add_residue_conflict
+                ).then(self.add_unp_len)
+        except Exception:
+            return
+        if self.level == 'PDB Entry':
+            pec_df, _ = await self.stats_chain()
+        else:
+            tasks = await PDBs(sifts_df.pdb_id.unique()).fetch('stats_chain').run()
+            pec_df, _ = zip(*tasks)
+            pec_df = concat(pec_df, sort=False, ignore_index=True)
+        
+        full_df = sifts_df.merge(pec_df)
+        assert sifts_df.shape[0] == full_df.shape[0] # f"{pec_df[pec_df.pdb_id.eq('6mzl')]}"
+        
+        s1 = full_df.apply(lambda x: range_len(overlap_range(x['OBS_STD_INDEX'], x['new_pdb_range'])), axis=1)
+        s2 = full_df.apply(lambda x: outside_range_len(subtract_range(x['new_pdb_range'], x['ARTIFACT_INDEX']), x['SEQRES_COUNT']), axis=1)
+        s3 = full_df.BINDING_LIGAND_COUNT
+        s4 = full_df.new_pdb_range.apply(range_len) - full_df.apply(
+            lambda x: range_len(overlap_range(x['OBS_INDEX'], x['new_pdb_range'])), axis=1)
+        s5 = full_df.apply(lambda x: range_len(overlap_range(
+            overlap_range(x['OBS_INDEX'], x['new_pdb_range']), 
+            add_range(x['conflict_pdb_range'], x['NON_INDEX']))), axis=1)
+        s6 = full_df.InDel_sum
+        ahp = AHP(array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746]))
+        s_df = DataFrame(dict(s1=s1,s2=s2,s3=s3,s4=s4,s5=s5,s6=s6))
+        s_df['RAW_BS'] = s_df.apply(ahp.raw_score, axis=1) / full_df.unp_len
+
+        exp_cols = ['pdb_id', 'resolution', 'experimental_method_class', 'experimental_method', 'multi_method']
+        if self.level == 'PDB Entry':
+            exp_df = DataFrame(await PDBs.fetch_exp_pipe(self), columns=exp_cols)
+            summary_dict = await self.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
+            d = summary_dict[self.pdb_id][0]
+            exp_df['revision_date'] = d['revision_date']
+            exp_df['deposition_date'] = d['deposition_date']
+        else:
+            pdbs = PDBs(sifts_df.pdb_id.unique())
+            tasks = await pdbs.fetch(PDBs.fetch_exp_pipe).run()
+            exp_df = DataFrame((j for i in tasks for j in i), columns=exp_cols)
+            r_len = exp_df.shape[0]
+            tasks = await pdbs.fetch(PDBs.fetch_date).run()
+            exp_df = exp_df.merge(DataFrame(tasks, columns=['pdb_id', 'revision_date','deposition_date']))
+            assert r_len == exp_df.shape[0]
+
+        return full_df, s_df, exp_df
+
+    @unsync
+    async def pipe_select_mo(self):
+        assert self.level == 'UniProt'
+        full_df, s_df, exp_df = await self.pipe_score()
+        sele_df = merge(
+            concat([full_df, s_df[['RAW_BS']]], axis=1).query(
+                'UNK_COUNT == 0 and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20'),
+            exp_df.query(
+                '(experimental_method == "X-ray diffraction" and resolution <= 3) or experimental_method == "Solution NMR"'))
+        sele_df['1/resolution'] = 1 / sele_df.resolution
+        sele_df['id_score'] = sele_df.chain_id.apply(lambda x: -sum(ord(i) for i in x))
+        sele_df['COV_SCORE'] = sele_df.RAW_BS * sele_df.unp_len / len(frozenset.union(*sele_df.new_unp_range.apply(interval2set).to_list()))
+        sele_df = sele_df[sele_df.RAW_BS>0]
+        sele_index = select_range(sele_df.new_unp_range, sele_df.sort_values(by=['RAW_BS', '1/resolution', 'revision_date', 'id_score'], ascending=False).index)
+        sele_df['select_tag'] = False
+        sele_df.loc[sele_index, 'select_tag'] = True
+        return sele_df
 
 
 class Compounds(Base):
@@ -1328,6 +1491,13 @@ class PDBs(list):
                 i['experimental_method'],
                 multi_method) for i in exp_data[pdb_ob.pdb_id])
     
+    @staticmethod
+    @unsync
+    async def fetch_date(pdb_ob: PDB):
+        summary_data = await pdb_ob.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
+        data = summary_data[pdb_ob.pdb_id][0]
+        return pdb_ob.pdb_id, data['revision_date'], data['deposition_date']
+    
     def fetch(self, func:Union[Callable[[PDB], List], str]):
         if isinstance(func, str):
             self.tasks = [getattr(pdb_ob, func)() for pdb_ob in self]
@@ -1344,7 +1514,8 @@ class PDBs(list):
 
 
 class SIFTSs(PDBs):
-    pass
+    def __init__(self, iterable: Iterable):
+        super().__init__((SIFTS(i) if isinstance(i, str) else i for i in iterable))
 
 '''
 TODO: Deal with carbohydrate polymer in PISA

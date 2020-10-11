@@ -22,6 +22,7 @@ from itertools import chain
 import orjson as json
 import logging
 from io import StringIO
+from textdistance import overlap
 
 
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
@@ -731,6 +732,9 @@ def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable
     unk_range_set = interval2set(unk_range)
     return to_interval(obs_range_set.intersection(unk_range_set))
     '''
+    obs_range = json.loads(obs_range) if isinstance(obs_range, str) else obs_range
+    unk_range = json.loads(unk_range) if isinstance(unk_range, str) else unk_range
+
     def unit(i1,i2):
         for start1, end1 in i1:
             for start2, end2 in i2:
@@ -771,3 +775,56 @@ def red_seq_seg(seq, ranges):
         yield f"{seq[edge:start-1]}\x1b[31m{seq[start-1:end]}\x1b[0m"
         edge = end
     yield seq[end:]
+
+
+def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:
+    if isinstance(pdb_range, str):
+        lyst = json.loads(pdb_range)
+    else:
+        lyst = pdb_range
+    out_head = lyst[0][0]-1
+    out_tail = seqres_len - lyst[-1][-1]
+    if out_head <= omit:
+        out_head = 0
+    else:
+        out_head -= omit
+    if out_tail <= omit:
+        out_tail = 0
+    else:
+        out_tail -= omit
+    return out_head + out_tail
+
+
+def get_gap_list(li: Union[str,List,Tuple]):
+    if isinstance(li, str):
+        li = json.loads(li)
+    return [li[i+1][0] - li[i][1] - 1 for i in range(len(li)-1)]
+
+
+def get_range_diff(lyst_a: Union[str, List, Tuple], lyst_b: Union[str, List, Tuple]):
+    lyst_a = json.loads(lyst_a) if isinstance(lyst_a, str) else lyst_a
+    lyst_b = json.loads(lyst_b) if isinstance(lyst_b, str) else lyst_b
+    array_a = np.array([right - left + 1 for left, right in lyst_a])
+    array_b = np.array([right - left + 1 for left, right in lyst_b])
+    return array_a - array_b
+
+
+def select_range(ranges, indexes, cutoff=0.2, skip_index=[]):
+    select_index = []
+    def unit(cur_index):
+        if cur_index in skip_index:
+            return
+        cur_range = ranges[cur_index]
+        cur_range = json.loads(cur_range) if isinstance(cur_range, str) else cur_range
+        for selected in select_index:
+            selected_range = ranges[selected]
+            selected_range = json.loads(selected_range) if isinstance(selected_range, str) else selected_range
+            score = overlap.similarity(lyst2range(cur_range),
+                               lyst2range(selected_range))
+            if score > cutoff:
+                return
+        select_index.append(cur_index)
+
+    for index in indexes:
+        unit(index)
+    return select_index

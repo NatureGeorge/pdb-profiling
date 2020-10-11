@@ -26,30 +26,12 @@ import traceback
 from pdb_profiling.utils import (pipe_out, sort_sub_cols, slice_series, to_interval, 
                                  lyst22intervel, SEQ_DICT, standardAA, standardNu, range_len,
                                  interval2set, lyst2range, subtract_range,
-                                 add_range, overlap_range)
+                                 add_range, overlap_range, outside_range_len)
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processors.pdbe.sqlite_api import Sqlite_API
 import logging
 # logging.basicConfig(level=logging.INFO)
-
-
-def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:
-    if isinstance(pdb_range, str):
-        lyst = json.loads(pdb_range)
-    else:
-        lyst = pdb_range
-    out_head = lyst[0][0]-1
-    out_tail = seqres_len - lyst[-1][-1]
-    if out_head <= omit:
-        out_head = 0
-    else:
-        out_head -= omit
-    if out_tail <= omit:
-        out_tail = 0
-    else:
-        out_tail -= omit
-    return out_head + out_tail
 
 
 def lyst2dict(lyst: List) -> Dict:
