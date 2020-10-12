@@ -5,7 +5,7 @@
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
-from numpy import array, where as np_where, count_nonzero, nan
+from numpy import array, where as np_where, count_nonzero, nan, dot
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
@@ -34,7 +34,6 @@ from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBA
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.data import blosum62
-from pdb_profiling.pipelines.score import AHP
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -393,7 +392,7 @@ class PDB(Base):
     @unsync
     async def set_res2eec_df(self, merge_with_molecules_info:bool=True):
         '''
-        NOTE except waters
+        NOTE except water
 
         Example of chain_id != struct_asym_id:
 
@@ -735,6 +734,30 @@ class PDB(Base):
         else:
             raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
 
+    @unsync
+    async def profile_id(self):
+        '''except water'''
+        assg_oper_df = await self.fetch_from_modelServer_api(
+                'atoms',
+                data_collection=await self.pipe_assg_data_collection(), 
+                then_func=PDB.to_assg_oper_df)
+        res2eec_df = await self.get_res2eec_df()
+        focus_res2eec_df = res2eec_df[['pdb_id', 'entity_id', 'molecule_type', 'chain_id', 'struct_asym_id']]
+        add_0_assg_oper_df = focus_res2eec_df.copy()
+        add_0_assg_oper_df['assembly_id'] = 0
+        add_0_assg_oper_df['model_id'] = 1
+        add_0_assg_oper_df['asym_id_rank'] = 1
+        add_0_assg_oper_df['oper_expression'] = ''
+        add_0_assg_oper_df['symmetry_operation'] = ''
+
+        if assg_oper_df is not None:
+            focus_assg_oper_df = assg_oper_df[assg_oper_df.struct_asym_id.isin(focus_res2eec_df.struct_asym_id)]
+            new_focus_assg_oper_df = concat([add_0_assg_oper_df, focus_assg_oper_df.merge(focus_res2eec_df, how='outer')])
+            assert any(new_focus_assg_oper_df.isnull().sum()) is False, f"Unexpected Cases {new_focus_assg_oper_df}"
+        else:
+            new_focus_assg_oper_df = add_0_assg_oper_df
+        return new_focus_assg_oper_df
+
 
 class PDBAssemble(PDB):
 
@@ -900,7 +923,7 @@ class PDBAssemble(PDB):
         self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', target_type_asym)
         self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
         await self.set_interface(obligated_class_chains=protein_type_asym, allow_same_class_interaction=False)
-        
+
 
 class PDBInterface(PDBAssemble):
  
@@ -1391,6 +1414,9 @@ class SIFTS(PDB):
 
     @unsync
     async def pipe_score(self):
+        weight = array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746])
+        def raw_score(vec): return dot(vec, weight)
+        
         try:
             sifts_df = await self.fetch_from_web_api('api/mappings/all_isoforms/', self.to_dataframe
                 ).then(self.reformat
@@ -1419,9 +1445,8 @@ class SIFTS(PDB):
             overlap_range(x['OBS_INDEX'], x['new_pdb_range']), 
             add_range(x['conflict_pdb_range'], x['NON_INDEX']))), axis=1)
         s6 = full_df.InDel_sum
-        ahp = AHP(array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746]))
         s_df = DataFrame(dict(s1=s1,s2=s2,s3=s3,s4=s4,s5=s5,s6=s6))
-        s_df['RAW_BS'] = s_df.apply(ahp.raw_score, axis=1) / full_df.unp_len
+        s_df['RAW_BS'] = s_df.apply(raw_score, axis=1) / full_df.unp_len
 
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class', 'experimental_method', 'multi_method']
         if self.level == 'PDB Entry':

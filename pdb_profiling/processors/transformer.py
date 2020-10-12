@@ -55,9 +55,13 @@ class Dict2Tabular(object):
         for res in data:  # traverseSuffixes(suffix, data)
             if cur_sheet is None:
                 cur_sheet = cls.sync_with_pyexcel(*res)
+                if cur_sheet is None:
+                    continue
                 cur_cols = set(cur_sheet.colnames)
             else:
                 new_sheet = cls.sync_with_pyexcel(*res)
+                if new_sheet is None:
+                    continue
                 new_cols = set(new_sheet.colnames)
                 # assert cur_cols >= new_cols, f"Unexpected new columns: {new_cols-cur_cols}"
                 if not cur_cols >= new_cols:
