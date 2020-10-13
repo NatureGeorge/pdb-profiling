@@ -34,6 +34,7 @@ from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBA
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.data import blosum62
+from pdb_profiling import cif_gz_stream
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -361,7 +362,7 @@ class PDB(Base):
     @unsync
     async def pipe_assg_data_collection(self) -> str:
         '''demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}'''
-        res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         # res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
         # assert res_dict is not None, f"{self.pdb_ob}: Unexpected Cases, without observed residues?!"
         res_dict = res_df.loc[res_df.observed_ratio.gt(0).idxmax()].to_dict()
@@ -402,7 +403,7 @@ class PDB(Base):
         res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         eec_df = res_df[['pdb_id', 'entity_id', 'chain_id',
                          'struct_asym_id']].drop_duplicates().reset_index(drop=True)
-        eec_df['struct_asym_id_in_assembly'] = eec_df.struct_asym_id
+        # eec_df['struct_asym_id_in_assembly'] = eec_df.struct_asym_id
         if merge_with_molecules_info:
             mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', self.to_dataframe)
             self.res2eec_df = eec_df.merge(mol_df, how='left')
@@ -421,7 +422,7 @@ class PDB(Base):
     @unsync
     async def assembly2eec(cls, path: Unfuture):
         '''
-        NOTE except waters
+        NOTE except water
         '''
         assembly_df = await path.then(cls.to_dataframe)
         # exclude_molecule_type=('bound', 'water', 'carbohydrate polymer')
@@ -445,7 +446,7 @@ class PDB(Base):
             for assembly_id in assemblys:
                 yield f"{pdb_id}/{assembly_id}"
         
-        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.to_dataframe)
+        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.to_dataframe)
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
         assemblys = set(ass_eec_df.assembly_id) | {0}
         if focus_assembly_ids is not None:
@@ -458,54 +459,15 @@ class PDB(Base):
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
-
-    @unsync
-    async def set_eec_as_df(self):
-        def convert(struct_asym_id, asym_id_in_assembly):
-            if not isna(struct_asym_id):
-                return struct_asym_id, 1
-            else:
-                assert len(asym_id_in_assembly) > 1, f"id: {asym_id_in_assembly}"
-                asym_id_rank = ord(asym_id_in_assembly[1])-63
-                assert asym_id_rank > 1
-                return asym_id_in_assembly[0], asym_id_rank
-
-        ed_eec_df = await self.get_res2eec_df()
-        ed_as_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', PDB.assembly2eec) # NOTE may exists null pdb assembly
-        if (ed_eec_df is None) or (ed_as_df is None):
-            return None
-        
-        ed_eec_df = ed_eec_df[['pdb_id', 'entity_id', 'chain_id',
-                               'struct_asym_id', 'struct_asym_id_in_assembly',
-                               'molecule_type', 'molecule_name']]
-        eec_as_df = ed_eec_df.merge(ed_as_df, how='outer')
-
-        eec_as_df['asym_id_rank'] = 1
-        eec_as_df[['struct_asym_id', 'asym_id_rank']] = array([convert(*i)
-                                                                for i in zip(eec_as_df.struct_asym_id, eec_as_df.struct_asym_id_in_assembly)])
-        chain_info = {(pdb_id, struct_asym_id): chain_id for pdb_id, chain_id, struct_asym_id in zip(
-            eec_as_df.pdb_id, eec_as_df.chain_id, eec_as_df.struct_asym_id) if not isna(chain_id)}
-        eec_as_df['chain_id'] = eec_as_df.apply(
-            lambda x: chain_info[(x['pdb_id'], x['struct_asym_id'])], axis=1)
-        eec_as_df.asym_id_rank = eec_as_df.asym_id_rank.astype(int)
-
-        ed_eec_df_0 = ed_eec_df.copy()
-        ed_eec_df_0['assembly_id'] = 0
-        ed_eec_df_0['asym_id_rank'] = 1
-        ed_eec_df_0['details'] = 'asymmetric_unit'
-        eec_as_df = concat([eec_as_df, ed_eec_df_0]).sort_values(
-            ['pdb_id', 'assembly_id', 'entity_id', 'struct_asym_id', 'asym_id_rank'])
-
-        self.eec_as_df = eec_as_df
-
+    
     @unsync
     async def get_eec_as_df(self):
         try:
             return self.eec_as_df
         except AttributeError:
-            await self.set_eec_as_df()
+            self.eec_as_df = await self.profile_id()
             return self.eec_as_df
-    
+
     @staticmethod
     def parseOperatorList(value: str) -> Iterable[Iterable[str]]:
         '''
@@ -734,13 +696,40 @@ class PDB(Base):
         else:
             raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
 
+    @classmethod
+    def set_folder(cls, folder: Union[Path, str]):
+        super().set_folder(folder)
+        cls.assembly_cif_folder = cls.folder/'pdbe_assembly_cif'
+        cls.assembly_cif_folder.mkdir(parents=True, exist_ok=True)
+
+    @unsync
+    async def profile_asym_id_in_assembly(self, assembly_ids, replace:bool=False):
+        dfs = []
+        parent = self.assembly_cif_folder/self.pdb_id[1:3]
+        parent.mkdir(parents=True, exist_ok=True)
+        for assembly_id in assembly_ids:
+            header = f'{self.pdb_id}-assembly-{assembly_id}'
+            target_file = parent/f'{header}-pdbe_chain_remapping.cif'
+            if (not target_file.exists()) or replace:
+                await cif_gz_stream.writer(
+                    cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
+                    target_file,
+                    b'data_%s\n#\nloop_\n' % bytes(header, 'utf-8'),
+                    b'_pdbe_chain_remapping'
+                    )
+            async with aiofiles_open(target_file, 'rt') as file_io:
+                handle = await file_io.read()
+                handle = (i+'\n' for i in handle.split('\n'))
+                dfs.append(DataFrame(MMCIF2DictPlus(handle)))
+        return concat(dfs, ignore_index=True, sort=False)
+
     @unsync
     async def profile_id(self):
         '''except water'''
         assg_oper_df = await self.fetch_from_modelServer_api(
                 'atoms',
                 data_collection=await self.pipe_assg_data_collection(), 
-                then_func=PDB.to_assg_oper_df)
+                then_func=self.to_assg_oper_df)
         res2eec_df = await self.get_res2eec_df()
         focus_res2eec_df = res2eec_df[['pdb_id', 'entity_id', 'molecule_type', 'chain_id', 'struct_asym_id']]
         add_0_assg_oper_df = focus_res2eec_df.copy()
@@ -752,12 +741,51 @@ class PDB(Base):
 
         if assg_oper_df is not None:
             focus_assg_oper_df = assg_oper_df[assg_oper_df.struct_asym_id.isin(focus_res2eec_df.struct_asym_id)]
-            new_focus_assg_oper_df = concat([add_0_assg_oper_df, focus_assg_oper_df.merge(focus_res2eec_df, how='outer')])
+            new_focus_assg_oper_df = concat([add_0_assg_oper_df, focus_assg_oper_df.merge(focus_res2eec_df, how='outer')], ignore_index=True, sort=False)
             assert any(new_focus_assg_oper_df.isnull().sum()) is False, f"Unexpected Cases {new_focus_assg_oper_df}"
         else:
-            new_focus_assg_oper_df = add_0_assg_oper_df
-        return new_focus_assg_oper_df
+            add_0_assg_oper_df['struct_asym_id_in_assembly'] = add_0_assg_oper_df.struct_asym_id
+            add_0_assg_oper_df['details'] = 'asymmetric_unit'
+            self.subset_assembly = frozenset()
+            return add_0_assg_oper_df
+        
+        to_fetch_assembly = new_focus_assg_oper_df[
+            new_focus_assg_oper_df.assembly_id.ne(0) & new_focus_assg_oper_df.symmetry_operation.ne('["x,y,z"]')].assembly_id.unique()
+        if len(to_fetch_assembly)> 0:
+            in_ass_df = await self.profile_asym_id_in_assembly(to_fetch_assembly)
+            in_ass_df.columns = [i.replace('_pdbe_chain_remapping.', '') for i in in_ass_df.columns]
 
+            in_ass_df = in_ass_df[['assembly_id', 'entity_id', 'orig_label_asym_id',
+                                'new_label_asym_id', 'applied_operations']].rename(
+                columns={'orig_label_asym_id': 'struct_asym_id',
+                        'new_label_asym_id': 'struct_asym_id_in_assembly',
+                        'applied_operations': 'oper_expression'}).copy()
+
+            in_ass_df.oper_expression = in_ass_df.oper_expression.apply(lambda x: json.dumps([i for i in x.split('_')[::-1] if i != '']).decode('utf-8'))
+            in_ass_df.assembly_id = in_ass_df.assembly_id.astype(int)
+            in_ass_df.entity_id = in_ass_df.entity_id.astype(int)
+            profile_id_df = new_focus_assg_oper_df.merge(in_ass_df, how='left')
+            self.subset_assembly = frozenset(profile_id_df.assembly_id)-frozenset(to_fetch_assembly)
+            assert frozenset(profile_id_df[profile_id_df.struct_asym_id_in_assembly.isnull()].assembly_id) == self.subset_assembly
+            a0_index = profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index
+            self.subset_assembly = self.subset_assembly - {0}
+            profile_id_df.loc[a0_index, 'struct_asym_id_in_assembly'] = profile_id_df.loc[a0_index, 'struct_asym_id']
+        else:
+            self.subset_assembly = frozenset(new_focus_assg_oper_df.assembly_id) - {0}
+            new_focus_assg_oper_df['struct_asym_id_in_assembly'] = new_focus_assg_oper_df.struct_asym_id
+            profile_id_df = new_focus_assg_oper_df
+        
+        # TODO: Check
+        ass_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.to_dataframe)
+        a_df = profile_id_df[['assembly_id', 'entity_id']].drop_duplicates().query('assembly_id != 0')
+        for assembly_id, entity_id in zip(a_df.assembly_id, a_df.entity_id):
+            profile_lyst = tuple(profile_id_df[profile_id_df.assembly_id.eq(assembly_id) & profile_id_df.entity_id.eq(entity_id)].struct_asym_id_in_assembly.sort_values().tolist())
+            ass_lyst = tuple(json.loads(ass_df.loc[(ass_df.assembly_id.eq(assembly_id)&ass_df.entity_id.eq(entity_id)).idxmax(), 'in_chains']))
+            assert profile_lyst == ass_lyst, f"\n{assembly_id}\n{entity_id}\n{profile_lyst},\n{ass_lyst}"
+        profile_id_df = profile_id_df.merge(ass_df[['assembly_id', 'details']].drop_duplicates(), how='left')
+        profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.eq(0)].index, 'details'] = 'asymmetric_unit'
+        return profile_id_df
+        
 
 class PDBAssemble(PDB):
 
@@ -889,10 +917,26 @@ class PDBAssemble(PDB):
             self.interface = dict()
             return
         protein_type_asym = eec_as_df[
-            eec_as_df.molecule_type.eq('polypeptide(L)')].struct_asym_id_in_assembly
+            eec_as_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))].struct_asym_id_in_assembly
         self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', protein_type_asym)
         self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', protein_type_asym)
         await self.set_interface()
+
+    @unsync
+    async def pipe_protein_else_interface(self, molecule_types, allow_same_class_interaction=False):
+        eec_as_df = await self.get_assemble_eec_as_df()
+        if len(eec_as_df) == 1:
+            self.interface = dict()
+            return
+        molType_dict = eec_as_df.groupby('molecule_type').struct_asym_id_in_assembly.apply(frozenset).to_dict()
+
+        protein_type_asym = molType_dict.get('polypeptide(L)', frozenset()) | molType_dict.get('polypeptide(D)', frozenset())
+        else_type_asym = frozenset.union(*(molType_dict.get(molecule_type, frozenset()) for molecule_type in molecule_types))
+        target_type_asym = protein_type_asym | else_type_asym
+        
+        self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', target_type_asym)
+        self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
+        await self.set_interface(obligated_class_chains=protein_type_asym, allow_same_class_interaction=allow_same_class_interaction)
 
     @unsync
     async def pipe_protein_ligand_interface(self):
@@ -910,19 +954,14 @@ class PDBAssemble(PDB):
         >>> self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
         >>> self.set_interface(obligated_class_chains=protein_type_asym).result()
         '''
-        eec_as_df = await self.get_assemble_eec_as_df()
-        if len(eec_as_df) == 1:
-            self.interface = dict()
-            return
-        molType_dict = eec_as_df.groupby('molecule_type').struct_asym_id_in_assembly.apply(set).to_dict()
+        await self.pipe_protein_else_interface(('bound',), False)
 
-        protein_type_asym = molType_dict.get('polypeptide(L)', set())
-        ligand_type_asym = molType_dict.get('bound', set())
-        target_type_asym = protein_type_asym | ligand_type_asym
-
-        self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', target_type_asym)
-        self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', target_type_asym)
-        await self.set_interface(obligated_class_chains=protein_type_asym, allow_same_class_interaction=False)
+    @unsync
+    async def pipe_protein_nucleotide_interface(self, molecule_types=None):
+        await self.pipe_protein_else_interface((
+            'polydeoxyribonucleotide', 
+            'polyribonucleotide', 
+            'polydeoxyribonucleotide/polyribonucleotide hybrid') if molecule_types is None else molecule_types, False)
 
 
 class PDBInterface(PDBAssemble):
@@ -985,24 +1024,25 @@ class PDBInterface(PDBAssemble):
         return interfacedetail_df
 
     @unsync
-    async def set_interface_res(self):
+    async def set_interface_res(self, keep_interface_res_df:bool=False):
         interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', self.to_interfacedetail_df)
         if interfacedetail_df is None:
             return None
         else:
             struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
         eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
-        res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe)
+        res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
         interfacedetail_df = interfacedetail_df.merge(res_df, how="left")
         check = interfacedetail_df[interfacedetail_df.residue_number.isnull()]
-        self.interface_res_df = interfacedetail_df
+        if keep_interface_res_df:
+            self.interface_res_df = interfacedetail_df
         if len(check) != 0:
             raise ValueError(f"Unexcepted Data in Residue DataFrame: {check.head(1).to_dict('record')[0]}")
         
         focus_cols = ['pdb_id', 'entity_id', 'chain_id', 'struct_asym_id', 
                       'struct_asym_id_in_assembly', 'asym_id_rank',
-                      'assembly_id', 'interface_id', 'molecule_type', 'molecule_name',
+                      'assembly_id', 'interface_id', 'molecule_type',
                       'residue_number', 'buried_surface_area', 'solvent_accessible_area']
         nda = interfacedetail_df[focus_cols].to_numpy()
 
@@ -1050,7 +1090,7 @@ class PDBInterface(PDBAssemble):
         try:
             return self.interface_res_df
         except AttributeError:
-            await self.set_interface_res()
+            await self.set_interface_res(True)
             return self.interface_res_df
     
     @unsync

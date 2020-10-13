@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from re import compile as re_compile
 
-__version__ = '0.1.9'
+__version__ = '0.1.10'
 
 
 common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'
@@ -31,7 +31,7 @@ def default_id_tag(identifier:str, default:str='', raise_error:bool=False):
 def default_config(folder='./'):
     from pdb_profiling.log import Abclog
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
-    from pdb_profiling.processors.pdbe.record import Base, SIFTS
+    from pdb_profiling.processors.pdbe.record import Base, PDB, SIFTS
     from pdb_profiling.processors.pdbe.api import ProcessPDBe
     from pdb_profiling.processors.proteins.record import Identifier
     from pdb_profiling.processors import UniProtFASTA
@@ -47,6 +47,7 @@ def default_config(folder='./'):
     UniProtFASTA.set_web_semaphore(30).result()
     # Set Folder that store downloaded and handled files
     Base.set_folder(folder)
+    PDB.set_folder(folder)
     SIFTS.set_folder(folder)
     Identifier.set_folder(folder)
     UniProtFASTA.set_folder(folder)

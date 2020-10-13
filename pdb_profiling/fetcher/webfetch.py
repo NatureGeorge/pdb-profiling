@@ -73,7 +73,7 @@ class UnsyncFetch(Abclog):
                     cls.logger.debug(f"File has been saved in: {path}")
                     return path
                 elif resp.status in (403, 404, 405):
-                    cls.logger.debug(f"403/404/405 for: {info}")
+                    cls.logger.debug(f"403|404|405 for: {info}")
                     return None
                 else:
                     mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
