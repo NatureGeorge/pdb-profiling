@@ -5,7 +5,7 @@
 # @Last Modified: 2020-10-13 04:38:24 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from aiohttp import ClientSession
-import aiofiles
+from aiofiles import open as aiofiles_open
 from unsync import unsync
 import zlib
 from typing import Iterable
@@ -85,7 +85,7 @@ async def reader(url):
 @unsync
 async def writer(handle, path, header:bytes, start_key:bytes):
     start = False
-    async with aiofiles.open(path, 'wb') as fileOb:
+    async with aiofiles_open(path, 'wb') as fileOb:
         if header:
             await fileOb.write(header)
         async for line in handle:

@@ -31,7 +31,7 @@ def default_id_tag(identifier:str, default:str='', raise_error:bool=False):
 def default_config(folder='./'):
     from pdb_profiling.log import Abclog
     from pdb_profiling.fetcher.webfetch import UnsyncFetch
-    from pdb_profiling.processors.pdbe.record import Base, PDB, SIFTS
+    from pdb_profiling.processors.pdbe.record import Base, PDB
     from pdb_profiling.processors.pdbe.api import ProcessPDBe
     from pdb_profiling.processors.proteins.record import Identifier
     from pdb_profiling.processors import UniProtFASTA
@@ -48,6 +48,5 @@ def default_config(folder='./'):
     # Set Folder that store downloaded and handled files
     Base.set_folder(folder)
     PDB.set_folder(folder)
-    SIFTS.set_folder(folder)
     Identifier.set_folder(folder)
     UniProtFASTA.set_folder(folder)

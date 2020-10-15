@@ -31,7 +31,7 @@ class SMR(object):
 
     root = 'repository/uniprot/'
     headers = {'accept': 'text/plain'}
-    use_existing: bool = False
+    use_existing: bool = True
 
     @staticmethod
     def yieldSMR(data: Dict):
@@ -98,9 +98,17 @@ class SMR(object):
                 raise e
         res = Dict2Tabular.pyexcel_io(cls.yieldSMR(data))
         if res is not None:
-            await pipe_out(
-                df=res, path=new_path,
-                format='tsv', mode='w')
+            if isinstance(res, Generator):
+                one = False
+                for r in res:
+                    if r is not None:
+                        await pipe_out(df=r, path=new_path, format='tsv', mode='a')
+                        one = True
+                if not one:
+                    logging.debug(f"Without Expected Data (swissmodel/repository/uniprot/): {data}")
+                    return None
+            else:
+                await pipe_out(df=res, path=new_path, format='tsv', mode='w')
             logging.debug(f'Decoded file in {new_path}')
             return new_path
         else:

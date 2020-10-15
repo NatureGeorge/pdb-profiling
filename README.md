@@ -84,3 +84,10 @@ See `examples/...`
 ## Copyright Notice
 
 This project is developed by [Zefeng Zhu](https://github.com/NatureGeorge) and hold by [Minghui Group](https://lilab.jysw.suda.edu.cn/).
+
+## *Alternative Resources
+
+* `RCSB`
+  * [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
+  * [RCSB PDB Search API](http://search.rcsb.org/)
+    * [Documentation for New and Improved APIs](https://www.rcsb.org/news?year=2020&article=5f65165507302466657ec0e8&feature=true)
