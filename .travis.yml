@@ -8,6 +8,10 @@ python:
 # command to install dependencies
 install:
   - pip install pdb-profiling
+  - pip install coveralls
 
 # command to run tests
 script: pytest ./test/test_load_modules.py
+
+after_success:
+  - coveralls

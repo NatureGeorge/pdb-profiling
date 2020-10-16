@@ -131,13 +131,18 @@ class Interactome3D(Abclog):
 
     @classmethod
     def retrieve_all_meta(cls, dataset: str = 'complete', suffix: str = 'user_data/{organism}/download/{dataset}/'):
-        tasks = [cls.task_unit(f'{suffix.format(organism=organism, dataset=dataset)}interactions.dat', '.tsv', f'{organism}_{dataset}_interactions') for organism in cls.organisms]
+        tasks = [cls.task_unit(cls.folder, f'{suffix.format(organism=organism, dataset=dataset)}interactions.dat', '.tsv', f'{organism}_{dataset}_interactions') for organism in cls.organisms]
         return UnsyncFetch.multi_tasks(tasks, semaphore=cls.get_web_semaphore())
 
     @classmethod
     @unsync
     async def fetch(cls, suffix: str, file_suffix: str = '.xml', **kwargs):
         assert suffix in cls.api_set, f"Invalid api!\nValid set:{cls.api_set}"
-        return await UnsyncFetch.single_task(cls.task_unit(cls.split_folder,
-            suffix, file_suffix, '&'.join(f'{key}={value}' for key, value in kwargs.items()), params=kwargs),
+        file_name = kwargs.get('filename', False)
+        return await UnsyncFetch.single_task(cls.task_unit(
+                cls.split_folder,
+                suffix, 
+                '' if file_name else file_suffix , 
+                file_name if file_name else '&'.join(f'{key}={value}' for key, value in kwargs.items()),
+                params=kwargs),
             cls.get_web_semaphore())
