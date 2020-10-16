@@ -184,7 +184,6 @@ class MapUniProtID(Abclog):
             to_do_func=self.process,
             concur_req=concur_req, 
             rate=rate, 
-            logger=self.logger,
             ret_res=ret_res,
             semaphore=semaphore)
         return res
@@ -432,7 +431,6 @@ class UniProtFASTA(Abclog):
             cls.yieldTasks(lyst, folder), 
             concur_req=concur_req, 
             rate=rate, 
-            logger=cls.logger,
             ret_res=ret_res,
             semaphore=semaphore)
     

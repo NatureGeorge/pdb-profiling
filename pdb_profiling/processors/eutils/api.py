@@ -49,7 +49,6 @@ class EutilsAPI(Abclog):
             cls.yieldTasks(suffix, params_collection, folder),
             concur_req=concur_req,
             rate=rate,
-            logger=cls.logger,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res

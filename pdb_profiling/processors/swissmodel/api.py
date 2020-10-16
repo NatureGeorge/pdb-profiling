@@ -64,7 +64,6 @@ class SMR(object):
             cls.process,
             concur_req=concur_req,
             rate=rate,
-            logger=logging,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res

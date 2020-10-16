@@ -161,7 +161,6 @@ class ProcessPDBe(Abclog):
             cls.process, 
             concur_req=concur_req, 
             rate=rate, 
-            logger=cls.logger,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         # elapsed = time.perf_counter() - t0
@@ -743,7 +742,6 @@ class PDBeModelServer(Abclog):
                            data_collection, params),
             concur_req=concur_req,
             rate=rate,
-            logger=cls.logger,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res
@@ -788,7 +786,6 @@ class PDBArchive(Abclog):
             cls.yieldTasks(pdbs, suffix, file_suffix, folder),
             concur_req=concur_req,
             rate=rate,
-            logger=cls.logger,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res

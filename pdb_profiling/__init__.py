@@ -35,6 +35,7 @@ def default_config(folder='./'):
     from pdb_profiling.processors.pdbe.api import ProcessPDBe
     from pdb_profiling.processors.proteins.record import Identifier
     from pdb_profiling.processors import UniProtFASTA
+    from pdb_profiling.processors.i3d.api import Interactome3D
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
     # Use Existing API Results (e.g. json format results downloaded from web)
@@ -45,8 +46,10 @@ def default_config(folder='./'):
     Base.set_web_semaphore(30).result()
     Identifier.set_web_semaphore(30).result()
     UniProtFASTA.set_web_semaphore(30).result()
+    Interactome3D.set_web_semaphore(30).result()
     # Set Folder that store downloaded and handled files
     Base.set_folder(folder)
     PDB.set_folder(folder)
     Identifier.set_folder(folder)
     UniProtFASTA.set_folder(folder)
+    Interactome3D.set_folder(folder)

@@ -151,12 +151,10 @@ class UnsyncFetch(Abclog):
     def multi_tasks(cls, tasks: Union[Iterable, Iterator],
               to_do_func: Optional[Callable] = None,
               concur_req: int = 4, rate: float = 1.5,
-              logger: Optional[logging.Logger] = None,
               ret_res: bool = True,
               semaphore = None
               ):
 
-        cls.init_setting(logger)
         if semaphore is None:
             # asyncio.Semaphore(concur_req)
             semaphore = init_semaphore(concur_req).result()
