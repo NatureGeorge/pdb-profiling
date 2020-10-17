@@ -22,7 +22,9 @@ from itertools import chain
 import orjson as json
 import logging
 from io import StringIO
-from textdistance import overlap
+from textdistance import overlap, sorensen
+from scipy.stats import wasserstein_distance
+from collections import Counter, OrderedDict
 
 
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
@@ -41,7 +43,7 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
         return ()
     else:
         if not isinstance(lyst, set):
-            lyst = frozenset(int(i) for i in lyst)
+            lyst = frozenset(int(i) for i in lyst if i is not None)
         if not pass_check(lyst):
             return ()
         start = []
@@ -168,10 +170,13 @@ def sort_sub_cols(dfrm, cols):
         return dfrm
 
 
+@unsync
 async def a_read_csv(path, read_mode='r',**kwargs):
     '''
     only suitable for small dataframe
     '''
+    if isinstance(path, (Coroutine, Unfuture)):
+        path = await path
     async with aiofiles_open(path, read_mode) as file_io:
         with StringIO(await file_io.read()) as text_io:
             return read_csv(text_io, **kwargs)
@@ -677,7 +682,7 @@ def range_len(lyst: Union[List, str, float]) -> int:
         lyst = json.loads(lyst)
     length = 0
     for left, right in lyst:
-        assert right >= left
+        assert right >= left, f"\n{lyst}"
         length += right - left + 1
     return length
 
@@ -697,6 +702,8 @@ def expand_interval(lyst: Union[Iterable, Iterator, str]):
 
 
 def lyst2range(lyst, add_end=1):
+    if isinstance(lyst, str):
+        lyst = json.loads(lyst)
     for start, end in lyst:
         yield from range(int(start), int(end)+add_end)
 
@@ -821,6 +828,69 @@ def select_range(ranges, indexes, cutoff=0.2, skip_index=[]):
             selected_range = json.loads(selected_range) if isinstance(selected_range, str) else selected_range
             score = overlap.similarity(lyst2range(cur_range),
                                lyst2range(selected_range))
+            if score > cutoff:
+                return
+        select_index.append(cur_index)
+
+    for index in indexes:
+        unit(index)
+    return select_index
+
+
+def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
+    select_index = []
+
+    def unit(cur_index):
+        if cur_index in skip_index:
+            return
+        cur_range1, cur_range2 = ranges1[cur_index], ranges2[cur_index]
+        c1_1 = Counter(expand_interval(cur_range1))
+        c1_2 = Counter(expand_interval(cur_range2))
+        if len(c1_1) == 0 or len(c1_2) == 0:
+            return
+        c1 = c1_1 + c1_2
+        for selected in select_index:
+            selected_range1,selected_range2 = ranges1[selected], ranges2[selected]
+            c_c1 = c1.copy()
+            c2 = Counter(expand_interval(selected_range1))+Counter(expand_interval(selected_range2))
+            for key in c_c1.keys() | c2.keys():
+                if key not in c_c1:
+                    c_c1[key] = 0
+                if key not in c2:
+                    c2[key] = 0
+            oc2 = OrderedDict(sorted((item for item in c2.items()), key=lambda x: x[0]))
+            oc1 = OrderedDict(sorted((item for item in c_c1.items()), key=lambda x: x[0]))
+            score = wasserstein_distance(tuple(oc1.values()), tuple(oc2.values()))
+            if score < cutoff:
+                return
+        select_index.append(cur_index)
+
+    for index in indexes:
+        unit(index)
+    return select_index
+
+
+def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
+    select_index = []
+
+    def unit(cur_index):
+        if cur_index in skip_index:
+            return
+        cur_range1, cur_range2 = ranges1[cur_index], ranges2[cur_index]
+        cur_e1, cur_e2 = Entry_1[cur_index], Entry_2[cur_index]
+        (cur_e1, cur_range1), (cur_e2, cur_range2) = sorted(((cur_e1, cur_range1), (cur_e2, cur_range2)), key=lambda x: x[0])
+
+        c1_1 = frozenset(f"1_{i}" for i in expand_interval(cur_range1))
+        c1_2 = frozenset(f"2_{i}" for i in expand_interval(cur_range2))
+        if len(c1_1) == 0 or len(c1_2) == 0:
+            return
+        c1 = c1_1 | c1_2
+        for selected in select_index:
+            selected_range1, selected_range2 = ranges1[selected], ranges2[selected]
+            selected_e1, selected_e2 = Entry_1[selected], Entry_2[selected]
+            (selected_e1, selected_range1), (selected_e2, selected_range2) = sorted(((selected_e1, selected_range1), (selected_e2, selected_range2)), key=lambda x: x[0])
+            c2 = frozenset(f"1_{i}" for i in expand_interval(selected_range1)) | frozenset(f"2_{i}" for i in expand_interval(selected_range2))
+            score = sorensen.similarity(c1, c2)
             if score > cutoff:
                 return
         select_index.append(cur_index)

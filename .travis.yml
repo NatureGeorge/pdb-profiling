@@ -11,7 +11,8 @@ install:
   - pip install coveralls
 
 # command to run tests
-script: pytest ./test/test_load_modules.py
+script:
+  - coverage run -m pytest ./test/test_load_modules.py
 
 after_success:
   - coveralls

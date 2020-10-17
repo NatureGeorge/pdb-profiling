@@ -186,6 +186,8 @@ class ProcessPDBe(Abclog):
             except Exception as e:
                 cls.logger.error(f"Error in {path}")
                 raise e
+        if Path(new_path).exists() and cls.use_existing:
+            return new_path
         res = Dict2Tabular.pyexcel_io(traverseSuffixes(suffix, data))
         if res is not None:
             if isinstance(res, Generator):

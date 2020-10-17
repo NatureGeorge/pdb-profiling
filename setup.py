@@ -34,7 +34,8 @@ setup(
           'neo4j',
           'tqdm',
           'orm',
-          'smart_open'
+          'smart_open',
+          'scipy'
      ],
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",
