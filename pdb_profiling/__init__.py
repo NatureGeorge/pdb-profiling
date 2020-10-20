@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from re import compile as re_compile
 
-__version__ = '0.1.11'
+__version__ = '0.1.12'
 
 
 common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'

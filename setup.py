@@ -41,7 +41,7 @@ setup(
     author_email="1730416009@stu.suda.edu.cn",
     maintainer="ZeFeng Zhu",
     maintainer_email="1730416009@stu.suda.edu.cn",
-    description="Profiling Protein Structures from Protein Data Bank and integrate various resources.",
+    description="Profiling Protein Structures from Protein Data Bank and integrate various resources.🏄‍♂️",
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://github.com/NatureGeorge/pdb-profiling",
@@ -50,7 +50,8 @@ setup(
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8"
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9"
     ],
     )
 

@@ -4,6 +4,7 @@ python:
   - "3.6"
   - "3.7"
   - "3.8"
+  - "3.9"
 
 # command to install dependencies
 install:
@@ -12,7 +13,7 @@ install:
 
 # command to run tests
 script:
-  - coverage run -m pytest ./test/test_load_modules.py
+  - coverage run -m pytest ./test/pytest/
 
 after_success:
   - coveralls
