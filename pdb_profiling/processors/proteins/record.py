@@ -93,10 +93,10 @@ class Identifier(Abclog):
                 self.status = await a_load_json(res)
 
     @unsync
-    async def fetch_from_ProteinsAPI(self):
+    async def fetch_from_ProteinsAPI(self, reviewed='true'):
         dbReferences_df, iso_df = ProteinsAPI.pipe_summary(await ProteinsAPI.single_retrieve(
             'proteins/',
-            dict(offset=0, size=-1, reviewed='true', isoform=0),
+            dict(offset=0, size=-1, reviewed=reviewed, isoform=0),
             self.proteins_api_folder,
             self.proteins_api_web_semaphore,
             identifier=f'{self.source}:{self.identifier}'
@@ -112,7 +112,7 @@ class Identifier(Abclog):
                     f"Can't find ALTERNATIVE_PRODUCTS with {self.identifier}")
         else:
             self.logger.warning(
-                f"Can't find dbReference with {self.identifier}")
+                f"Can't find (reviewed) dbReference with {self.identifier}")
 
     @unsync
     async def get_all_level_identifiers(self):
@@ -184,9 +184,9 @@ class Identifier(Abclog):
                 self.ensembl_api_web_semaphore).then(a_seq_reader)
 
     @unsync
-    async def map2unp(self):
+    async def map2unp(self, **kwargs):
         res = await self.map2unp_from_localDB()
         if res is None:
-            await self.fetch_from_ProteinsAPI()
+            await self.fetch_from_ProteinsAPI(**kwargs)
             res = await self.map2unp_from_localDB()
         return res

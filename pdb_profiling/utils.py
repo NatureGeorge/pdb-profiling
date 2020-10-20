@@ -7,7 +7,7 @@
 import os
 import gzip
 import shutil
-from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable
+from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable, Generator
 from logging import Logger
 from pandas import read_csv, DataFrame, isna, Series
 import numpy as np
@@ -30,7 +30,7 @@ from collections import Counter, OrderedDict
 def to_interval(lyst: Union[Iterable, Iterator]) -> List:
     def pass_check(lyst):
         try:
-            if not lyst or isna(lyst):
+            if (not isinstance(lyst, Generator) and  (len(lyst) == 0)) or isna(lyst):
                 return False
             else:
                 return True

@@ -35,7 +35,8 @@ setup(
           'tqdm',
           'orm',
           'smart_open',
-          'scipy'
+          'scipy',
+          'slugify'
      ],
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",
@@ -50,8 +51,7 @@ setup(
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9"
+        "Programming Language :: Python :: 3.8"
     ],
     )
 
