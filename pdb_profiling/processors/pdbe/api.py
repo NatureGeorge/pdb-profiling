@@ -710,7 +710,7 @@ class PDBeModelServer(Abclog):
     Implement ModelServer API
     '''
     
-    root = 'model-server/v1/'
+    root = f'{BASE_URL}model-server/v1/'
     headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
     api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
                 'residueSurroundings', 'symmetryMates', 'query-many'))
@@ -721,7 +721,7 @@ class PDBeModelServer(Abclog):
             assert method == 'get', 'Invalid method!'
             for pdb in pdbs:
                 args = dict(
-                    url=f'{BASE_URL}{cls.root}{pdb}/{suffix}?',
+                    url=f'{cls.root}{pdb}/{suffix}?',
                     headers=cls.headers,
                     params=params)
                 yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
@@ -729,7 +729,7 @@ class PDBeModelServer(Abclog):
             assert method == 'post', 'Invalid method!'
             for pdb, data in zip(pdbs, data_collection):
                 args = dict(
-                    url=f'{BASE_URL}{cls.root}{pdb}/{suffix}?',
+                    url=f'{cls.root}{pdb}/{suffix}?',
                     headers=cls.headers,
                     params=params,
                     data=data)

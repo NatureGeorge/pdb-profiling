@@ -15,7 +15,7 @@ from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
 from collections import defaultdict, namedtuple
-from itertools import product
+from itertools import product, combinations_with_replacement, combinations
 from pdb_profiling import default_id_tag
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
@@ -807,7 +807,11 @@ class PDB(Base):
             self.subset_assembly = frozenset(new_focus_assg_oper_df.assembly_id) - {0}
             new_focus_assg_oper_df['struct_asym_id_in_assembly'] = new_focus_assg_oper_df.struct_asym_id
             profile_id_df = new_focus_assg_oper_df
-        
+
+        self.subset_assembly = {ass: profile_id_df[profile_id_df.assembly_id.eq(ass)].struct_asym_id.tolist() for ass in self.subset_assembly}
+        profile_id_df['au_subset'] = False
+        profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index, 'au_subset'] = True
+
         # TODO: Check
         ass_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', self.to_dataframe)
         a_df = profile_id_df[['assembly_id', 'entity_id']].drop_duplicates().query('assembly_id != 0')
@@ -830,6 +834,29 @@ class PDB(Base):
         assert res_map_df_full.shape[0] == res_map_df.shape[0]
         return res_map_df_full
 
+    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', **kwargs):
+        await self.set_assembly(focus_assembly_ids=focus_assembly_ids)
+        for assembly in self.assembly.values():
+            try:
+                await getattr(assembly, func)(**kwargs)
+                if au2bu and chain_pairs is not None:
+                    tr = await assembly.get_assemble_eec_as_df()
+                    tr_info = tr.groupby('struct_asym_id').struct_asym_id_in_assembly.apply(frozenset)
+                    '''
+                    for a, b in chain_pairs:
+                        if a == b:
+                            [frozenset(i) for i in combinations(tr_info[a])]
+                        else:
+                            [frozenset(i) for i in product(tr_info[a], tr_info[b])]
+                    '''
+                    cur_chain_pairs = frozenset.union(*(frozenset(frozenset(i) for i in combinations(tr_info[a], 2)) if a == b else frozenset(frozenset(i) for i in product(tr_info[a], tr_info[b])) for a, b in chain_pairs))
+                else:
+                    cur_chain_pairs = chain_pairs
+                for interface in assembly.interface.values():
+                    if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
+                        yield await interface.get_interface_res_dict()
+            except Exception:
+                pass
 
 class PDBAssemble(PDB):
 
@@ -906,12 +933,23 @@ class PDBAssemble(PDB):
             for interface_id in focus_interface_ids:
                 yield f"{pdb_assembly_id}/{interface_id}"
 
-        interfacelist_df = await self.fetch_from_web_api('api/pisa/interfacelist/', self.to_interfacelist_df)
+        use_au = self.assembly_id in self.pdb_ob.subset_assembly
+
+        interfacelist_df = await self.fetch_from_web_api(
+            'api/pisa/interfacelist/', 
+            self.to_interfacelist_df, 
+            mask_id=f'{self.pdb_id}/0' if use_au else None)
         
         if interfacelist_df is None:
             self.interface = dict()
             return
         
+        if use_au:
+            a_chains = self.pdb_ob.subset_assembly[self.assembly_id]
+            interfacelist_df = interfacelist_df[
+                interfacelist_df.struct_asym_id_in_assembly_1.isin(a_chains) &
+                interfacelist_df.struct_asym_id_in_assembly_2.isin(a_chains)]
+
         if obligated_class_chains is not None:
             bool_1 = interfacelist_df.struct_asym_id_in_assembly_1.isin(obligated_class_chains)
             bool_2 = interfacelist_df.struct_asym_id_in_assembly_2.isin(obligated_class_chains)
@@ -927,7 +965,7 @@ class PDBAssemble(PDB):
             focus_interface_df.struct_asym_id_in_assembly_2)
 
         self.interface: Dict[int, PDBInterface] = dict(zip(
-            focus_interface_ids, (PDBInterface(if_id, self).store(chains=frozenset(chains)) for if_id, chains in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains))))
+            focus_interface_ids, (PDBInterface(if_id, self, use_au).store(chains=frozenset(chains)) for if_id, chains in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains))))
 
     def get_interface(self, interface_id):
         return self.interface[interface_id]
@@ -1016,8 +1054,9 @@ class PDBInterface(PDBAssemble):
  
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)/([0-9]+)")
 
-    def __init__(self, pdb_ass_int_id, pdbAssemble_ob: Optional[PDBAssemble]=None):
+    def __init__(self, pdb_ass_int_id, pdbAssemble_ob: Optional[PDBAssemble]=None, use_au:bool=False):
         super().__init__(pdb_ass_int_id)
+        self.use_au = use_au
         if pdbAssemble_ob is None:
             self.pdbAssemble_ob = PDBAssemble(f"{self.pdb_id}/{self.assembly_id}")
         else:
@@ -1077,10 +1116,11 @@ class PDBInterface(PDBAssemble):
 
     @unsync
     async def set_interface_res(self, keep_interface_res_df:bool=False):
-        interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', self.to_interfacedetail_df)
+        interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', self.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
         if interfacedetail_df is None:
             return None
         else:
+            interfacedetail_df.assembly_id = self.assembly_id
             struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
         eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
         res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
@@ -1136,6 +1176,7 @@ class PDBInterface(PDBAssemble):
         record_dict = {**record1, **record2}
         for key in common_keys:
             record_dict[key] = records[0][key]
+        record_dict['use_au'] = self.use_au
         self.interface_res_dict = record_dict
 
     @unsync
@@ -1554,6 +1595,10 @@ class SIFTS(PDB):
     async def pipe_score_base(self, sifts_df, pec_df, weight):
         def raw_score(vec): return dot(vec, weight)
 
+        weight_ig3 = array([i for i in weight[:2]]+[i for i in weight[3:]])
+
+        def raw_score_ig3(vec): return dot(vec, weight_ig3)
+
         full_df = sifts_df.merge(pec_df)
         assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df[full_df.duplicated(subset=['UniProt','pdb_id','struct_asym_id'], keep=False)]}"
         # f"{pec_df[pec_df.pdb_id.eq('6mzl')]}"
@@ -1569,6 +1614,7 @@ class SIFTS(PDB):
         s6 = full_df.InDel_sum
         s_df = DataFrame(dict(s1=s1,s2=s2,s3=s3,s4=s4,s5=s5,s6=s6))
         s_df['RAW_BS'] = s_df.apply(raw_score, axis=1) / full_df.unp_len
+        s_df['RAW_BS_IG3'] = s_df.drop(columns=['s3', 'RAW_BS']).apply(raw_score_ig3, axis=1) / full_df.unp_len
         return full_df, s_df
 
     @unsync
@@ -1614,7 +1660,7 @@ class SIFTS(PDB):
     async def pipe_select_base(self, exclude_pdbs=frozenset(), **kwargs):    
         assert self.level == 'UniProt'
         full_df, s_df, exp_df = await self.pipe_score(**kwargs)
-        m_df = concat([full_df[~full_df.pdb_id.isin(exclude_pdbs)], s_df[['RAW_BS']]], axis=1)
+        m_df = concat([full_df[~full_df.pdb_id.isin(exclude_pdbs)], s_df[['RAW_BS', 'RAW_BS_IG3']]], axis=1)
         sele_df = merge(
             m_df.query(self.chain_filter) if self.chain_filter else m_df,
             exp_df.query(self.entry_filter) if self.entry_filter else exp_df)
@@ -1622,7 +1668,9 @@ class SIFTS(PDB):
             return
         sele_df['1/resolution'] = 1 / sele_df.resolution
         sele_df['id_score'] = sele_df.chain_id.apply(lambda x: -sum(ord(i) for i in x))
-        sele_df['COV_SCORE'] = sele_df.RAW_BS * sele_df.unp_len / len(frozenset.union(*sele_df.new_unp_range.apply(interval2set).to_list()))
+        # all_unp_r_len = len(frozenset.union(*sele_df.new_unp_range.apply(interval2set).to_list()))
+        # sele_df['COV_SCORE'] = sele_df.RAW_BS * sele_df.unp_len / all_unp_r_len
+        # sele_df['COV_SCORE_IG3'] = sele_df.RAW_BS_IG3 * sele_df.unp_len / all_unp_r_len
         sele_df['select_tag'] = False
         sele_df['select_rank'] = -1
         return sele_df
@@ -1690,12 +1738,52 @@ class SIFTS(PDB):
             except Exception:
                 pass
 
+    @staticmethod
+    async def ppi_res_dict2df(pdb_ob, chain_pairs=None, au2bu:bool=False):
+        return DataFrame([i async for i in pdb_ob.pipe_interface_res_dict(
+            chain_pairs=chain_pairs,
+            au2bu=au2bu,
+            func='pipe_protein_protein_interface')])
+
     @unsync
-    async def pipe_select_ho(self, exclude_pdbs=frozenset(), consider_interface:bool=False, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, **kwargs):
+    async def pipe_select_ho(self, exclude_pdbs=frozenset(), unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2):
+        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'ho')
+        sele_df = await self.pipe_select_mo(exclude_pdbs)
+        chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
+            lambda x: frozenset(combinations_with_replacement(x, 2)))
+        interact_df = concat(
+                [await self.ppi_res_dict2df(PDB(pdb_id), chain_pairs[pdb_id], True) for pdb_id in chain_pairs.index],
+                 sort=False, ignore_index=True)
+        p_a_df = self.parallel_interact_df(sele_df, interact_df)
+        p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
+        '''
+        p_df = p_a_df.merge(p_b_df, how='left')
+        p_df['best_select_rank'] = p_df[['select_rank_1',
+                                         'select_rank_2']].apply(lambda x: min(x), axis=1)
+        p_df['unp_range_DSC'] = p_df.apply(lambda x: sorensen.similarity(
+            lyst2range(x['new_unp_range_1']), lyst2range(x['new_unp_range_2'])), axis=1)
+        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
+        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
+        p_df['i_select_tag'] = False
+        p_df['i_select_rank'] = -1
+        allow_p_df = p_df[(p_df.best_select_rank > 0) & (p_df.unp_range_DSC>=unp_range_DSC_cutoff)]
+
+        def sele_func(dfrm):
+            rank_index = dfrm.sort_values(by='best_select_rank', ascending=False).index
+            p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
+            return select_ho_range(dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=wasserstein_distance_cutoff)
+        
+        p_df.loc[sele_func(allow_p_df), 'i_select_tag'] = True
+        '''
+
+        return p_a_df, p_b_df
+
+    @unsync
+    async def pipe_select_ho_(self, exclude_pdbs=frozenset(), consider_interface:bool=False, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2):
         i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'ho')
         if len(i3d_df) == 0:
             return
-        sele_df = await self.pipe_select_mo(exclude_pdbs, **kwargs)
+        sele_df = await self.pipe_select_mo(exclude_pdbs)
         if sele_df is None:
             return
         p_df = self.parallel_interact_df(sele_df, i3d_df)
@@ -1755,7 +1843,7 @@ class SIFTS(PDB):
             p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
             p_df['i_select_tag'] = False
             p_df['i_select_rank'] = -1
-            p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['Entry_1'], x['Entry_2']))), axis=1)
+            p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
             allow_p_df = p_df[p_df.best_select_rank > 0]
             
             def sele_func(dfrm):
