@@ -17,6 +17,7 @@ import orjson as json
 from collections import defaultdict, namedtuple
 from itertools import product, combinations_with_replacement, combinations
 from pdb_profiling import default_id_tag
+from pdb_profiling.exceptions import WithoutExpectedKeyError
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
                                  related_dataframe, slice_series, 
@@ -31,7 +32,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  subtract_range, select_range,
                                  interval2set, expand_interval,
                                  lyst2range, select_ho_range,
-                                 select_he_range)
+                                 select_he_range, init_folder_from_suffixes)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -112,6 +113,7 @@ class Base(object):
         folder = Path(folder)
         assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
         cls.folder = folder
+        tuple(init_folder_from_suffixes(cls.folder, API_SET))
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -132,8 +134,7 @@ class Base(object):
         args = dict(pdb=self.get_id() if mask_id is None else mask_id,
                     suffix=api_suffix,
                     method='get',
-                    folder=init_folder_from_suffix(
-                        self.get_folder(), api_suffix),
+                    folder=self.get_folder()/api_suffix,
                     semaphore=self.get_web_semaphore())
         if json:
             args['to_do_func'] = None
@@ -188,6 +189,8 @@ class PDB(Base):
             "sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
         cls.assembly_cif_folder = cls.folder/'pdbe_assembly_cif'
         cls.assembly_cif_folder.mkdir(parents=True, exist_ok=True)
+        tuple(init_folder_from_suffixes(cls.folder/'model-server', PDBeModelServer.api_set))
+        tuple(init_folder_from_suffixes(cls.folder/'pdb/data/structures', PDBArchive.api_set))
 
     @unsync
     async def prepare_property(self, raw_data):
@@ -241,7 +244,7 @@ class PDB(Base):
         self.properties_inited = False
     
     def set_id(self, pdb_id: str):
-        assert default_id_tag(pdb_id) == 'pdb_id', "Invalid PDB ID!"
+        assert default_id_tag(pdb_id) == 'pdb_id', f"Invalid PDB ID: {pdb_id} !"
         self.pdb_id = pdb_id.lower()
 
     def get_id(self):
@@ -256,7 +259,7 @@ class PDB(Base):
             pdb=self.pdb_id,
             suffix=api_suffix,
             method=method,
-            folder=init_folder_from_suffix(self.get_folder()/'model-server', api_suffix),
+            folder=self.get_folder()/'model-server'/api_suffix,
             semaphore=self.get_web_semaphore(),
             data_collection=data_collection,
             params=params)
@@ -273,7 +276,7 @@ class PDB(Base):
         task = PDBArchive.single_retrieve(
             pdb=self.pdb_id,
             suffix=api_suffix,
-            folder=init_folder_from_suffix(self.get_folder()/'pdb/data/structures', api_suffix),
+            folder=self.get_folder()/'pdb/data/structures'/api_suffix,
             semaphore=self.get_web_semaphore(),
             **kwargs)
         if then_func is not None:
@@ -424,9 +427,9 @@ class PDB(Base):
 
     @unsync
     async def get_res2eec_df(self):
-        try:
+        if hasattr(self, 'res2eec_df'):
             return self.res2eec_df
-        except AttributeError:
+        else:
             await self.set_res2eec_df()
             return self.res2eec_df
 
@@ -474,9 +477,9 @@ class PDB(Base):
     
     @unsync
     async def get_eec_as_df(self):
-        try:
+        if hasattr(self, 'eec_as_df'):
             return self.eec_as_df
-        except AttributeError:
+        else:
             self.eec_as_df = await self.profile_id()
             return self.eec_as_df
 
@@ -788,11 +791,14 @@ class PDB(Base):
             in_ass_df = await self.profile_asym_id_in_assembly(to_fetch_assembly)
             in_ass_df.columns = [i.replace('_pdbe_chain_remapping.', '') for i in in_ass_df.columns]
 
-            in_ass_df = in_ass_df[['assembly_id', 'entity_id', 'orig_label_asym_id',
-                                'new_label_asym_id', 'applied_operations']].rename(
-                columns={'orig_label_asym_id': 'struct_asym_id',
-                        'new_label_asym_id': 'struct_asym_id_in_assembly',
-                        'applied_operations': 'oper_expression'}).copy()
+            try:
+                in_ass_df = in_ass_df[['assembly_id', 'entity_id', 'orig_label_asym_id',
+                                    'new_label_asym_id', 'applied_operations']].rename(
+                    columns={'orig_label_asym_id': 'struct_asym_id',
+                            'new_label_asym_id': 'struct_asym_id_in_assembly',
+                            'applied_operations': 'oper_expression'}).copy()
+            except KeyError:
+                raise ValueError(self.pdb_id+'\n'+str(in_ass_df))
 
             in_ass_df.oper_expression = in_ass_df.oper_expression.apply(lambda x: json.dumps([i for i in x.split('_')[::-1] if i != '']).decode('utf-8'))
             in_ass_df.assembly_id = in_ass_df.assembly_id.astype(int)
@@ -837,26 +843,27 @@ class PDB(Base):
     async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', **kwargs):
         await self.set_assembly(focus_assembly_ids=focus_assembly_ids)
         for assembly in self.assembly.values():
-            try:
-                await getattr(assembly, func)(**kwargs)
-                if au2bu and chain_pairs is not None:
-                    tr = await assembly.get_assemble_eec_as_df()
-                    tr_info = tr.groupby('struct_asym_id').struct_asym_id_in_assembly.apply(frozenset)
-                    '''
-                    for a, b in chain_pairs:
-                        if a == b:
-                            [frozenset(i) for i in combinations(tr_info[a])]
-                        else:
-                            [frozenset(i) for i in product(tr_info[a], tr_info[b])]
-                    '''
-                    cur_chain_pairs = frozenset.union(*(frozenset(frozenset(i) for i in combinations(tr_info[a], 2)) if a == b else frozenset(frozenset(i) for i in product(tr_info[a], tr_info[b])) for a, b in chain_pairs))
-                else:
-                    cur_chain_pairs = chain_pairs
-                for interface in assembly.interface.values():
-                    if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
-                        yield await interface.get_interface_res_dict()
-            except Exception:
-                pass
+            await getattr(assembly, func)(**kwargs)
+            if len(assembly.interface) == 0:
+                continue
+            if au2bu and chain_pairs is not None:
+                tr = await assembly.get_assemble_eec_as_df()
+                tr_info = tr.groupby('struct_asym_id').struct_asym_id_in_assembly.apply(frozenset).to_dict()
+                tr_info = defaultdict(frozenset, tr_info)
+                '''
+                for a, b in chain_pairs:
+                    if a == b:
+                        [frozenset(i) for i in combinations(tr_info[a])]
+                    else:
+                        [frozenset(i) for i in product(tr_info[a], tr_info[b])]
+                '''
+                cur_chain_pairs = frozenset.union(*(frozenset(frozenset(i) for i in combinations(tr_info[a], 2)) if a == b else frozenset(frozenset(i) for i in product(tr_info[a], tr_info[b])) for a, b in chain_pairs))
+            else:
+                cur_chain_pairs = chain_pairs
+            for interface in assembly.interface.values():
+                if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
+                    yield await interface.get_interface_res_dict()
+
 
 class PDBAssemble(PDB):
 
@@ -935,10 +942,14 @@ class PDBAssemble(PDB):
 
         use_au = self.assembly_id in self.pdb_ob.subset_assembly
 
-        interfacelist_df = await self.fetch_from_web_api(
-            'api/pisa/interfacelist/', 
-            self.to_interfacelist_df, 
-            mask_id=f'{self.pdb_id}/0' if use_au else None)
+        try:
+            interfacelist_df = await self.fetch_from_web_api(
+                'api/pisa/interfacelist/', 
+                self.to_interfacelist_df, 
+                mask_id=f'{self.pdb_id}/0' if use_au else None)
+        except WithoutExpectedKeyError:
+            self.interface = dict()
+            return
         
         if interfacelist_df is None:
             self.interface = dict()
@@ -978,9 +989,9 @@ class PDBAssemble(PDB):
     
     @unsync
     async def get_assemble_eec_as_df(self):
-        try:
+        if hasattr(self, 'assemble_eec_as_df'):
             return self.assemble_eec_as_df
-        except AttributeError:
+        else:
             await self.set_assemble_eec_as_df()
             return self.assemble_eec_as_df
 
@@ -1116,12 +1127,17 @@ class PDBInterface(PDBAssemble):
 
     @unsync
     async def set_interface_res(self, keep_interface_res_df:bool=False):
-        interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', self.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
-        if interfacedetail_df is None:
-            return None
-        else:
-            interfacedetail_df.assembly_id = self.assembly_id
-            struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
+        try:
+            interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', self.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
+        except WithoutExpectedKeyError:
+            return
+        except Exception as e:
+            raise AssertionError(e)
+        # if interfacedetail_df is None:
+        #     return
+        # else:
+        interfacedetail_df.assembly_id = self.assembly_id
+        struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
         eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
         res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', self.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
@@ -1181,19 +1197,25 @@ class PDBInterface(PDBAssemble):
 
     @unsync
     async def get_interface_res_df(self):
-        try:
+        if hasattr(self, 'interface_res_df'):
             return self.interface_res_df
-        except AttributeError:
-            await self.set_interface_res(True)
-            return self.interface_res_df
+        else:
+            try:
+                await self.set_interface_res(True)
+                return self.interface_res_df
+            except AttributeError:
+                return
     
     @unsync
     async def get_interface_res_dict(self, **kwargs):
-        try:
+        if hasattr(self, 'interface_res_dict'):
             return self.interface_res_dict
-        except AttributeError:
-            await self.set_interface_res(**kwargs)
-            return self.interface_res_dict
+        else:
+            try:
+                await self.set_interface_res(**kwargs)
+                return self.interface_res_dict
+            except AttributeError:
+                return
 
 
 class SIFTS(PDB):
@@ -1205,6 +1227,8 @@ class SIFTS(PDB):
 
     chain_filter = 'UNK_COUNT == 0 and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20'
     entry_filter = '(experimental_method == "X-ray diffraction" and resolution <= 3) or experimental_method == "Solution NMR"'
+
+    complete_chains_run_as_completed = False
 
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
@@ -1224,14 +1248,19 @@ class SIFTS(PDB):
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
 
-    @staticmethod
+    @classmethod
     @unsync
-    async def complete_chains(dfrm: Union[DataFrame, Unfuture, Coroutine]):
+    async def complete_chains(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
         if isinstance(dfrm, (Coroutine, Unfuture)):
             dfrm = await dfrm
-        res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_web_api', 
-                           api_suffix='api/mappings/all_isoforms/',
-                           then_func=SIFTS.to_dataframe).run()
+        if cls.complete_chains_run_as_completed:
+            res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_web_api', 
+                            api_suffix='api/mappings/all_isoforms/',
+                            then_func=SIFTS.to_dataframe).run()
+        else:
+            res = [await task for task in SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_web_api', 
+                            api_suffix='api/mappings/all_isoforms/',
+                            then_func=SIFTS.to_dataframe).tasks]
         return concat(res, sort=False, ignore_index=True)
 
     @staticmethod
@@ -1636,12 +1665,12 @@ class SIFTS(PDB):
         cur_pdbs = sifts_df.pdb_id.unique()
 
         pdbs = PDBs(cur_pdbs)
-        tasks = await pdbs.fetch(PDBs.fetch_exp_pipe).run()
-        # tasks = [await task for task in pdbs.fetch(PDBs.fetch_exp_pipe).tasks]
+        # tasks = await pdbs.fetch(PDBs.fetch_exp_pipe).run()
+        tasks = [await task for task in pdbs.fetch(PDBs.fetch_exp_pipe).tasks]
         exp_df = DataFrame((j for i in tasks for j in i), columns=exp_cols)
         r_len = exp_df.shape[0]
-        tasks = await pdbs.fetch(PDBs.fetch_date).run()
-        # tasks = [await task for task in pdbs.fetch(PDBs.fetch_date).tasks]
+        # tasks = await pdbs.fetch(PDBs.fetch_date).run()
+        tasks = [await task for task in pdbs.fetch(PDBs.fetch_date).tasks]
         exp_df = exp_df.merge(
             DataFrame(tasks, columns=['pdb_id', 'revision_date', 'deposition_date']))
         assert r_len == exp_df.shape[0]
@@ -1676,8 +1705,7 @@ class SIFTS(PDB):
         return sele_df
 
     @unsync
-    async def pipe_select_mo(self, exclude_pdbs=frozenset(), OC_cutoff=0.2, **kwargs):
-        
+    async def pipe_select_mo(self, exclude_pdbs=frozenset(), OC_cutoff=0.2, **kwargs):        
         sele_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
         if sele_df is None:
             return
@@ -1697,11 +1725,28 @@ class SIFTS(PDB):
 
     @staticmethod
     @unsync
-    async def search_partner_from_i3d(Entry, interaction_type, columns='pdb_id,Entry_1,Entry_2,assembly_id,model_id_1,chain_id_1,model_id_2,chain_id_2,organism,interaction_type'):
-        query=f"""
-                    SELECT {columns} FROM InteractionMeta
-                    WHERE (Entry_1 = '{Entry}' or Entry_2 = '{Entry}') and interaction_type = '{interaction_type}'
-        """
+    async def search_partner_from_i3d(Entry, interaction_types, columns='pdb_id,Entry_1,Entry_2,assembly_id,model_id_1,chain_id_1,model_id_2,chain_id_2,organism,interaction_type'):
+        if isinstance(interaction_types, str):
+            query=f"""
+                        SELECT {columns} FROM InteractionMeta
+                        WHERE (Entry_1 = '{Entry}' or Entry_2 = '{Entry}') and interaction_type = '{interaction_types}'
+            """
+        elif isinstance(interaction_types, Tuple):
+            if len(interaction_types) > 1:
+                query=f"""
+                        SELECT {columns} FROM InteractionMeta
+                        WHERE (Entry_1 = '{Entry}' or Entry_2 = '{Entry}') and (interaction_type in {interaction_types})
+                """
+            elif len(interaction_types) == 1:
+                query = f"""
+                        SELECT {columns} FROM InteractionMeta
+                        WHERE (Entry_1 = '{Entry}' or Entry_2 = '{Entry}') and interaction_type = '{interaction_types[0]}'
+                """
+            else:
+                raise ValueError("Invalid interaction_types")
+        else:
+            raise ValueError("Invalid interaction_types")
+            
         res = await Interactome3D.sqlite_api.database.fetch_all(query=query)
         return DataFrame(res, columns=columns.split(','))
 
@@ -1738,26 +1783,35 @@ class SIFTS(PDB):
             except Exception:
                 pass
 
-    @staticmethod
-    async def ppi_res_dict2df(pdb_ob, chain_pairs=None, au2bu:bool=False):
-        return DataFrame([i async for i in pdb_ob.pipe_interface_res_dict(
-            chain_pairs=chain_pairs,
-            au2bu=au2bu,
-            func='pipe_protein_protein_interface')])
-
     @unsync
-    async def pipe_select_ho(self, exclude_pdbs=frozenset(), unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2):
+    async def pipe_select_ho(self, exclude_pdbs=frozenset(), interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, run_as_completed:bool=False, progress_bar=None):
         i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'ho')
         sele_df = await self.pipe_select_mo(exclude_pdbs)
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
             lambda x: frozenset(combinations_with_replacement(x, 2)))
-        interact_df = concat(
-                [await self.ppi_res_dict2df(PDB(pdb_id), chain_pairs[pdb_id], True) for pdb_id in chain_pairs.index],
-                 sort=False, ignore_index=True)
+        # res = [i for pdb_id in chain_pairs.index async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs[pdb_id], au2bu=True, func='pipe_protein_protein_interface')]
+        # interact_df = DataFrame(i for i in res if i is not None)
+        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id]) for pdb_id in chain_pairs.index]
+        if run_as_completed:
+            if progress_bar is not None:
+                res = [await i for i in progress_bar(as_completed(tasks), total=len(tasks))]
+            else:
+                res = [await i for i in as_completed(tasks)]
+        else:
+            res = [await i for i in tasks]
+        interact_df = DataFrame(j for i in res for j in i if j is not None)
+        if len(interact_df) == 0:
+            return
         p_a_df = self.parallel_interact_df(sele_df, interact_df)
-        p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
-        '''
-        p_df = p_a_df.merge(p_b_df, how='left')
+        if len(i3d_df) == 0:
+            p_df = p_a_df
+            p_df['in_i3d'] = False
+        else:
+            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
+            p_df = p_a_df.merge(p_b_df, how='left')
+            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
+            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
+
         p_df['best_select_rank'] = p_df[['select_rank_1',
                                          'select_rank_2']].apply(lambda x: min(x), axis=1)
         p_df['unp_range_DSC'] = p_df.apply(lambda x: sorensen.similarity(
@@ -1766,7 +1820,11 @@ class SIFTS(PDB):
         p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
         p_df['i_select_tag'] = False
         p_df['i_select_rank'] = -1
-        allow_p_df = p_df[(p_df.best_select_rank > 0) & (p_df.unp_range_DSC>=unp_range_DSC_cutoff)]
+        allow_p_df = p_df[
+            (p_df.best_select_rank > 0) & 
+            (p_df.unp_range_DSC>=unp_range_DSC_cutoff) &
+            ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+            ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
 
         def sele_func(dfrm):
             rank_index = dfrm.sort_values(by='best_select_rank', ascending=False).index
@@ -1774,9 +1832,61 @@ class SIFTS(PDB):
             return select_ho_range(dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=wasserstein_distance_cutoff)
         
         p_df.loc[sele_func(allow_p_df), 'i_select_tag'] = True
-        '''
 
-        return p_a_df, p_b_df
+        return p_df
+
+    @staticmethod
+    @unsync
+    async def pird_task_unit(pdb_id, chain_pairs):
+        return [i async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface')]
+
+    @unsync
+    async def pipe_select_he(self, exclude_pdbs=frozenset(), interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, run_as_completed:bool=False, progress_bar=None):
+        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], "he")
+        sele_df = await self.pipe_select_mo(exclude_pdbs, complete_chains=True)
+        chain_pairs = sele_df.groupby(['pdb_id', 'entity_id']).struct_asym_id.apply(frozenset).groupby('pdb_id').apply(tuple).apply(lambda x: frozenset(res for i,j in combinations(range(len(x)), 2) for res in product(x[i], x[j])))
+        chain_pairs = chain_pairs[chain_pairs.apply(len) > 0]
+        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id]) for pdb_id in chain_pairs.index]
+        if run_as_completed:
+            if progress_bar is not None:
+                res = [await i for i in progress_bar(as_completed(tasks), total=len(tasks))]
+            else:
+                res = [await i for i in as_completed(tasks)]
+        else:
+            res = [await i for i in tasks]
+        interact_df = DataFrame(j for i in res for j in i if j is not None)
+        if len(interact_df) == 0:
+            return
+        p_a_df = self.parallel_interact_df(sele_df, interact_df)
+        p_a_df = p_a_df[p_a_df.Entry_1 != p_a_df.Entry_2].reset_index(drop=True)
+        if len(i3d_df) == 0:
+            p_df = p_a_df
+            p_df['in_i3d'] = False
+        else:
+            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
+            p_df = p_a_df.merge(p_b_df, how='left')
+            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
+            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
+        p_df['best_select_rank'] = p_df[['select_rank_1',
+                                         'select_rank_2']].apply(lambda x: min(x), axis=1)
+        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
+        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
+        p_df['i_select_tag'] = False
+        p_df['i_select_rank'] = -1
+        p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
+        allow_p_df = p_df[
+            (p_df.best_select_rank > 0) &
+            ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+            ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        
+        def sele_func(dfrm):
+            rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution_1', 'revision_date_1', 'id_score_1', 'id_score_2'], ascending=False).index
+            p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
+            return select_he_range(dfrm.UniProt_1, dfrm.UniProt_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
+
+        sele_indexes = allow_p_df.groupby('i_group').apply(sele_func)
+        p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
+        return p_df
 
     @unsync
     async def pipe_select_ho_(self, exclude_pdbs=frozenset(), consider_interface:bool=False, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2):
@@ -1823,7 +1933,7 @@ class SIFTS(PDB):
         return p_df
 
     @unsync
-    async def pipe_select_he(self, exclude_pdbs=frozenset(), consider_interface:bool=False, DSC_cutoff=0.2):
+    async def pipe_select_he_(self, exclude_pdbs=frozenset(), consider_interface:bool=False, DSC_cutoff=0.2):
         i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'he')
         if len(i3d_df) == 0:
             return
@@ -1849,7 +1959,7 @@ class SIFTS(PDB):
             def sele_func(dfrm):
                 rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution_1', 'revision_date_1', 'id_score_1', 'id_score_2'], ascending=False).index
                 p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-                return select_he_range(dfrm.Entry_1, dfrm.Entry_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
+                return select_he_range(dfrm.UniProt_1, dfrm.UniProt_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
 
         if not consider_interface:
             p_df['i_select_tag'] = False
@@ -1925,7 +2035,7 @@ class PDBs(tuple):
         all_pdbs = frozenset(pdb_ob.pdb_id for pdb_ob in self)
         stored = await PDB.sqlite_api.StatsProteinEntitySeq.objects.filter(pdb_id__in=all_pdbs).all()
         ed_pdbs = frozenset(i.pdb_id for i in stored)
-        new = await PDBs(all_pdbs-ed_pdbs).fetch('stats_protein_entity_seq').run()
+        new = [await task for task in PDBs(all_pdbs-ed_pdbs).fetch('stats_protein_entity_seq').tasks]
         return stored + [j._asdict() for i in new for j in i]
 
     @unsync
@@ -1933,7 +2043,7 @@ class PDBs(tuple):
         all_pdbs = frozenset(pdb_ob.pdb_id for pdb_ob in self)
         stored = await PDB.sqlite_api.StatsNucleotideEntitySeq.objects.filter(pdb_id__in=all_pdbs).all()
         ed_pdbs = frozenset(i.pdb_id for i in stored)
-        new = await PDBs(all_pdbs-ed_pdbs).fetch('stats_nucleotide_entity_seq').run()
+        new = [await task for task in PDBs(all_pdbs-ed_pdbs).fetch('stats_nucleotide_entity_seq').tasks]
         return stored + [j._asdict() for i in new for j in i]
 
     @unsync
@@ -1941,7 +2051,7 @@ class PDBs(tuple):
         all_pdbs = frozenset(pdb_ob.pdb_id for pdb_ob in self)
         stored = await PDB.sqlite_api.StatsChainSeq.objects.filter(pdb_id__in=all_pdbs).all()
         ed_pdbs = frozenset(i.pdb_id for i in stored)
-        new = await PDBs(all_pdbs-ed_pdbs).fetch('stats_chain_seq').run()
+        new = [await task for task in PDBs(all_pdbs-ed_pdbs).fetch('stats_chain_seq').tasks]
         return stored + [j._asdict() for i in new for j in i]
 
     @unsync
@@ -1960,7 +2070,6 @@ class PDBs(tuple):
         else:
             nec_df = None
         return pec_df, nec_df
-
 
 
 class SIFTSs(PDBs):

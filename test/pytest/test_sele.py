@@ -1,4 +1,5 @@
 from pdb_profiling import default_config
+from tqdm import tqdm
 
 default_config()
 
@@ -8,8 +9,8 @@ def test_init():
 
 def test_single_select():
     from pdb_profiling.processors import SIFTS
-    SIFTS.chain_filter, SIFTS.entry_filter = '', ''
-    demo = SIFTS('O15350')
+    # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
+    demo = SIFTS('P21359')
     demo.pipe_select_mo().result()
-    demo.pipe_select_ho().result()
-    demo.pipe_select_he().result()
+    demo.pipe_select_ho(run_as_completed=True, progress_bar=tqdm).result()
+    demo.pipe_select_he(run_as_completed=True, progress_bar=tqdm).result()

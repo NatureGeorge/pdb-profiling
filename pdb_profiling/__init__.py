@@ -19,9 +19,12 @@ pats = dict(pdb_id=re_compile(common_pat+r'{4}$'),
 
 
 def default_id_tag(identifier:str, default:str='', raise_error:bool=False):
-    for pat_name, pat in pats.items():
-        if bool(pat.fullmatch(identifier)):
-            return pat_name
+    try:
+        for pat_name, pat in pats.items():
+            if bool(pat.fullmatch(identifier)):
+                return pat_name
+    except Exception:
+        raise ValueError(f"Invalid Identifier: {identifier} !")
     if raise_error:
         raise ValueError(f'Unexcepted Identifiers: {identifier}')
     else:

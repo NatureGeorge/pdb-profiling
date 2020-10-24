@@ -20,6 +20,7 @@ from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, 
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
+from pdb_profiling.exceptions import WithoutExpectedKeyError
 
 API_LYST: List = sorted(['summary', 'molecules', 'experiment', 'ligand_monomers',
                    'modified_AA_or_NA', 'mutated_AA_or_NA', 'status',
@@ -650,7 +651,10 @@ class PDBeDecoder(object):
     @dispatch_on_set({'api/pisa/interfacelist/'})
     def yieldPISAInterfaceList(data: Dict):
         for pdb in data:
-            records = data[pdb]['interfaceentries']
+            try:
+                records = data[pdb]['interfaceentries']
+            except KeyError:
+                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
             for record in records:
                 flatten_dict(record, 'structure_1')
                 flatten_dict(record, 'structure_2')
@@ -661,13 +665,17 @@ class PDBeDecoder(object):
     @staticmethod
     @dispatch_on_set({'api/pisa/interfacedetail/'})
     def yieldPISAInterfaceDetail(data: Dict):
-        edge_cols1 = ('structure', 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy')
-        edge_cols2 = ('structure', 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy')
+        usecols = (
+            'pdb_code', 'assemble_code', 'interface_number',
+            'interface_detail.interface_structure_1.structure.selection',
+            'interface_detail.interface_structure_2.structure.selection')
+        edge_cols1 = ('structure',)  # 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy'
+        edge_cols2 = ('structure',)  # 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy'
         for pdb in data:
             try:
                 records = data[pdb]['interface_detail']
             except KeyError:
-                raise ValueError(f"Without Expected interface_detail: {data}")
+                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
             del records['bonds']
             for col in edge_cols1: flatten_dict(records['interface_structure_1'], col)
             for col in edge_cols2: flatten_dict(records['interface_structure_2'], col)
@@ -675,9 +683,9 @@ class PDBeDecoder(object):
             flatten_dict(records, 'interface_structure_1')
             flatten_dict(records, 'interface_structure_2')
             flatten_dict(data[pdb], 'interface_detail')
-            cols = sorted(i for i in data[pdb].keys() if i != 'interface_detail.residues')
-            yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
-            yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], cols, tuple(data[pdb][col] for col in cols)
+            # cols = sorted(i for i in data[pdb].keys() if i != 'interface_detail.residues')
+            yield data[pdb]['interface_detail.residues']['residue1']['residue']['residue_array'], usecols, tuple(data[pdb][col] for col in usecols)
+            yield data[pdb]['interface_detail.residues']['residue2']['residue']['residue_array'], usecols, tuple(data[pdb][col] for col in usecols)
 
     @staticmethod
     @dispatch_on_set({'graph-api/residue_mapping/'})
