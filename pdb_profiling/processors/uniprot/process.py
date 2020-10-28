@@ -92,7 +92,7 @@ class ExtractIsoAlt:
         if alt_id in ["Displayed", "External", "Not described"]:
             return nan, nan
         elif not alt_id.startswith("VSP"):
-            raise ValueError("Unexcepted alt_id: %s" % alt_id)
+            raise ValueError("Unexpected alt_id: %s" % alt_id)
         else:
             mis_info = []
             inDe_info = []

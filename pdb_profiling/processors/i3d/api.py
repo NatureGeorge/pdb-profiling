@@ -13,6 +13,7 @@ from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.utils import init_semaphore, init_folder_from_suffixes, a_read_csv, init_folder_from_suffix
 from pdb_profiling.processors.i3d import I3DDB
 from typing import Union
+from asyncio import as_completed
 from pathlib import Path
 
 class I3D_API(object):
@@ -177,9 +178,17 @@ class Interactome3D(Abclog):
 
     @classmethod
     @unsync
-    async def pipe_init_interaction_meta(cls):
-        for org in Interactome3D.organisms:
-            df = await Interactome3D.retrieve_metadata(org, ret_res=False).then(Interactome3D.reformat)
+    async def pipe_init_interaction_meta(cls, progress_bar=None):
+        @unsync
+        async def task_unit(org):
+            df = await cls.retrieve_metadata(org, ret_res=False).then(cls.reformat)
             df['organism'] = org
             df['interaction_type'] = df.apply(lambda x: 'ho' if x['Entry_1'] == x['Entry_2'] else 'he', axis=1)
             cls.sqlite_api.sync_insert(cls.sqlite_api.InteractionMeta, df.to_dict('records'))
+
+        tasks = [task_unit(org) for org in cls.organisms]
+        if progress_bar is None:
+            [await task for task in as_completed(tasks)]
+        else:
+            [await task for task in progress_bar(as_completed(tasks), total=len(tasks))]
+            

@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from re import compile as re_compile
 
-__version__ = '0.1.13'
+__version__ = '0.1.14'
 
 
 common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'
@@ -26,7 +26,7 @@ def default_id_tag(identifier:str, default:str='', raise_error:bool=False):
     except Exception:
         raise ValueError(f"Invalid Identifier: {identifier} !")
     if raise_error:
-        raise ValueError(f'Unexcepted Identifiers: {identifier}')
+        raise ValueError(f'Unexpected Identifiers: {identifier}')
     else:
         return default
 

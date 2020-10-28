@@ -542,7 +542,9 @@ async def a_seq_reader(path: Union[Unfuture, Union[Path, str]]):
         path = await path
     async with aiofiles_open(path, 'rt') as handle:
         header, content = fasta_pat.match(await handle.read()).groups()
-        return header, content.replace('\n', '')
+        content = content.replace('\n', '')
+        assert content != '', str(path)
+        return header, content
 
 
 @unsync
@@ -562,8 +564,8 @@ async def get_seqs_from_parser(res, identifiers:Optional[Iterable[str]]=None):
     return ret
 
 
-async def a_seq_parser(path: Union[Unfuture, Union[Path, str]]):
-    if isinstance(path, Unfuture):
+async def a_seq_parser(path: Union[Unfuture, Coroutine, Path, str]):
+    if isinstance(path, (Unfuture, Coroutine)):
         path = await path
     async with aiofiles_open(path, 'rt') as handle:
         header, content = None, ''
@@ -574,6 +576,7 @@ async def a_seq_parser(path: Union[Unfuture, Union[Path, str]]):
                 header, content = line, ''
             else:
                 content += line
+        assert header is not None, f"\npath: {path}\ncur_content: {content}"
         yield header.strip(), content.replace('\n', '')
 
 nu2aa_dict = {

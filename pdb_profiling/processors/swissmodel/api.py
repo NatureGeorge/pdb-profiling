@@ -86,8 +86,8 @@ class SMR(object):
             path = await path
         if path is None or str(path).endswith('.pdb'):
             return path
-        new_path = str(path).replace('.json', '.tsv')
-        if Path(new_path).exists() and cls.use_existing:
+        new_path = Path(str(path).replace('.json', '.tsv'))
+        if new_path.exists() and cls.use_existing and (new_path.stat().st_size > 0):
             return new_path
         async with aiofiles_open(path) as inFile:
             try:

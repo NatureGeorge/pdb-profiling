@@ -69,7 +69,7 @@ class Identifier(Abclog):
                 self.set_db(folder)
             getattr(self, 'sqlite_api')
         except TypeError:
-            raise ValueError(f"Unexcepted identifier type: {identifier}")
+            raise ValueError(f"Unexpected identifier type: {identifier}")
         except AttributeError:
             raise AttributeError(
                 "Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")

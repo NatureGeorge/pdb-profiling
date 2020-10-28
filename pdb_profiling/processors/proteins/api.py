@@ -35,7 +35,7 @@ class ProteinsAPI(Abclog):
     @classmethod
     def get_file_suffix(cls) -> str:
         res = cls.headers["Accept"].split('/')[1]
-        assert res in ('json', 'xml', 'x-gff'), f"Unexcepted Case: {cls.headers}"
+        assert res in ('json', 'xml', 'x-gff'), f"Unexpected Case: {cls.headers}"
         return res
 
     @classmethod
@@ -122,7 +122,7 @@ class ProteinsAPI(Abclog):
     def pipe_summary(cls, data: Dict):
         if len(data) != 1:
             cls.logger.warning(
-                f"Unexcepted Length from ProteinsAPI.pipe_summary: {len(data)}")
+                f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}")
             return None, None
         data = data[0]
         dbReferences_lyst = []

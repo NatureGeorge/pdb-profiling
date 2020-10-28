@@ -124,7 +124,9 @@ class ProcessPDBe(Abclog):
         'pdb_code': str,
         'assemble_code': int,
         'assembly_id': int,
-        'oper_expression': str
+        'oper_expression': str,
+        'structure_1.range': str,
+        'structure_2.range': str
         }
     
     use_existing: bool = False
@@ -178,8 +180,8 @@ class ProcessPDBe(Abclog):
             return path
         path = Path(path)
         suffix = path.name.replace('%', '/').split('+')[0]
-        new_path = str(path).replace('.json', '.tsv')
-        if Path(new_path).exists() and cls.use_existing:
+        new_path = Path(str(path).replace('.json', '.tsv'))
+        if new_path.exists() and cls.use_existing and (new_path.stat().st_size > 0):
             return new_path
         async with aiofiles_open(path) as inFile:
             try:
@@ -187,17 +189,17 @@ class ProcessPDBe(Abclog):
             except Exception as e:
                 cls.logger.error(f"Error in {path}")
                 raise e
-        if Path(new_path).exists() and cls.use_existing:
+        if new_path.exists() and cls.use_existing and (new_path.stat().st_size > 0):
             return new_path
         res = Dict2Tabular.pyexcel_io(traverseSuffixes(suffix, data))
         if res is not None:
             if isinstance(res, Generator):
-                one = False
+                count = 0
                 for r in res:
                     if r is not None:
-                        await pipe_out(df=r, path=new_path, format='tsv', mode='a')
-                        one = True
-                if not one:
+                        await pipe_out(df=r, path=new_path, format='tsv', mode='a' if count else 'w')
+                        count += 1
+                if not count:
                     cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
                     return None
             else:
@@ -702,7 +704,7 @@ class PDBeDecoder(object):
             'author_insertion_code', 'observed', 'UniProt')
 
         for pdb_id in data:
-            assert len(data[pdb_id]) == 1, f"Unexcepted Cases: {pdb_id}"
+            assert len(data[pdb_id]) == 1, f"Unexpected Cases: {pdb_id}"
             molecules = data[pdb_id][0]
             for chain in molecules['chains']:
                 for residue in chain['residues']:

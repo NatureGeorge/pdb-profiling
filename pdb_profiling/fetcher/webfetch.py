@@ -57,9 +57,9 @@ class UnsyncFetch(Abclog):
     use_existing: bool = False
 
     @classmethod
-    @retry(wait=wait_random(max=10), stop=stop_after_attempt(3))
+    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
     async def http_download(cls, method: str, info: Dict, path: str):
-        if cls.use_existing is True and os.path.exists(path):
+        if cls.use_existing is True and os.path.exists(path) and (os.stat(path).st_size > 0):
             return path
         cls.logger.debug(f"Start to download file: {info['url']}")
         async with aiohttp.ClientSession() as session:
@@ -82,12 +82,12 @@ class UnsyncFetch(Abclog):
                     raise Exception(mes)
 
     @classmethod
-    @retry(wait=wait_random(max=10), stop=stop_after_attempt(3))
+    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
     async def ftp_download(cls, method: str, info: Dict, path: str):
         url = furl(info['url'])
         fileName = url.path.segments[-1]
         filePath = os.path.join(path, fileName)
-        if cls.use_existing is True and os.path.exists(filePath):
+        if cls.use_existing is True and os.path.exists(filePath) and (os.stat(filePath).st_size > 0):
             return filePath
         cls.logger.debug(f"Start to download file: {url}")  # info
         async with aioftp.ClientSession(url.host) as session:
@@ -139,7 +139,7 @@ class UnsyncFetch(Abclog):
     @classmethod
     def single_task(cls, task, semaphore, to_do_func: Optional[Callable] = None, rate: float = 1.5) -> Unfuture:
         method, info, path = task
-        if cls.use_existing is True and os.path.exists(path) and os.path.isfile(path):
+        if cls.use_existing is True and os.path.exists(path) and os.path.isfile(path) and (os.stat(path).st_size > 0):
             task = cls.unsync_wrap(path)
         else:
             task = cls.fetch_file(semaphore, method, info, path, rate)

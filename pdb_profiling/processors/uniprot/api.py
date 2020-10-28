@@ -382,7 +382,7 @@ class UniProtFASTA(Abclog):
         init_folder_from_suffix(yourfolder, 'UniProt/fasta/'))
     '''
 
-    params = {'include': 'yes'}
+    params = {'include': 'no'}
     obj = {}
 
     @classmethod

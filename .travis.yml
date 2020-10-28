@@ -12,7 +12,7 @@ install:
 
 # command to run tests
 script:
-  - coverage run -m pytest ./test/pytest/
+  - coverage run --source=pdb_profiling -m pytest ./test/pytest/
 
 after_success:
   - coveralls

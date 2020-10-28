@@ -26,7 +26,7 @@ class EnsemblAPI(Abclog):
     @classmethod
     def get_file_suffix(cls, headers: Optional[Dict]) -> str:
         res = headers["Content-Type"].split('/')[1]
-        assert res in ('plain', 'x-seqxml+xml', 'x-fasta', 'json'), f"Unexcepted Case: {cls.headers}"
+        assert res in ('plain', 'x-seqxml+xml', 'x-fasta', 'json'), f"Unexpected Case: {cls.headers}"
         return res.replace('x-', '').replace('seqxml+', '')
 
     @classmethod
