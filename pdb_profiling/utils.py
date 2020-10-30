@@ -675,7 +675,7 @@ SEQ_DICT = {
 
 standardAA = list(SEQ_DICT.keys())
 
-standardNu = ['DA', 'DT', 'DC', 'DG', 'A', 'U', 'C', 'G']
+standardNu = ['DA', 'DT', 'DC', 'DG', 'DI', 'A', 'U', 'C', 'G', 'I']
 
 
 def range_len(lyst: Union[List, str, float]) -> int:

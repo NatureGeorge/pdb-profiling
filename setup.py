@@ -36,7 +36,8 @@ setup(
         'orm>=0.1.5',
         'smart_open>=1.9.0',
         'scipy>=1.4.1',
-        'slugify>=0.0.1'
+        'slugify>=0.0.1',
+        'cachetools>=4.1.0'
      ],
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",
