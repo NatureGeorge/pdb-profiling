@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from re import compile as re_compile
 
-__version__ = '0.1.14'
+__version__ = '0.1.16'
 
 
 common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'
@@ -39,6 +39,7 @@ def default_config(folder='./'):
     from pdb_profiling.processors.proteins.record import Identifier
     from pdb_profiling.processors import UniProtFASTA
     from pdb_profiling.processors.i3d.api import Interactome3D
+    from pdb_profiling.processors.swissmodel.api import SMR
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
     ProcessPDBe.use_existing = True
     # Use Existing API Results (e.g. json format results downloaded from web)
@@ -50,9 +51,11 @@ def default_config(folder='./'):
     Identifier.set_web_semaphore(30).result()
     UniProtFASTA.set_web_semaphore(30).result()
     Interactome3D.set_web_semaphore(30).result()
+    SMR.set_web_semaphore(30).result()
     # Set Folder that store downloaded and handled files
     Base.set_folder(folder)
     PDB.set_folder(folder)
     Identifier.set_folder(folder)
     UniProtFASTA.set_folder(folder)
     Interactome3D.set_folder(folder)
+    SMR.set_folder(folder)

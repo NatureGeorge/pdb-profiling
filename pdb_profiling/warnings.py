@@ -10,6 +10,9 @@ class MultiWrittenWarning(UserWarning):
     pass
 
 
+class WithoutCifKeyWarning(UserWarning):
+    pass
+
 class PISAErrorWarning(UserWarning):
     pass
 

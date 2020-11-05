@@ -770,13 +770,13 @@ def get_seq_seg(seq, ranges):
         yield start, seq[start-1:end]
 
 
-def get_diff_index(lseq, lrange, rseq, rrange, on_left:bool=True):
+def get_diff_index(lseq, lrange, rseq, rrange):
     if isinstance(lrange, str):
         lrange = json.loads(lrange)
     if isinstance(rrange, str):
         rrange = json.loads(rrange)
     for (lstart, lseg), (rstart, rseg) in zip(get_seq_seg(lseq, lrange), get_seq_seg(rseq, rrange)):
-        yield from (lstart+index if on_left else rstart+index for index, (r1, r2) in enumerate(zip(lseg, rseg)) if r1 != r2)
+        yield from ((lstart+index, rstart+index) for index, (r1, r2) in enumerate(zip(lseg, rseg)) if r1 != r2)
 
 
 def red_seq_seg(seq, ranges):
@@ -819,21 +819,22 @@ def get_range_diff(lyst_a: Union[str, List, Tuple], lyst_b: Union[str, List, Tup
     return array_a - array_b
 
 
-def select_range(ranges, indexes, cutoff=0.2, skip_index=[]):
+def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=None):
     select_index = []
+    selected_ranges = [] if selected_ranges is None else selected_ranges
     def unit(cur_index):
         if cur_index in skip_index:
             return
         cur_range = ranges[cur_index]
         cur_range = json.loads(cur_range) if isinstance(cur_range, str) else cur_range
-        for selected in select_index:
-            selected_range = ranges[selected]
+        for selected_range in selected_ranges:
             selected_range = json.loads(selected_range) if isinstance(selected_range, str) else selected_range
             score = overlap.similarity(lyst2range(cur_range),
                                lyst2range(selected_range))
             if score > cutoff:
                 return
         select_index.append(cur_index)
+        selected_ranges.append(cur_range)
 
     for index in indexes:
         unit(index)
@@ -901,3 +902,7 @@ def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, ski
     for index in indexes:
         unit(index)
     return select_index
+
+
+def dumpsParams(params: Dict) -> str:
+    return '&'.join(f'{key}={value}' for key, value in params.items())

@@ -10,6 +10,7 @@ from numpy import nan
 from pandas import DataFrame
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
+from pdb_profiling.utils import dumpsParams
 from urllib.parse import quote
 from slugify import slugify
 
@@ -39,16 +40,12 @@ class ProteinsAPI(Abclog):
         return res
 
     @classmethod
-    def dumpsParams(cls, params: Dict) -> str:
-        return '&'.join(f'{key}={value}' for key, value in params.items())
-
-    @classmethod
     def task_unit(cls, suffix: str, params: Dict, folder: Path, identifier:Optional[str]=None) -> Tuple:
         args = dict(
             url=f'{BASE_URL}{suffix}' if identifier is None else f'{BASE_URL}{suffix}{quote(identifier)}',
             headers=cls.headers,
             params=params)
-        return 'get', args, folder/f'{slugify(identifier)+"_"+cls.dumpsParams(params) if identifier is not None else cls.dumpsParams(params)}.{cls.get_file_suffix()}'
+        return 'get', args, folder/f'{slugify(identifier)+"_"+dumpsParams(params) if identifier is not None else dumpsParams(params)}.{cls.get_file_suffix()}'
 
     @classmethod
     def yieldTasks(cls, suffix: str, params_collection: Iterable[Dict], folder: Path, identifiers: Optional[Iterable[str]]) -> Generator:

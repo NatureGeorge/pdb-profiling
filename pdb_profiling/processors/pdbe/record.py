@@ -14,7 +14,7 @@ from aiofiles import open as aiofiles_open
 from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
-from collections import defaultdict, namedtuple
+from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
 from pdb_profiling import default_id_tag
 from pdb_profiling.exceptions import WithoutExpectedKeyError
@@ -36,10 +36,11 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
+from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
-from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning
+from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
@@ -174,7 +175,7 @@ class PDB(Base):
     tasks = LRUCache(maxsize=1024)
 
     protein_sequence_pat = re_compile(r'([A-Z]{1}|\([A-Z0-9]+\))')
-    nucleotide_sequence_pat = re_compile(r'([AUCG]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(UNK\))')
+    nucleotide_sequence_pat = re_compile(r'([AUCGI]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(DI\)|\(UNK\))')
     StatsProteinEntitySeq = namedtuple(
         'StatsProteinEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT ARTIFACT_INDEX')
     StatsNucleotideEntitySeq = namedtuple(
@@ -456,7 +457,7 @@ class PDB(Base):
         return eec_df
 
     @unsync
-    async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:int=16):
+    async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:int=16, discard_multimer_chains_cutoff_for_au:Optional[int]=None):
         '''
         NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
         NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
@@ -472,8 +473,11 @@ class PDB(Base):
         mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate_polymer'))]
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull() & ass_eec_df.entity_id.isin(mol_df.entity_id)]
         check_chain_num = ass_eec_df.groupby('assembly_id').in_chains.apply(lambda x: sum(i.count(',')+1 for i in x))
-        assemblys = set(ass_eec_df.assembly_id) & set(check_chain_num[check_chain_num<discard_multimer_chains_cutoff].index)
-        if mol_df.in_struct_asyms.apply(lambda x: x.count(',')+1).sum() < discard_multimer_chains_cutoff:
+        if discard_multimer_chains_cutoff is not None:
+            assemblys = set(ass_eec_df.assembly_id) & set(check_chain_num[check_chain_num<discard_multimer_chains_cutoff].index)
+        else:
+            assemblys = set(ass_eec_df.assembly_id)
+        if discard_multimer_chains_cutoff_for_au is None or mol_df.in_struct_asyms.apply(lambda x: x.count(',')+1).sum() < discard_multimer_chains_cutoff_for_au:
             assemblys |= {0}
         if focus_assembly_ids is not None:
             assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
@@ -771,13 +775,17 @@ class PDB(Base):
             async with aiofiles_open(target_file, 'rt') as file_io:
                 handle = await file_io.read()
                 handle = (i+'\n' for i in handle.split('\n'))
-                cur_df = DataFrame(MMCIF2DictPlus(handle))
+                try:
+                    cur_df = DataFrame(MMCIF2DictPlus(handle))
+                except ValueError as e:
+                    warn(f"{target_file}", WithoutCifKeyWarning)
+                    raise e
                 cur_df['_pdbe_chain_remapping.assembly_id'] = assembly_id  # NOTE: exception: 6E5N-assembly-1
                 dfs.append(cur_df)
         return concat(dfs, ignore_index=True, sort=False)
 
     @unsync
-    async def profile_id(self):
+    async def profile_id(self, **kwargs):
         '''except water'''
         assg_oper_df = await self.fetch_from_modelServer_api(
                 'atoms',
@@ -797,6 +805,9 @@ class PDB(Base):
             focus_assg_oper_df = assg_oper_df[assg_oper_df.struct_asym_id.isin(focus_res2eec_df.struct_asym_id)]
             new_focus_assg_oper_df = concat([add_0_assg_oper_df, focus_assg_oper_df.merge(focus_res2eec_df, how='left')], ignore_index=True, sort=False)
             assert any(new_focus_assg_oper_df.isnull().sum()) is False, f"Unexpected Cases {new_focus_assg_oper_df}"
+            if not hasattr(self, 'assembly'):
+                await self.set_assembly(**kwargs)
+            new_focus_assg_oper_df = new_focus_assg_oper_df[new_focus_assg_oper_df.assembly_id.isin(self.assembly.keys())].reset_index(drop=True)
         else:
             add_0_assg_oper_df['struct_asym_id_in_assembly'] = add_0_assg_oper_df.struct_asym_id
             add_0_assg_oper_df['details'] = 'asymmetric_unit'
@@ -823,7 +834,8 @@ class PDB(Base):
             in_ass_df.entity_id = in_ass_df.entity_id.astype(int)
             profile_id_df = new_focus_assg_oper_df.merge(in_ass_df, how='left')
             self.subset_assembly = frozenset(profile_id_df.assembly_id)-frozenset(to_fetch_assembly)
-            assert frozenset(profile_id_df[profile_id_df.struct_asym_id_in_assembly.isnull()].assembly_id) == self.subset_assembly
+            rest = frozenset(profile_id_df[profile_id_df.struct_asym_id_in_assembly.isnull()].assembly_id)
+            assert rest == self.subset_assembly, f"\n{rest}\n{self.subset_assembly}\n{to_fetch_assembly}"
             a0_index = profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index
             self.subset_assembly = self.subset_assembly - {0}
             profile_id_df.loc[a0_index, 'struct_asym_id_in_assembly'] = profile_id_df.loc[a0_index, 'struct_asym_id']
@@ -848,7 +860,7 @@ class PDB(Base):
         return profile_id_df
     
     @unsync
-    async def get_expanded_map_res_df(self, UniProt, unp_range, pdb_range, **kwargs):
+    async def get_expanded_map_res_df(self, UniProt, unp_range, pdb_range, conflict_pdb_index=None, **kwargs):
         assert kwargs.keys() <= frozenset({'chain_id', 'entity_id', 'struct_asym_id', 'pdb_id'})
         res_map_df = DataFrame(zip(expand_interval(unp_range),expand_interval(pdb_range)), columns=['unp_residue_number', 'residue_number'])
         res_map_df['UniProt'] = UniProt
@@ -856,10 +868,51 @@ class PDB(Base):
         res_map_df_full = res_map_df.merge(res_df.query(
             'and '.join(f'{key}=="{value}"' if isinstance(value, str) else f'{key}=={value}' for key,value in kwargs.items())))
         assert res_map_df_full.shape[0] == res_map_df.shape[0]
-        return res_map_df_full
+        if conflict_pdb_index is None:
+            return res_map_df_full
+        else:
+            cf = self.convert_conflict_pdb_index(conflict_pdb_index)
+            if len(cf) > 0:
+                return res_map_df_full.merge(cf, how='left')
+            else:
+                return res_map_df_full
 
-    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, **kwargs):
-        await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff)
+    @staticmethod
+    def convert_conflict_pdb_index(conflict_pdb_index):
+        if isinstance(conflict_pdb_index, str):
+            conflict_pdb_index = json.loads(conflict_pdb_index)
+        conflict_pdb_index = OrderedDict(conflict_pdb_index)
+        return DataFrame({'residue_number': (int(i) for i in conflict_pdb_index.keys()), 'conflict_code': (i for i in conflict_pdb_index.values())})
+
+    @unsync
+    async def get_map_res_df(self, UniProt, unp_range, pdb_range, your_sites, conflict_pdb_index=None, unp2pdb:bool=True,**kwargs):
+        assert kwargs.keys() <= frozenset({'chain_id', 'entity_id', 'struct_asym_id', 'pdb_id'})
+        if unp2pdb:
+            info = {
+                'unp_residue_number': your_sites,
+                'residue_number': (SIFTS.convert_index(pdb_range, unp_range, your_sites)),
+                'UniProt': UniProt}
+        else:
+            info = {
+                'residue_number': your_sites,
+                'unp_residue_number': SIFTS.convert_index(unp_range, pdb_range, your_sites),
+                'UniProt': UniProt}
+        your_sites_df = DataFrame({**info, **kwargs})
+        your_sites_df = your_sites_df[(~your_sites_df.residue_number.isnull()) | (~your_sites_df.unp_residue_number.isnull())]
+        if len(your_sites_df) == 0:
+            return
+        ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+        if conflict_pdb_index is None:
+            return ret
+        else:
+            cf = self.convert_conflict_pdb_index(conflict_pdb_index)
+            if len(cf) > 0:
+                return ret.merge(cf, how='left')
+            else:
+                return ret
+
+    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, discard_multimer_chains_cutoff_for_au=None, **kwargs):
+        await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
         for assembly in self.assembly.values():
             await getattr(assembly, func)(**kwargs)
             if len(assembly.interface) == 0:
@@ -1180,7 +1233,7 @@ class PDBInterface(PDBAssemble):
             return
         elif self.info['chains'] != struct_sele_set:
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
-            warn(f"interfacedetail({struct_sele_set}) inconsistent with interfacelist({set(self.info['chains'])}) ! May miss some data.", PISAErrorWarning)
+            warn(f"{repr(self)}: interfacedetail({struct_sele_set}) inconsistent with interfacelist({set(self.info['chains'])}) ! May miss some data.", PISAErrorWarning)
         eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
         res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
@@ -1281,6 +1334,8 @@ class SIFTS(PDB):
 
     complete_chains_run_as_completed = False
 
+    weight = array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746])
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -1298,6 +1353,14 @@ class SIFTS(PDB):
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
+
+    @classmethod
+    def fetch_unp_fasta(cls, identifier):
+        task = cls.tasks.get((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), None)
+        if task is None:    
+            task = UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
+            cls.register_task((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), task)
+        return task
 
     @classmethod
     @unsync
@@ -1402,7 +1465,7 @@ class SIFTS(PDB):
         dfrm['unp_gaps0'] = dfrm.unp_gaps.apply(lambda x: x.count(0))
         add_tage_to_range(dfrm, tage_name='sifts_range_tag')
         dfrm['repeated'] = dfrm.apply(
-            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion (Specail Case)', axis=1)
+            lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion_Undivided', axis=1)
         dfrm['repeated'] = dfrm.apply(
             lambda x: True if any(i < 0 for i in x['unp_gaps']) else x['repeated'], axis=1)
         dfrm['reversed'] = dfrm.pdb_gaps.apply(lambda x: any(i < 0 for i in x))
@@ -1478,12 +1541,21 @@ class SIFTS(PDB):
         rrange = json.loads(rrange) if isinstance(rrange, str) else rrange
         return tuple(unit(lrange, rrange, site) for site in sites)
 
-    @staticmethod
+    @classmethod
     @unsync
-    async def get_residue_conflict(pdb_id, entity_id, pdb_range, Entry, UniProt, unp_range, on_pdb: bool = True):
+    async def get_residue_conflict(cls, pdb_id, entity_id, pdb_range, Entry, UniProt, unp_range):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        _, unp_seq = await UniProtFASTA.single_retrieve(UniProt).then(a_seq_reader)
-        return json.dumps(to_interval(get_diff_index(pdb_seq, pdb_range, unp_seq, unp_range, on_pdb))).decode('utf-8'), len(unp_seq)
+        _, unp_seq = await cls.fetch_unp_fasta(UniProt)
+        indexes = tuple(get_diff_index(pdb_seq, pdb_range, unp_seq, unp_range))
+        if len(indexes) > 0:
+            pdb_diff_index, unp_diff_index = zip(*indexes)
+            return (
+                json.dumps(dict(zip((str(i) for i in pdb_diff_index), (unp_seq[i-1] for i in unp_diff_index)))).decode('utf-8'), 
+                json.dumps(to_interval(pdb_diff_index)).decode('utf-8'), 
+                json.dumps(to_interval(unp_diff_index)).decode('utf-8'), 
+                len(unp_seq))
+        else:
+            return ('{}', '[]', '[]', len(unp_seq)) 
 
     @classmethod
     @unsync
@@ -1508,7 +1580,7 @@ class SIFTS(PDB):
         f_dfrm = dfrm[focus+[pdb_range_col, 'Entry', unp_range_col]].drop_duplicates(subset=focus).reset_index(drop=True)
         tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
             x['pdb_id'], x['entity_id'], x[pdb_range_col], x['Entry'], x['UniProt'], x[unp_range_col]), axis=1)
-        f_dfrm['conflict_pdb_range'], f_dfrm['unp_len'] = zip(*[await i for i in tasks])
+        f_dfrm['conflict_pdb_index'], f_dfrm['conflict_pdb_range'], f_dfrm['conflict_unp_range'], f_dfrm['unp_len'] = zip(*[await i for i in tasks])
         dfrm_ed = merge(dfrm, f_dfrm)
         assert dfrm_ed.shape[0] == dfrm.shape[0], f"\n{dfrm_ed.shape}\n{dfrm.shape}"
         return dfrm_ed
@@ -1638,14 +1710,14 @@ class SIFTS(PDB):
     @unsync
     async def a_sliding_alignment(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        _, unp_seq = await UniProtFASTA.single_retrieve(UniProt).then(a_seq_reader)
+        _, unp_seq = await cls.fetch_unp_fasta(UniProt)
         pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
         unp_range = json.loads(unp_range) if isinstance(unp_range, str) else unp_range
         return cls.sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, weight=array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746])):
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False):
         if sifts_df is None:
             init_task = await self.fetch_from_web_api('api/mappings/all_isoforms/', Base.to_dataframe)
             if init_task is None: return
@@ -1660,12 +1732,14 @@ class SIFTS(PDB):
                     'experimental_method', 'multi_method']
 
         if self.level == 'PDB Entry':
-            return await self.pipe_score_for_pdb_entry(sifts_df, exp_cols, weight)
+            return await self.pipe_score_for_pdb_entry(sifts_df, exp_cols)
         else:
-            return await self.pipe_score_for_unp_isoform(sifts_df, exp_cols, weight)
+            return await self.pipe_score_for_unp_isoform(sifts_df, exp_cols)
 
     @unsync
-    async def pipe_score_base(self, sifts_df, pec_df, weight):
+    async def pipe_score_base(self, sifts_df, pec_df):
+        weight = self.weight
+
         def raw_score(vec): return dot(vec, weight)
 
         weight_ig3 = array([i for i in weight[:2]]+[i for i in weight[3:]])
@@ -1692,7 +1766,7 @@ class SIFTS(PDB):
         return full_df, s_df
 
     @unsync
-    async def pipe_score_for_pdb_entry(self, sifts_df, exp_cols, weight):
+    async def pipe_score_for_pdb_entry(self, sifts_df, exp_cols):
         exp_df = DataFrame(await PDBs.fetch_exp_pipe(self), columns=exp_cols)
         summary_dict = await self.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
         d = summary_dict[self.pdb_id][0]
@@ -1701,12 +1775,12 @@ class SIFTS(PDB):
 
         pec_df, _ = await self.stats_chain()
 
-        full_df, s_df = await self.pipe_score_base(sifts_df, pec_df, weight)
+        full_df, s_df = await self.pipe_score_base(sifts_df, pec_df)
 
         return full_df, s_df, exp_df
 
     @unsync
-    async def pipe_score_for_unp_isoform(self, sifts_df, exp_cols, weight):
+    async def pipe_score_for_unp_isoform(self, sifts_df, exp_cols):
         cur_pdbs = sifts_df.pdb_id.unique()
 
         pdbs = PDBs(cur_pdbs)
@@ -1726,7 +1800,7 @@ class SIFTS(PDB):
         # pec_df, _ = zip(*tasks)
         # pec_df = concat(pec_df, sort=False, ignore_index=True)
 
-        full_df, s_df = await self.pipe_score_base(sifts_df, pec_df, weight)
+        full_df, s_df = await self.pipe_score_base(sifts_df, pec_df)
 
         return full_df, s_df, exp_df
 
@@ -1751,24 +1825,29 @@ class SIFTS(PDB):
         sele_df['select_rank'] = -1
         return sele_df
 
-    @unsync
-    async def pipe_select_mo(self, exclude_pdbs=frozenset(), OC_cutoff=0.2, **kwargs):        
-        sele_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
-        if sele_df is None:
-            return
-        allow_sele_df = sele_df[sele_df.RAW_BS > 0]
+    @staticmethod
+    def select_mo(sele_df, OC_cutoff=0.2, sort_cols=['RAW_BS', '1/resolution', 'revision_date', 'id_score'], ascending=False, allow_mask=None):
+        allow_sele_df = sele_df[sele_df.RAW_BS > 0] if allow_mask is None else sele_df[allow_mask]
 
         def sele_func(dfrm):
-            rank_index = dfrm.sort_values(by=['RAW_BS', '1/resolution', 'revision_date', 'id_score'], ascending=False).index
+            rank_index = dfrm.sort_values(by=sort_cols, ascending=ascending).index
             sele_df.loc[rank_index, 'select_rank'] = range(1, len(rank_index)+1)
             return select_range(dfrm.new_unp_range, rank_index, cutoff=OC_cutoff)
 
-        if kwargs.get('complete_chains', False):
+        if len(allow_sele_df.UniProt.unique()) > 1:
             sele_indexes = allow_sele_df.groupby('UniProt').apply(sele_func)
             sele_df.loc[[j for i in sele_indexes for j in i], 'select_tag'] = True
         else:
             sele_df.loc[sele_func(allow_sele_df), 'select_tag'] = True
         return sele_df
+
+    @unsync
+    async def pipe_select_mo(self, exclude_pdbs=frozenset(), OC_cutoff=0.2, **kwargs):        
+        sele_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
+        if sele_df is None:
+            return
+        else:
+            return self.select_mo(sele_df, OC_cutoff)
 
     @staticmethod
     @unsync
@@ -1832,118 +1911,82 @@ class SIFTS(PDB):
                 pass
 
     @unsync
-    async def pipe_select_ho(self, exclude_pdbs=frozenset(), interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, run_as_completed:bool=False, progress_bar=None,**kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs)
+    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs)
         if sele_df is None:
             return
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
             lambda x: frozenset(combinations_with_replacement(x, 2)))
-        # res = [i for pdb_id in chain_pairs.index async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs[pdb_id], au2bu=True, func='pipe_protein_protein_interface')]
-        # interact_df = DataFrame(i for i in res if i is not None)
-        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id], **kwargs) for pdb_id in chain_pairs.index]
-        if run_as_completed:
-            if progress_bar is not None:
-                res = [await i for i in progress_bar(as_completed(tasks), total=len(tasks))]
-            else:
-                res = [await i for i in as_completed(tasks)]
-        else:
-            res = [await i for i in tasks]
-        interact_df = DataFrame(j for i in res for j in i if j is not None)
-        if len(interact_df) == 0:
-            return
-        '''
-        NOTE: exception case: 5b0y (see api%pisa%interfacelist%+5b0y%0.tsv)
-
-        # assert all((~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())), f"{interact_df[interact_df.interface_range_1.isnull() | interact_df.interface_range_2.isnull()]}"
-        '''
-        interact_df = interact_df[(~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())]
-        p_a_df = self.parallel_interact_df(sele_df, interact_df)
-        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'ho')
-        if len(i3d_df) == 0:
-            p_df = p_a_df
-            p_df['in_i3d'] = False
-        else:
-            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
-            p_df = p_a_df.merge(p_b_df, how='left')
-            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
-            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
-
-        p_df['best_select_rank'] = p_df[['select_rank_1',
-                                         'select_rank_2']].apply(lambda x: min(x), axis=1)
+        
+        p_df = await self.integrate_i3d_with_pisa_interact(sele_df, chain_pairs, 'ho', run_as_completed, progress_bar, **kwargs)
+        if p_df is None:
+            return None
         p_df['unp_range_DSC'] = p_df.apply(lambda x: sorensen.similarity(
             lyst2range(x['new_unp_range_1']), lyst2range(x['new_unp_range_2'])), axis=1)
-        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
-        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
+        return self.add_interact_common_cols(p_df)
+
+    @staticmethod
+    def select_ho(p_df, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, sort_cols=['best_select_rank_score', 'second_select_rank_score', 'in_i3d'], ascending=False, allow_mask=None):
         p_df['i_select_tag'] = False
         p_df['i_select_rank'] = -1
-        allow_p_df = p_df[
-            (p_df.best_select_rank > 0) & 
-            (p_df.unp_range_DSC>=unp_range_DSC_cutoff) &
-            ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
-            ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        if allow_mask is None:
+            allow_p_df = p_df[
+                (p_df.best_select_rank_score > 0) &
+                (p_df.unp_range_DSC >= unp_range_DSC_cutoff) &
+                ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+                ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        else:
+            allow_p_df = p_df[
+                allow_mask & 
+                (p_df.unp_range_DSC >= unp_range_DSC_cutoff) &
+                ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+                ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
 
         def sele_func(dfrm):
-            rank_index = dfrm.sort_values(by='best_select_rank', ascending=False).index
+            rank_index = dfrm.sort_values(by=sort_cols, ascending=ascending).index
             p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
             return select_ho_range(dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=wasserstein_distance_cutoff)
-        
-        p_df.loc[sele_func(allow_p_df), 'i_select_tag'] = True
+
+        if len(p_df.i_group.unique()) == 1:
+            p_df.loc[sele_func(allow_p_df), 'i_select_tag'] = True
+        else:
+            sele_indexes = allow_p_df.groupby('i_group').apply(sele_func)
+            p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
 
         return p_df
 
     @unsync
-    async def pipe_select_ho_iso(self, exclude_pdbs=frozenset(), interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, run_as_completed:bool=False, progress_bar=None, then_sort_interact:bool=True, **kwargs):
-        entry = self.identifier.split('-')[0]
-        sele_df = await self.pipe_select_mo(exclude_pdbs, complete_chains=True)
+    async def pipe_select_ho(self, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, **kwargs):
+        p_df = await self.pipe_select_ho_base(**kwargs)
+        if p_df is None:
+            return
+        else:
+            return self.select_ho(p_df, interface_mapped_cov_cutoff, unp_range_DSC_cutoff, wasserstein_distance_cutoff)
+
+    @unsync
+    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True)
         if sele_df is None:
             return
-        sele_df = sele_df[sele_df.Entry.eq(entry)]
+        sele_df = sele_df[sele_df.Entry.eq(self.identifier.split('-')[0])]
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
             lambda x: frozenset(combinations_with_replacement(x, 2)))
-        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id], **kwargs) for pdb_id in chain_pairs.index]
-        if run_as_completed:
-            if progress_bar is not None:
-                res = [await i for i in progress_bar(as_completed(tasks), total=len(tasks))]
-            else:
-                res = [await i for i in as_completed(tasks)]
-        else:
-            res = [await i for i in tasks]
-        interact_df = DataFrame(j for i in res for j in i if j is not None)
-        if len(interact_df) == 0:
-            return
-        interact_df = interact_df[(~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())]
-        p_a_df = self.parallel_interact_df(sele_df, interact_df)
-        p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
-        i3d_df = await self.search_partner_from_i3d(entry, 'ho')
-        if len(i3d_df) == 0:
-            p_df = p_a_df
-            p_df['in_i3d'] = False
-        else:
-            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
-            p_df = p_a_df.merge(p_b_df, how='left')
-            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
-            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
-        p_df['best_select_rank'] = p_df[['select_rank_1',
-                                         'select_rank_2']].apply(lambda x: min(x), axis=1)
-        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
-        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
-        p_df['i_select_tag'] = False
-        p_df['i_select_rank'] = -1
-        p_df['i_group'] = p_df.apply(lambda x: tuple(
-            sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
-        allow_p_df = p_df[
-            (p_df.best_select_rank > 0) &
-            ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
-            ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
         
-        def sele_func(dfrm):
-            rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'id_score_1', 'id_score_2'], ascending=False).index
-            p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-            return select_he_range(dfrm.UniProt_1, dfrm.UniProt_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
+        p_df = await self.integrate_i3d_with_pisa_interact(sele_df, chain_pairs, 'ho_iso', run_as_completed, progress_bar, **kwargs)
+        return None if p_df is None else self.add_interact_common_cols(p_df)
+    
+    @classmethod
+    def select_ho_iso(cls, p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
+        return cls.select_he(p_df, interface_mapped_cov_cutoff, DSC_cutoff, sort_cols, ascending, allow_mask)
 
-        sele_indexes = allow_p_df.groupby('i_group').apply(sele_func)
-        p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
-        return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df
+    @unsync
+    async def pipe_select_ho_iso(self, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, then_sort_interact:bool=True, **kwargs):
+        p_df = await self.pipe_select_ho_iso_base(**kwargs)
+        if p_df is None:
+            return
+        else:
+            p_df = self.select_ho_iso(p_df, interface_mapped_cov_cutoff, DSC_cutoff)
+            return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df
     
     @staticmethod
     @unsync
@@ -1951,148 +1994,51 @@ class SIFTS(PDB):
         return [i async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)]
 
     @unsync
-    async def pipe_select_he(self, exclude_pdbs=frozenset(), interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, run_as_completed:bool=False, progress_bar=None, then_sort_interact:bool=True, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs, complete_chains=True)
+    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True)
         if sele_df is None:
             return
         if len(sele_df.Entry.unique()) == 1:
             return
         chain_pairs = sele_df.groupby(['pdb_id', 'entity_id']).struct_asym_id.apply(frozenset).groupby('pdb_id').apply(tuple).apply(lambda x: frozenset(res for i,j in combinations(range(len(x)), 2) for res in product(x[i], x[j])))
         chain_pairs = chain_pairs[chain_pairs.apply(len) > 0]
-        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id], **kwargs) for pdb_id in chain_pairs.index]
-        if run_as_completed:
-            if progress_bar is not None:
-                res = [await i for i in progress_bar(as_completed(tasks), total=len(tasks))]
-            else:
-                res = [await i for i in as_completed(tasks)]
-        else:
-            res = [await i for i in tasks]
-        interact_df = DataFrame(j for i in res for j in i if j is not None)
-        if len(interact_df) == 0:
-            return
-        interact_df = interact_df[(~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())]
-        p_a_df = self.parallel_interact_df(sele_df, interact_df)
-        p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
-        if len(p_a_df) == 0:
-            return
-        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], "he")
-        if len(i3d_df) == 0:
-            p_df = p_a_df
-            p_df['in_i3d'] = False
-        else:
-            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
-            p_df = p_a_df.merge(p_b_df, how='left')
-            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
-            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
-        p_df['best_select_rank'] = p_df[['select_rank_1',
-                                         'select_rank_2']].apply(lambda x: min(x), axis=1)
-        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
-        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
+        
+        p_df = await self.integrate_i3d_with_pisa_interact(sele_df, chain_pairs, 'he', run_as_completed, progress_bar, **kwargs)
+        return None if p_df is None else self.add_interact_common_cols(p_df)
+
+    @staticmethod
+    def select_he(p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
         p_df['i_select_tag'] = False
         p_df['i_select_rank'] = -1
-        p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
-        allow_p_df = p_df[
-            (p_df.best_select_rank > 0) &
-            ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
-            ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        
+        if allow_mask is None:
+            allow_p_df = p_df[
+                (p_df.best_select_rank_score > 0) &
+                ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+                ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        else:
+            allow_p_df = p_df[
+                allow_mask &
+                ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
+                ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
         
         def sele_func(dfrm):
-            rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'id_score_1', 'id_score_2'], ascending=False).index
+            rank_index = dfrm.sort_values(by=sort_cols, ascending=ascending).index
             p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
             return select_he_range(dfrm.UniProt_1, dfrm.UniProt_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
 
         sele_indexes = allow_p_df.groupby('i_group').apply(sele_func)
         p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
-        return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df
-
-    @unsync
-    async def pipe_select_ho_(self, exclude_pdbs=frozenset(), consider_interface:bool=False, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2):
-        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'ho')
-        if len(i3d_df) == 0:
-            return
-        sele_df = await self.pipe_select_mo(exclude_pdbs)
-        if sele_df is None:
-            return
-        p_df = self.parallel_interact_df(sele_df, i3d_df)
-        p_df['best_select_rank'] = p_df[['select_rank_1', 'select_rank_2']].apply(lambda x: min(x), axis=1)
-        p_df['unp_range_DSC'] = p_df.apply(lambda x: sorensen.similarity(
-            lyst2range(x['new_unp_range_1']), lyst2range(x['new_unp_range_2'])), axis=1)
-        pdbs = p_df.pdb_id.unique()
-        if consider_interface:
-            ii_df = DataFrame([i for pdb_id in pdbs async for i in self.pipe_interface_res_dict(p_df, pdb_id)])
-            if len(ii_df) == 0:
-                consider_interface = False
-            else:
-                p_df = p_df.merge(ii_df)
-                p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
-                p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
-                p_df['i_select_tag'] = False
-                p_df['i_select_rank'] = -1
-                allow_p_df = p_df[(p_df.best_select_rank > 0) & (p_df.unp_range_DSC>=unp_range_DSC_cutoff)]
-                
-                def sele_func(dfrm):
-                    rank_index = dfrm.sort_values(by='best_select_rank', ascending=False).index
-                    p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-                    return select_ho_range(dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=wasserstein_distance_cutoff)
-        
-        if not consider_interface:
-            p_df['i_select_tag'] = False
-            p_df['i_select_rank'] = -1
-            allow_p_df = p_df[(p_df.best_select_rank > 0) & (p_df.unp_range_DSC>=unp_range_DSC_cutoff)]
-            
-            def sele_func(dfrm):
-                rank_index = dfrm.sort_values(by='best_select_rank', ascending=False).index
-                p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-                return select_ho_range(dfrm.new_unp_range_1, dfrm.new_unp_range_2, rank_index, cutoff=wasserstein_distance_cutoff)
-
-        p_df.loc[sele_func(allow_p_df), 'i_select_tag'] = True
-
         return p_df
 
     @unsync
-    async def pipe_select_he_(self, exclude_pdbs=frozenset(), consider_interface:bool=False, DSC_cutoff=0.2):
-        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], 'he')
-        if len(i3d_df) == 0:
+    async def pipe_select_he(self, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, then_sort_interact:bool=True, **kwargs):
+        p_df = await self.pipe_select_he_base(**kwargs)
+        if p_df is None:
             return
-        sele_df = await self.pipe_select_mo(exclude_pdbs, complete_chains=True)
-        if sele_df is None:
-            return
-        p_df = self.parallel_interact_df(sele_df, i3d_df)
-        p_df = p_df[p_df.UniProt_1.eq(self.identifier) | p_df.UniProt_2.eq(self.identifier)].reset_index(drop=True)
-        p_df['best_select_rank'] = p_df[['select_rank_1', 'select_rank_2']].apply(lambda x: min(x), axis=1)
-        pdbs = p_df.pdb_id.unique()
-        if consider_interface:
-            ii_df = DataFrame([i for pdb_id in pdbs async for i in self.pipe_interface_res_dict(p_df, pdb_id)])
-            if len(ii_df) == 0:
-                consider_interface = False
-            p_df = p_df.merge(ii_df)
-            p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
-            p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
-            p_df['i_select_tag'] = False
-            p_df['i_select_rank'] = -1
-            p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
-            allow_p_df = p_df[p_df.best_select_rank > 0]
-            
-            def sele_func(dfrm):
-                rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'id_score_1', 'id_score_2'], ascending=False).index
-                p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-                return select_he_range(dfrm.UniProt_1, dfrm.UniProt_2, dfrm.unp_interface_range_1, dfrm.unp_interface_range_2, rank_index, cutoff=DSC_cutoff)
-
-        if not consider_interface:
-            p_df['i_select_tag'] = False
-            p_df['i_select_rank'] = -1
-            p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['Entry_1'], x['Entry_2']))), axis=1)
-            allow_p_df = p_df[p_df.best_select_rank > 0]
-
-            def sele_func(dfrm):
-                rank_index = dfrm.sort_values(by=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'id_score_1', 'id_score_2'], ascending=False).index
-                p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
-                return select_he_range(dfrm.Entry_1, dfrm.Entry_2, dfrm.new_unp_range_1, dfrm.new_unp_range_2, rank_index, cutoff=DSC_cutoff)
-
-        sele_indexes = allow_p_df.groupby('i_group').apply(sele_func)
-        p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
-
-        return p_df
+        else:
+            p_df = self.select_he(p_df, interface_mapped_cov_cutoff, DSC_cutoff)
+            return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df
 
     @unsync
     def sort_interact_cols(self, dfrm):
@@ -2106,8 +2052,97 @@ class SIFTS(PDB):
         store_2 = dfrm.loc[swap_index, cols_2].rename(columns=dict(zip(cols_2, [col.replace('_2', '_1') for col in cols_2])))
         dfrm.loc[swap_index, cols_1] = store_2
         dfrm.loc[swap_index, cols_2] = store_1
+        dfrm['i_group'] = dfrm.apply(lambda x: (x['UniProt_1'], x['UniProt_2']), axis=1)
         return dfrm
 
+    @staticmethod
+    def select_smr_mo(smr_df, allow_oligo_state=('monomer',), selected_sifts_unp_ranges=list(), smr_sort_cols=None, ascending=False, OC_cutoff=0.2):
+        smr_df['select_rank'] = -1
+        smr_df['select_tag'] = False
+        allow_smr_df = smr_df[smr_df['oligo-state'].isin(allow_oligo_state)]
+        
+        if smr_sort_cols is None:
+            rank_index = allow_smr_df.index
+        else:
+            rank_index = allow_smr_df.sort_values(
+                by=smr_sort_cols, ascending=ascending).index
+        
+        smr_df.loc[rank_index, 'select_rank'] = range(1, len(rank_index)+1)
+        smr_df.loc[select_range(smr_df.unp_range, rank_index, cutoff=OC_cutoff, selected_ranges=list(selected_sifts_unp_ranges)), 'select_tag'] = True
+        return smr_df
+    
+    @unsync
+    async def pipe_select_smr_mo(self, smr_df=None, **kwargs):
+        if 'sifts_mo_df' in kwargs:
+            sifts_mo_df = kwargs['sifts_mo_df']
+        else:
+            sifts_mo_df = await self.pipe_select_mo(**kwargs)
+        smr_df = (await SMR.single_retrieve(self.identifier).then(SMR.to_dataframe)) if smr_df is None else smr_df
+        if smr_df is None or len(smr_df) == 0:
+            return
+        return self.select_smr_mo(
+            smr_df, 
+            kwargs.get('allow_oligo_state', ('monomer',)),
+            sifts_mo_df[sifts_mo_df.select_tag.eq(True)].new_unp_range, 
+            kwargs.get('smr_sort_cols', None),
+            kwargs.get('ascending', False),
+            kwargs.get('OC_cutoff', 0.2))
+
+    @classmethod
+    def add_interact_common_cols(cls, p_df):
+        p_df['best_select_rank_score'] = p_df[['select_rank_1',
+                                               'select_rank_2']].apply(lambda x: 1/min(x), axis=1)
+        p_df['second_select_rank_score'] = p_df[['select_rank_1',
+                                                 'select_rank_2']].apply(lambda x: 1/max(x), axis=1)
+        p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(cls.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
+        p_df['unp_interface_range_2'] = p_df.apply(lambda x: to_interval(cls.convert_index(x['new_unp_range_2'], x['new_pdb_range_2'], expand_interval(x['interface_range_2']))), axis=1)
+        p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
+        return p_df
+
+    @unsync
+    async def integrate_i3d_with_pisa_interact(self, sele_df, chain_pairs, interaction_type:str, run_as_completed:bool=False, progress_bar=None, **kwargs):
+        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id], **kwargs) for pdb_id in chain_pairs.index]
+        if run_as_completed:
+            if progress_bar is not None:
+                iter_ob = progress_bar(as_completed(tasks), total=len(tasks))
+            else:
+                iter_ob = as_completed(tasks)
+        else:
+            iter_ob = tasks
+        res = [await i for i in iter_ob]
+        interact_df = DataFrame(j for i in res for j in i if j is not None)
+        if len(interact_df) == 0:
+            return
+        '''
+        NOTE: exception case: 5b0y (see api%pisa%interfacelist%+5b0y%0.tsv)
+
+        # assert all((~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())), f"{interact_df[interact_df.interface_range_1.isnull() | interact_df.interface_range_2.isnull()]}"
+        '''
+        interact_df = interact_df[(~interact_df.interface_range_1.isnull()) & (~interact_df.interface_range_2.isnull())]
+        if len(interact_df) == 0:
+            return
+        p_a_df = self.parallel_interact_df(sele_df, interact_df)
+        if interaction_type == 'ho':
+            assert len(p_a_df) > 0
+        elif interaction_type == 'ho_iso':
+            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
+        elif interaction_type == 'he':
+            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
+        else:
+            raise ValueError(f"Invalid interaction_type: {interaction_type}!")
+        if len(p_a_df) == 0:
+            return
+        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], interaction_type[:2])
+
+        if len(i3d_df) == 0:
+            p_df = p_a_df
+            p_df['in_i3d'] = False
+        else:
+            p_b_df = self.parallel_interact_df(sele_df[['UniProt', 'pdb_id', 'chain_id', 'struct_asym_id']], i3d_df)
+            p_df = p_a_df.merge(p_b_df, how='left')
+            p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
+            p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
+        return p_df
 
 class Compounds(Base):
 
