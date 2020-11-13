@@ -456,7 +456,7 @@ class PDBeModelServer(Abclog):
                 'residueSurroundings', 'symmetryMates', 'query-many'))
     
     @classmethod
-    def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params) -> Generator:
+    def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params, filename='subset') -> Generator:
         if data_collection is None:
             assert method == 'get', 'Invalid method!'
             for pdb in pdbs:
@@ -464,7 +464,7 @@ class PDBeModelServer(Abclog):
                     url=f'{cls.root}{pdb}/{suffix}?',
                     headers=cls.headers,
                     params=params)
-                yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
+                yield method, args, os.path.join(folder, f'{pdb}_{filename}.{params.get("encoding", "cif")}')
         else:
             assert method == 'post', 'Invalid method!'
             for pdb, data in zip(pdbs, data_collection):
@@ -473,7 +473,7 @@ class PDBeModelServer(Abclog):
                     headers=cls.headers,
                     params=params,
                     data=data)
-                yield method, args, os.path.join(folder, f'{pdb}_subset.{params.get("encoding", "cif")}')
+                yield method, args, os.path.join(folder, f'{pdb}_{filename}.{params.get("encoding", "cif")}')
 
     @classmethod
     def retrieve(cls, pdbs, suffix: str, method: str, folder: str, data_collection=None, params=None, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
@@ -481,7 +481,7 @@ class PDBeModelServer(Abclog):
             params = {'model_nums': 1, 'encoding': 'cif'}
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, method, folder,
-                           data_collection, params),
+                           data_collection, params, kwargs.get('filename', 'subset')),
             concur_req=concur_req,
             rate=rate,
             ret_res=ret_res,
@@ -489,14 +489,14 @@ class PDBeModelServer(Abclog):
         return res
     
     @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, data_collection=None, params=None, rate: float = 1.5):
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, data_collection=None, params=None, rate: float = 1.5, filename='subset'):
         if params is None:
             params = {'encoding': 'cif'}
         if data_collection is not None:
             data_collection = (data_collection, )
         return UnsyncFetch.single_task(
             task=next(cls.yieldTasks((pdb, ), suffix, method, folder,
-                                     data_collection, params)),
+                                     data_collection, params, filename=filename)),
             semaphore=semaphore,
             rate=rate)
 

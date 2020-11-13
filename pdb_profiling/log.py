@@ -8,12 +8,16 @@ import logging
 from typing import Optional, Union
 from pathlib import Path
 
+LOG_FORMAT = "%(asctime)s %(name)s %(levelname)s %(message)s"
+
+# logging.basicConfig(format=LOG_FORMAT)
+
 class Abclog(object):
     '''
     Abstract class of logging template
     '''
     @classmethod
-    def init_logger(cls, logName: Optional[str] = None, logger: Optional[logging.Logger] = None, log_level: int = logging.DEBUG, stream_log_level: int = logging.INFO):
+    def init_logger(cls, logName: Optional[str] = None, logger: Optional[logging.Logger] = None, log_level: int = logging.DEBUG, stream_log_level: int = logging.WARNING):
         if hasattr(cls, 'logger') and cls.logger is not None:
             pass
         elif logger is None:
@@ -23,8 +27,7 @@ class Abclog(object):
             cls.logger.setLevel(log_level)
             cls.streamHandler = logging.StreamHandler()
             cls.streamHandler.setLevel(stream_log_level)
-            cls.formatter = logging.Formatter(
-                "%(asctime)s %(name)s %(levelname)s %(message)s")
+            cls.formatter = logging.Formatter(LOG_FORMAT)
             cls.streamHandler.setFormatter(cls.formatter)
             cls.logger.addHandler(cls.streamHandler)
         else:
@@ -45,3 +48,11 @@ class Abclog(object):
             return cls.logger
         except Exception:
             cls.logger.exception("Invalid file path for logging file ! Please specifiy path=...")
+
+
+class SimpleLog(object):
+    
+    @classmethod
+    def init_logger(cls):
+        cls.logger = logging.getLogger(cls.__name__)
+        cls.logger.setLevel(logging.DEBUG)

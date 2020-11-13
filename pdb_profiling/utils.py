@@ -9,7 +9,7 @@ import gzip
 import shutil
 from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable, Generator
 from logging import Logger
-from pandas import read_csv, DataFrame, isna, Series
+from pandas import read_csv, DataFrame, isna, Series, concat
 import numpy as np
 from pathlib import Path
 from aiofiles import open as aiofiles_open
@@ -325,6 +325,7 @@ def iter_first(df: DataFrame, criteria: Callable[[NamedTuple], bool], **kwargs) 
         if criteria(row):
             return row
 
+
 class MMCIF2DictPlus(dict):
     """
     Parse a mmCIF file and return a dictionary
@@ -612,9 +613,14 @@ def translate2aa(seq:str, check:bool=False):
 
 def unsync_run(arg):
     @unsync
-    async def unsync_wrap(arg):
+    async def s_unsync_wrap(arg):
         return await arg 
-    return unsync_wrap(arg).result()
+    return s_unsync_wrap(arg).result()
+
+
+@unsync
+def unsync_wrap(var):
+    return var
 
 
 class SeqRangeReader(object):
@@ -906,3 +912,10 @@ def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, ski
 
 def dumpsParams(params: Dict) -> str:
     return '&'.join(f'{key}={value}' for key, value in params.items())
+
+
+@unsync
+async def a_concat(pathes, sep='\t', sort=False, ignore_index=True):
+    if isinstance(pathes, (Unfuture, Coroutine)):
+        pathes = await pathes
+    return concat([await a_read_csv((await path) if isinstance(Unfuture, Coroutine) else path, sep=sep) for path in pathes], sort=sort, ignore_index=ignore_index)

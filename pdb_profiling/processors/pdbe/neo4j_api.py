@@ -4,7 +4,6 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-04-08 09:44:05 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from __future__ import absolute_import
 from typing import List, Iterable, Iterator, Union, Dict, Optional, Tuple
 from functools import partial, reduce
 import pandas as pd
@@ -26,7 +25,7 @@ import traceback
 from pdb_profiling.utils import (pipe_out, sort_sub_cols, slice_series, to_interval, 
                                  lyst22intervel, SEQ_DICT, standardAA, standardNu, range_len,
                                  interval2set, lyst2range, subtract_range,
-                                 add_range, overlap_range, outside_range_len)
+                                 add_range, overlap_range, outside_range_len, related_dataframe)
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.dbfetch import Neo4j
 from pdb_profiling.processors.pdbe.sqlite_api import Sqlite_API
@@ -49,31 +48,6 @@ def sub_index(init_index, subtract_index) -> pd.Index:
         return init_index
     else:
         return pd.Index(set(init_index)-set(subtract_index))
-
-
-def related_dataframe(filters: Optional[Union[Dict, Iterable[Tuple]]] = None, dfrm: Optional[pd.DataFrame] = None, path: Union[str, Path, None] = None, sep: str = '\t', **kwargs):
-    '''
-    valid symbol: `eq, ne, le, lt, ge, gt, isin, isnull`
-    example:
-        {col1: ('eq', 1), col2: ('lt', 5)}
-    '''
-
-    if dfrm is None:
-        if path is not None:
-            dfrm = pd.read_csv(path, sep=sep)
-        else:
-            raise ValueError('path should not be None')
-    elif not isinstance(dfrm, pd.DataFrame):
-        raise ValueError('dfrm should be a pandas.DataFrame')
-
-    if filters is None:
-        return dfrm
-    elif isinstance(filters, Dict):
-        filters = filters.items()
-
-    for col, (symbol, value) in filters:
-        dfrm = dfrm[getattr(getattr(dfrm, col), symbol)(value)]
-    return dfrm
 
 
 def subtract_dict(left: Dict, right: Dict, copy:bool=True) -> Dict:
@@ -1431,9 +1405,3 @@ class Neo4j_API(Abclog):
         return int_df.merge(sifts_df, how='left').merge(i3d.unp_chain_pairs_p(pdbs), how='left').merge(i3d.all_unp_pairs_12, how='left')
 
 
-'''
-TODO: 
-    1. Append Partner SIFTS Info (In Half Way)
-    2. Score SIFTS
-    3. SELECT SIFTS
-'''

@@ -18,7 +18,7 @@ from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Corouti
 from furl import furl
 from pdb_profiling.log import Abclog
 import re
-from pdb_profiling.utils import init_semaphore
+from pdb_profiling.utils import init_semaphore, unsync_wrap
 
 
 class UnsyncFetch(Abclog):
@@ -131,16 +131,11 @@ class UnsyncFetch(Abclog):
     async def unsync_tasks(cls, tasks):
         return [await fob for fob in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
 
-    @staticmethod
-    @unsync
-    def unsync_wrap(var):
-        return var
-
     @classmethod
     def single_task(cls, task, semaphore, to_do_func: Optional[Callable] = None, rate: float = 1.5) -> Unfuture:
         method, info, path = task
         if cls.use_existing is True and os.path.exists(path) and os.path.isfile(path) and (os.stat(path).st_size > 0):
-            task = cls.unsync_wrap(path)
+            task = unsync_wrap(path)
         else:
             task = cls.fetch_file(semaphore, method, info, path, rate)
         if to_do_func is not None:

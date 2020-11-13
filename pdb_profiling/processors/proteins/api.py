@@ -116,11 +116,13 @@ class ProteinsAPI(Abclog):
             return data
 
     @classmethod
-    def pipe_summary(cls, data: Dict):
-        if len(data) != 1:
-            cls.logger.warning(
+    def pipe_summary(cls, data: List):
+        if len(data) > 1:
+            cls.logger.error(
                 f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}")
-            return None, None
+            raise AssertionError("With Unexpected length!")
+        elif len(data) == 0:
+            return
         data = data[0]
         dbReferences_lyst = []
         common_cols = ('type', 'isoform')
@@ -128,19 +130,47 @@ class ProteinsAPI(Abclog):
             if i['type'] == 'RefSeq':
                 dbReferences_lyst.append({
                     **{key: i.get(key, nan) for key in common_cols},
-                    **dict(Entry=data['accession'], protein=i['id'], transcript=i['properties']['nucleotide sequence ID'], gene=nan),
+                    **dict(accession=data['accession'], protein=i['id'], transcript=i['properties']['nucleotide sequence ID'], gene=nan),
                 })
             elif i['type'] == 'Ensembl':
                 dbReferences_lyst.append({
                     **{key: i.get(key, nan) for key in common_cols},
-                    **dict(Entry=data['accession'], protein=i['properties']['protein sequence ID'], transcript=i['id'], gene=i['properties']['gene ID'])})
+                    **dict(accession=data['accession'], protein=i['properties']['protein sequence ID'], transcript=i['id'], gene=i['properties']['gene ID'])})
         dbReferences_df = DataFrame(dbReferences_lyst)
-        # features_df = pd.DataFrame(data['features']); features_df['Entry'] = data['accession']
-        iso_df = None
-        for comment in data['comments']:
-            if comment['type'] == 'ALTERNATIVE_PRODUCTS':
-                iso_df = DataFrame(
-                    cls.flat_data(comment['isoforms'], surface=True, except_keys={'sequence'}))
-                iso_df['Entry'] = data['accession']
-                break
-        return dbReferences_df, iso_df  # features_df
+        other_dbReferences_df = DataFrame((i for i in data['dbReferences'] if i['type'] not in ('RefSeq', 'Ensembl')))
+        other_dbReferences_df['accession'] = data['accession']
+        if 'isoform' not in other_dbReferences_df.columns:
+            other_dbReferences_df['isoform'] = ''
+        else:
+            other_dbReferences_df['isoform'].fillna('', inplace=True)
+        features_df = DataFrame(data['features']); features_df['accession'] = data['accession']
+        if 'molecule' not in features_df.columns:
+            features_df['molecule'] = ''
+        iso_df, int_df = None, None
+        if 'comments' in data.keys():
+            for comment in data['comments']:
+                if comment['type'] == 'ALTERNATIVE_PRODUCTS':
+                    iso_df = DataFrame(
+                        cls.flat_data(comment['isoforms'], surface=True, except_keys={'sequence'}))
+                    iso_df['accession'] = data['accession']
+                    iso_df.rename(columns={'ids': 'isoform'}, inplace=True)
+                    iso_df['else_iso'] = iso_df.isoform.apply(lambda x: x[1:] if isinstance(x, List) else nan)
+                    focus_index = iso_df[(~iso_df.else_iso.isnull())].index
+                    iso_df.loc[focus_index, 'isoform'] = iso_df.loc[focus_index, 'isoform'].apply(lambda x: x[0])
+                if comment['type'] == 'INTERACTION':
+                    int_df = DataFrame(comment['interactions'])
+                    if 'accession1' not in int_df.columns:
+                        int_df['accession1'] = data['accession']
+                    else:
+                        int_df['accession1'].fillna(data['accession'], inplace=True)
+                    assert int_df[['accession1', 'accession2', 'interactor1', 'interactor2']].isnull(
+                    ).sum().sum() == 0, int_df[int_df.accession2.isnull() | int_df.interactor1.isnull() | int_df.interactor2.isnull()]
+                    int_df_cols = frozenset(int_df.columns)
+                    assert int_df_cols <= {'accession1', 'accession2', 'gene', 'interactor1',
+                                           'interactor2', 'organismDiffer', 'experiments', 'chain1', 'chain2'}, int_df_cols
+                    int_df['accession'] = data['accession']
+
+        info_data = {key: data.get(key, nan) for key in (
+            'accession', 'id', 'proteinExistence', 'info', 'organism', 'secondaryAccession', 'protein', 'gene')}
+
+        return dbReferences_df, other_dbReferences_df, iso_df, features_df, int_df, info_data

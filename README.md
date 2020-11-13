@@ -13,65 +13,45 @@
 
 Profiling Protein Structures from Protein Data Bank and integrate various resources.
 
-## Goal
+## Features
 
-* Gather helpful/insightful indexes to evaluate a PDB structure's usefulness in:
-  * Entry level
-  * Assembly level
-  * Model level
-  * Entity level
-  * Chain level
-  * Residue level
-* Define the representative set of protein structures:
-  * of a cluster with nearly identical sequences
-  * of UniProt Entry
-  * of UniProt Isoform
-  * or any other assigned structure dataset
-* Provide interface for ID/residue mapping
-* Apply mature and robust API to collect well-organized data
-  * PDBe REST API
-    * <https://www.ebi.ac.uk/pdbe/api/doc/pdb.html>
-    * <https://www.ebi.ac.uk/pdbe/api/doc/pisa.html>
-    * <https://www.ebi.ac.uk/pdbe/api/doc/sifts.html>
-  * PDBe Graph API (Neo4j Graph DataBase)
-    * <https://www.ebi.ac.uk/pdbe/graph-api/pdbe_doc/>
-  * PDBe CoordinateServer API
-    * <https://www.ebi.ac.uk/pdbe/coordinates/index.html>
-    * <https://cs.litemol.org/>
-  * ModelServer API
-    * `PDBe`: <https://www.ebi.ac.uk/pdbe/model-server/>
-    * `RCSB`: <https://models.rcsb.org/>
-  * PDBe DensityServer API
-    * <https://ds.litemol.org/>
-  * PDBe VolumeServer API
-    * <https://www.ebi.ac.uk/pdbe/volume-server/>
-  * SWISS-MODEL Repository API
-    * <https://swissmodel.expasy.org/docs/smr_openapi>
-  * EBI Proteins API
-    * <https://www.ebi.ac.uk/proteins/api/doc/>
-  * UniProt API
-    * <https://www.uniprot.org/uploadlists/>
-    * <https://www.uniprot.org/uniprot/*.fasta>
-  * Interactome3D API
-    * <https://interactome3d.irbbarcelona.org/>
-  * ModBase API (?)
-  * Ensembl REST API
-    * <https://rest.ensembl.org/documentation>
-    * <https://rest.ensembl.org/documentation/info/sequence_id>
-    * <https://rest.ensembl.org/documentation/info/archive_id_get>
-  * Eutils API
-    * <https://eutils.ncbi.nlm.nih.gov/entrez/eutils/>
-    * NOTE: currently only support minimum use
-* Download data from PDB Archive against unexpected needs
-  * wwPDB&RCSB: <https://ftp.wwpdb.org/pub/pdb/data/structures/>
-  * EBI: <http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/>
-  * wwPDB Versioned: <http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/>
+* `Collection`: Implement various API to collect the well-organized metadata of PDB in real time.
+* `Compatibility`: Provide a unified call for API-interface and return-data-form as well as subsequent data processing.
+* `Detection`: Reorganize metadata to evaluate a PDB structure in Entry-Assembly/Model-Entity-Chain-Residue level and integrated with UniProt-KB.
+* `Interaction`: Include UniProt Isoform Interaction in Asymmetric unit plus Biological Assembly level.
+* `Selection`: Define the representative set of PDB structures in Monomeric|Homomeric|Heteromeric states.
+* `Mapping`: Provide interface for both entry-identifier/accession-level and residue-level bidirectional mapping.
 
 ## Install
+
+> Notice: require Python Environment >= 3.6, Platform Independent
+
+Install by `pip` command.
+
+### *Before your Installation
+
+* Make sure that your 64-bit machine is installed with 64-bit Python.
+* To avoid some unexpected issues, you should upgrade your `pip` beforehand:
+
+```bash
+pip install --upgrade pip
+``` 
+
+### Official Installation
 
 ```bash
 pip install pdb-profiling
 ```
+
+If you have already installed an older version of `pdb-profiling`, use the following command to install the latest version:
+
+```bash
+pip install --upgrade pdb-profiling
+```
+
+## Documentation
+
+<https://pdb-profiling.netlify.app/>
 
 ## Examples
 
@@ -80,15 +60,37 @@ See `examples/...`
 1. [Introduction](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Introduction.ipynb)
 2. [Batch](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Batch.ipynb)
 3. [DisplayPDB](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/DisplayPDB.ipynb)
-3. ...
+4. ...
 
-## Copyright Notice
+## Resources
 
-This project is developed by [Zefeng Zhu](https://github.com/NatureGeorge) and hold by [Minghui Group](https://lilab.jysw.suda.edu.cn/).
+* PDBe Entry-Based API
+* PDBe Aggregated API (PDBe Graph API)
+* PDBe ModelServer API
+* SWISS-MODEL Repository API
+* UniProt API
+* EBI Proteins API
+* Interactome3D API
+* ...
 
-## *Alternative Resources
+> click [here](https://pdb-profiling.netlify.app/docs/5-reference/) for more details
+
+## Related Resources
+
+> Using similar data resources but meant to achieve different goals.
+
+<details>
+
+<summary>Click to view</summary>
 
 * `RCSB`
   * [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
   * [RCSB PDB Search API](http://search.rcsb.org/)
     * [Documentation for New and Improved APIs](https://www.rcsb.org/news?year=2020&article=5f65165507302466657ec0e8&feature=true)
+* [MolArt](https://github.com/davidhoksza/MolArt)
+
+</details>
+
+## Copyright Notice
+
+This project is developed by [Zefeng Zhu](https://github.com/NatureGeorge) and hold by [Minghui Group](https://lilab.jysw.suda.edu.cn/).

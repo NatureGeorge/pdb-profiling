@@ -17,22 +17,81 @@ class ProteinsDB(SqliteDB):
             __metadata__ = self.metadata
             __database__ = self.database
             isoform = orm.String(max_length=50, primary_key=True)
-            name = orm.String(max_length=50)
-            synonyms = orm.Text(allow_null=True, allow_blank=True)
+            name = orm.JSON(allow_null=True)
+            synonyms = orm.JSON(allow_null=True)
             sequenceStatus = orm.String(max_length=50)
             sequence = orm.JSON(allow_null=True)
-            Entry = orm.String(max_length=50, primary_key=True)
+            accession = orm.String(max_length=50, primary_key=True)
+            else_iso = orm.JSON(allow_null=True)
         
+        class INTERACTION(orm.Model):
+            __tablename__ = 'INTERACTION'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            accession1 = orm.String(max_length=100, primary_key=True)
+            accession2 = orm.String(max_length=100, primary_key=True)
+            gene = orm.String(max_length=100, allow_null=True, allow_blank=True)
+            interactor1 = orm.String(max_length=100, primary_key=True)
+            interactor2 = orm.String(max_length=100, primary_key=True)
+            organismDiffer = orm.Boolean()
+            experiments = orm.Integer()
+            chain1 = orm.Text(allow_null=True, allow_blank=True)
+            chain2 = orm.Text(allow_null=True, allow_blank=True)
+            accession = orm.String(max_length=50, primary_key=True)
+
         class DB_REFERENCES(orm.Model):
             __tablename__ = 'dbReferences'
             __metadata__ = self.metadata
             __database__ = self.database
             type = orm.String(max_length=100)
-            isoform = orm.String(max_length=50, allow_null=True)
-            Entry = orm.String(max_length=50, primary_key=True)
+            isoform = orm.String(max_length=50, allow_null=True, allow_blank=True)
+            accession = orm.String(max_length=50, primary_key=True)
             protein = orm.String(max_length=50, primary_key=True)
             transcript = orm.String(max_length=50)
-            gene = orm.String(max_length=50, allow_null=True)
+            gene = orm.String(max_length=50, allow_null=True, allow_blank=True)
+
+        class OTHER_DB_REFERENCES(orm.Model):
+            __tablename__ = 'other_dbReferences'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            type = orm.String(primary_key=True, max_length=100)
+       	    id = orm.String(primary_key=True, max_length=100)
+            properties = orm.JSON(allow_null=True)
+            isoform = orm.String(primary_key=True, max_length=100, allow_blank=True)
+            evidences = orm.JSON(allow_null=True)
+            accession = orm.String(primary_key=True, max_length=100)
+
+        class FEATURES(orm.Model):
+            __tablename__ = 'features'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            type = orm.String(primary_key=True, max_length=100)
+            category = orm.String(primary_key=True, max_length=100)
+            description = orm.Text(allow_null=True, allow_blank=True)
+            begin = orm.Integer(primary_key=True)
+            end = orm.Integer(primary_key=True)
+            molecule = orm.String(primary_key=True, max_length=100, allow_blank=True)
+            ftId = orm.String(max_length=100, allow_null=True, allow_blank=True)
+            evidences = orm.JSON(allow_null=True)
+            alternativeSequence = orm.Text(allow_null=True, allow_blank=True)
+            accession = orm.String(primary_key=True, max_length=100)
+
+        class INFO(orm.Model):
+            __tablename__ = 'INFO'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            accession = orm.String(max_length=100, primary_key=True)
+            id = orm.String(max_length=100)
+            proteinExistence = orm.Text(allow_null=True, allow_blank=True)
+            info = orm.JSON()
+            organism = orm.JSON()
+            secondaryAccession = orm.JSON(allow_null=True)
+            protein = orm.JSON()
+            gene = orm.JSON()
 
         self.DB_REFERENCES = DB_REFERENCES
+        self.OTHER_DB_REFERENCES = OTHER_DB_REFERENCES
         self.ALTERNATIVE_PRODUCTS = ALTERNATIVE_PRODUCTS
+        self.FEATURES = FEATURES
+        self.INTERACTION = INTERACTION
+        self.INFO = INFO

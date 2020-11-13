@@ -176,6 +176,7 @@ class PDB(Base):
 
     protein_sequence_pat = re_compile(r'([A-Z]{1}|\([A-Z0-9]+\))')
     nucleotide_sequence_pat = re_compile(r'([AUCGI]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(DI\)|\(UNK\))')
+    author_residue_pat = re_compile(r'([0-9]+)([A-Z]*)')
     StatsProteinEntitySeq = namedtuple(
         'StatsProteinEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT ARTIFACT_INDEX')
     StatsNucleotideEntitySeq = namedtuple(
@@ -250,7 +251,7 @@ class PDB(Base):
     def get_id(self):
         return self.pdb_id
 
-    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None) -> Unfuture:
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
         task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), None)
         if task is not None:
@@ -262,7 +263,8 @@ class PDB(Base):
             folder=self.get_folder()/'model-server'/api_suffix,
             semaphore=self.get_web_semaphore(),
             data_collection=data_collection,
-            params=params)
+            params=params,
+            **kwargs)
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), task)
@@ -885,23 +887,44 @@ class PDB(Base):
         return DataFrame({'residue_number': (int(i) for i in conflict_pdb_index.keys()), 'conflict_code': (i for i in conflict_pdb_index.values())})
 
     @unsync
-    async def get_map_res_df(self, UniProt, unp_range, pdb_range, your_sites, conflict_pdb_index=None, unp2pdb:bool=True,**kwargs):
+    async def get_map_res_df(self, UniProt, unp_range, pdb_range, your_sites, conflict_pdb_index=None, unp2pdb:bool=True, author_site:bool=False,**kwargs):
         assert kwargs.keys() <= frozenset({'chain_id', 'entity_id', 'struct_asym_id', 'pdb_id'})
+        if not isinstance(your_sites, Iterable) or len(your_sites) == 0:
+            return
         if unp2pdb:
             info = {
                 'unp_residue_number': your_sites,
                 'residue_number': (SIFTS.convert_index(pdb_range, unp_range, your_sites)),
                 'UniProt': UniProt}
+            your_sites_df = DataFrame({**info, **kwargs})
+            your_sites_df = your_sites_df[~your_sites_df.residue_number.isnull()]
+            if len(your_sites_df) == 0:
+                return
+            ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
         else:
-            info = {
-                'residue_number': your_sites,
-                'unp_residue_number': SIFTS.convert_index(unp_range, pdb_range, your_sites),
-                'UniProt': UniProt}
-        your_sites_df = DataFrame({**info, **kwargs})
-        your_sites_df = your_sites_df[(~your_sites_df.residue_number.isnull()) | (~your_sites_df.unp_residue_number.isnull())]
-        if len(your_sites_df) == 0:
-            return
-        ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+            if author_site:
+                author_residue_numbers, author_insertion_codes = zip(*(self.author_residue_pat.fullmatch(i).groups() for i in your_sites))
+                info = {
+                    'author_residue_number': (int(i) for i in author_residue_numbers),
+                    'author_insertion_code': author_insertion_codes,
+                    'UniProt': UniProt}
+                your_sites_df = DataFrame({**info, **kwargs})
+                # your_sites_df.author_residue_number = your_sites_df.author_residue_number.astype(int)
+                ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+                ret['unp_residue_number'] = SIFTS.convert_index(unp_range, pdb_range, ret.residue_number)
+                ret = ret[~ret.unp_residue_number.isnull()]
+                if len(ret) == 0:
+                    return
+            else:
+                info = {
+                    'residue_number': your_sites,
+                    'unp_residue_number': SIFTS.convert_index(unp_range, pdb_range, your_sites),
+                    'UniProt': UniProt}
+                your_sites_df = DataFrame({**info, **kwargs})
+                your_sites_df = your_sites_df[~your_sites_df.unp_residue_number.isnull()]
+                if len(your_sites_df) == 0:
+                    return
+                ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
         if conflict_pdb_index is None:
             return ret
         else:
@@ -1231,6 +1254,8 @@ class PDBInterface(PDBAssemble):
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
             warn(f"\n{interfacedetail_df.head(1)[['pdb_id', 'assembly_id', 'interface_id', 's1_selection', 's2_selection']].to_dict('records')[0]}", PISAErrorWarning)
             return
+        elif not hasattr(self, 'info'):
+            pass
         elif self.info['chains'] != struct_sele_set:
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
             warn(f"{repr(self)}: interfacedetail({struct_sele_set}) inconsistent with interfacelist({set(self.info['chains'])}) ! May miss some data.", PISAErrorWarning)
@@ -2144,6 +2169,7 @@ class SIFTS(PDB):
             p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
         return p_df
 
+
 class Compounds(Base):
 
     tasks = LRUCache(maxsize=1024)
@@ -2164,6 +2190,13 @@ class PDBs(tuple):
     
     def __new__(cls, iterable:Iterable):
         return super(PDBs, cls).__new__(cls, (PDB(i) if isinstance(i, str) else i for i in iterable))
+    
+    def __getitem__(self, slice):
+        res = tuple.__getitem__(self, slice)
+        if isinstance(res, Iterable):
+            return self.__class__(res)
+        else:
+            return res
 
     @staticmethod
     @unsync
