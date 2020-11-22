@@ -6,7 +6,29 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 import orm
 from unsync import unsync
+from re import compile as re_compile
 from pdb_profiling.processors.database import SqliteDB
+
+common_pat = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]'
+
+
+pats = dict(pdb_id=re_compile(common_pat+r'{4}$'),
+            pdb_entity_id=re_compile(common_pat+r'{4}_[0-9]+$'),
+            UniProt=re_compile(common_pat+r'{6,}[\-]*[0-9]*$'),
+            pdb_complex_id=re_compile(r'PDB-CPX-[0-9]+'))
+
+
+def default_id_tag(identifier: str, default: str = '', raise_error: bool = False):
+    try:
+        for pat_name, pat in pats.items():
+            if bool(pat.fullmatch(identifier)):
+                return pat_name
+    except Exception:
+        raise ValueError(f"Invalid Identifier: {identifier} !")
+    if raise_error:
+        raise ValueError(f'Unexpected Identifiers: {identifier}')
+    else:
+        return default
 
 
 class PDBeDB(SqliteDB):
@@ -76,7 +98,7 @@ class PDBeDB(SqliteDB):
             struct_asym_id = orm.String(max_length=10, primary_key=True)
             OBS_INDEX = orm.JSON()
             OBS_COUNT = orm.Integer()
-            OBS_RATIO_SUM = orm.Float()
+            OBS_RATIO_ARRAY = orm.Text()
             BINDING_LIGAND_INDEX = orm.JSON()
             BINDING_LIGAND_COUNT = orm.Integer()
 

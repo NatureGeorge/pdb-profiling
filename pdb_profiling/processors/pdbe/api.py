@@ -15,8 +15,9 @@ from pathlib import Path
 from aiofiles import open as aiofiles_open
 from collections import defaultdict
 from unsync import unsync, Unfuture
-from pdb_profiling import default_id_tag
-from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out, SeqRangeReader, sort_2_range
+from random import choice
+from pdb_profiling.processors.pdbe import default_id_tag
+from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out, dumpsParams
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
@@ -444,6 +445,29 @@ class PDBeDecoder(object):
                 for annotation in val['annotations']:
                     yield annotation['site_residues'], ('pdb_id', 'origin', 'evidence_codes', 'site_id', 'label'), (pdb, val['origin'], val['evidence_codes'], annotation['site_id'], annotation['label'])
 
+    @staticmethod
+    @dispatch_on_set('graph-api/pdbe_pages/rfam/',
+                     'graph-api/pdbe_pages/annotations/',
+                     'graph-api/pdbe_pages/uniprot_mapping/',
+                     'graph-api/pdbe_pages/binding_sites/',
+                     'graph-api/pdbe_pages/interfaces/',
+                     'graph-api/pdbe_pages/secondary_structure/',
+                     'graph-api/pdbe_pages/domains/',
+                     'graph-api/uniprot/unipdb/',
+                     'graph-api/uniprot/annotations/',
+                     'graph-api/uniprot/interface_residues/',
+                     'graph-api/uniprot/ligand_sites/',
+                     'graph-api/uniprot/secondary_structures/',
+                     'graph-api/uniprot/domains/',
+                     'graph-api/uniprot/sequence_conservation/')
+    def graph_api_data_common(data: Dict):
+        for pdb in data:
+            for info in data[pdb]['data']:
+                if 'additionalData' in info:
+                    flatten_dict(info, 'additionalData')
+                com_keys = tuple(key for key in info.keys() if key != 'residues')
+                yield info['residues'], ('pdb_id',)+com_keys, (pdb,)+tuple(info[key] for key in com_keys)
+
 
 class PDBeModelServer(Abclog):
     '''
@@ -497,6 +521,41 @@ class PDBeModelServer(Abclog):
         return UnsyncFetch.single_task(
             task=next(cls.yieldTasks((pdb, ), suffix, method, folder,
                                      data_collection, params, filename=filename)),
+            semaphore=semaphore,
+            rate=rate)
+
+
+class PDBeCoordinateServer(Abclog):
+
+    roots = (f'{BASE_URL}coordinates/', 'https://cs.litemol.org/')
+    headers = {'accept': 'text/plain'}
+    api_set = frozenset(('ambientResidues', 'assembly', 'backbone', 'cartoon', 'chains'
+                         'entities', 'full', 'het', 'ligandInteraction', 'residueRange',
+                         'residues', 'sidechain', 'symmetryMates', 'trace', 'water'))
+
+    def __init__(self, root: str = 'random'):
+        if root == 'random':
+            self.root = choice(self.roots)
+        elif root == 'ebi':
+            self.root = self.roots[0]
+        elif root == 'litemol':
+            self.root = self.roots[1]
+        else:
+            raise ValueError("root should be (ebi, litemol, random)")
+    
+    def __repr__(self):
+        return f'<CoordinateServerAPI: {self.root}>'
+    
+    def task_unit(self, pdb_id, suffix: str, params, folder):
+        args = dict(
+                url=f'{self.root}{pdb_id}/{suffix}?',
+                headers=self.headers,
+                params=params)
+        return 'get', args, Path(folder)/f'{pdb_id}_{dumpsParams(params)}.{params.get("encoding", "cif")}'
+    
+    def single_retrieve(self, pdb_id: str, suffix: str, params:Dict, folder: Union[Path, str], semaphore, rate: float = 1.5):
+        return UnsyncFetch.single_task(
+            task=self.task_unit(pdb_id, suffix, params, folder),
             semaphore=semaphore,
             rate=rate)
 

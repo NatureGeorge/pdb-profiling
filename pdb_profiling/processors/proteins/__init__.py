@@ -20,9 +20,13 @@ class ProteinsDB(SqliteDB):
             name = orm.JSON(allow_null=True)
             synonyms = orm.JSON(allow_null=True)
             sequenceStatus = orm.String(max_length=50)
-            sequence = orm.JSON(allow_null=True)
+            VAR_SEQ = orm.JSON(allow_null=True)
             accession = orm.String(max_length=50, primary_key=True)
             else_iso = orm.JSON(allow_null=True)
+            iso_range = orm.JSON(allow_null=True)
+            iso_range_len = orm.Integer(allow_null=True)
+            sequence = orm.Text(allow_null=True)
+            length = orm.Integer(allow_null=True)
         
         class INTERACTION(orm.Model):
             __tablename__ = 'INTERACTION'
@@ -88,6 +92,8 @@ class ProteinsDB(SqliteDB):
             secondaryAccession = orm.JSON(allow_null=True)
             protein = orm.JSON()
             gene = orm.JSON()
+            sequence = orm.Text()
+            length = orm.Integer()
 
         self.DB_REFERENCES = DB_REFERENCES
         self.OTHER_DB_REFERENCES = OTHER_DB_REFERENCES

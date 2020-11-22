@@ -8,25 +8,27 @@ from pdb_profiling.processors.ensembl.api import EnsemblAPI
 from pdb_profiling.processors.eutils.api import EutilsAPI
 from pdb_profiling.processors.proteins.api import ProteinsAPI
 from pdb_profiling.processors.proteins import ProteinsDB
-from pdb_profiling.utils import init_semaphore
 from pdb_profiling.log import Abclog
-from pdb_profiling.utils import init_folder_from_suffix, a_seq_reader, a_load_json
+from pdb_profiling.utils import init_folder_from_suffix, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run
 from re import compile as re_compile
 from pathlib import Path
 from typing import Union, Optional, Tuple, Iterable, Callable, List
 from unsync import unsync
 from asyncio import as_completed
 from pandas import DataFrame, concat
+from collections import OrderedDict
 
 
 class Identifier(Abclog):
     suffix = r'[0-9]+)[\.]*([0-9]*)'
-    pats = {
+    pats = OrderedDict({
         ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
         ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
         ('Ensembl', 'gene'): re_compile(f'(ENSG{suffix}'),
         ('Ensembl', 'transcript'): re_compile(f'(ENST{suffix}'),
-        ('Ensembl', 'protein'): re_compile(f'(ENSP{suffix}')}
+        ('Ensembl', 'protein'): re_compile(f'(ENSP{suffix}'),
+        ('UniProt', 'isoform'): re_compile(r'^((?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,})[\-]*([0-9]*)$')
+        })
 
     @classmethod
     @unsync
@@ -124,34 +126,39 @@ class Identifier(Abclog):
             cls.sqlite_api.sync_insert(
                 cls.sqlite_api.INTERACTION, int_df.to_dict('records'))
 
-    @classmethod
     @unsync
-    async def fetch_from_ProteinsAPI_with_unp(cls, accession:str):
-        res = ProteinsAPI.pipe_summary([await ProteinsAPI.single_retrieve(
+    async def fetch_from_ProteinsAPI_with_unp(self):
+        assert self.source == 'UniProt'
+        res = await ProteinsAPI.pipe_summary([await ProteinsAPI.single_retrieve(
             'proteins/',
             dict(),
-            cls.proteins_api_folder,
-            cls.proteins_api_web_semaphore,
-            identifier=accession
+            self.proteins_api_folder,
+            self.proteins_api_web_semaphore,
+            identifier=self.identifier
         ).then(a_load_json)])
         if res is None:
             return
         else:
-            cls.save_ProteinsAPI_data_to_DB(res, identifier=accession)
+            self.save_ProteinsAPI_data_to_DB(res, identifier=self.identifier)
             return res
 
-    @classmethod
     @unsync
-    async def query_from_localDB_with_unp(cls, accession: str, table_name:str, exists:Optional[bool]=None):
+    async def query_from_DB_with_unp(self, table_name:str, columns: str = '*', exists:Optional[bool]=None):
         default_tables = ('DB_REFERENCES', 'OTHER_DB_REFERENCES', 'ALTERNATIVE_PRODUCTS', 'FEATURES', 'INTERACTION', 'INFO')
         assert table_name in default_tables
-        exists = (await cls.sqlite_api.INFO.objects.filter(accession=accession).exists()) if exists is None else exists
+        exists = (await self.sqlite_api.INFO.objects.filter(accession=self.identifier).exists()) if exists is None else exists
         if not exists:
-            res = await cls.fetch_from_ProteinsAPI_with_unp(accession)
+            res = await self.fetch_from_ProteinsAPI_with_unp()
             res = dict(zip(default_tables, res))
             return res[table_name]
         else:
-            return DataFrame(await getattr(cls.sqlite_api, table_name).objects.filter(accession=accession).all())
+            if columns == '*':
+                return DataFrame(
+                    await getattr(self.sqlite_api, table_name).objects.filter(accession=self.identifier).all())
+            else:
+                return DataFrame(
+                    (await self.sqlite_api.database.fetch_all(query=f"SELECT {columns} FROM {table_name} WHERE accession = '{self.identifier}'")),
+                    columns=columns.split(','))
             '''
             dbReferences_df = DataFrame(await cls.sqlite_api.DB_REFERENCES.objects.filter(accession=accession).all())
             other_dbReferences_df = DataFrame(await cls.sqlite_api.OTHER_DB_REFERENCES.objects.filter(accession=accession).all())
@@ -161,28 +168,9 @@ class Identifier(Abclog):
             return dbReferences_df, other_dbReferences_df, iso_df, features_df, int_df
             '''
 
-    @classmethod
-    @unsync
-    async def query_from_localDB_with_unps(cls, accessions: Iterable[str], table_name: str):
-        exists = await cls.sqlite_api.INFO.objects.filter(accession__in=accessions).all()
-        if len(exists) == 0:
-            return concat(
-                [await cls.query_from_localDB_with_unp(accession, table_name=table_name, exists=False) for accession in accessions],
-                sort=False, ignore_index=True)
-        else:
-            exist_ids = frozenset(i.accession for i in exists)
-            rest_ids = frozenset(accessions) - exist_ids
-            rest_dfs = [await cls.query_from_localDB_with_unp(accession, table_name=table_name, exists=False) for accession in rest_ids]
-            if table_name == 'INFO':
-                ap = DataFrame(exists)
-            else:
-                ap = DataFrame(await getattr(cls.sqlite_api, table_name).objects.filter(accession__in=exist_ids).all())
-            rest_dfs.append(ap)
-            return concat(rest_dfs, sort=False, ignore_index=True)
-
     @unsync
     async def fetch_from_ProteinsAPI(self, reviewed='true', isoform=0):
-        res = ProteinsAPI.pipe_summary(await ProteinsAPI.single_retrieve(
+        res = await ProteinsAPI.pipe_summary(await ProteinsAPI.single_retrieve(
             'proteins/',
             dict(offset=0, size=-1, reviewed=reviewed, isoform=isoform),
             self.proteins_api_folder,
@@ -206,7 +194,7 @@ class Identifier(Abclog):
             return
 
     @unsync
-    async def map2unp_from_localDB(self):
+    async def map2unp_from_DB(self):
         '''
         return accession, UniProt Isoform, is_canonical
         '''
@@ -271,7 +259,7 @@ class Identifier(Abclog):
     @unsync
     async def map2unp(self, **kwargs):
         try:
-            res = await self.map2unp_from_localDB()
+            res = await self.map2unp_from_DB()
         except AssertionError:
             res = None
         if res is None:
@@ -279,7 +267,7 @@ class Identifier(Abclog):
             if val is None:
                 return
             else:
-                res = await self.map2unp_from_localDB()
+                res = await self.map2unp_from_DB()
         return res
 
 
@@ -288,6 +276,10 @@ class Identifiers(tuple):
         return super(Identifiers, cls).__new__(cls, (Identifier(i) if isinstance(i, str) else i for i in iterable))
 
     def __getitem__(self, slice):
+        if isinstance(slice, str):
+            for i in self:
+                if i.identifier == slice:
+                    return i
         res = tuple.__getitem__(self, slice)
         if isinstance(res, Iterable):
             return self.__class__(res)
@@ -307,3 +299,34 @@ class Identifiers(tuple):
             return [await fob for fob in as_completed(self.tasks)]
         else:
             return [await fob for fob in tqdm(as_completed(self.tasks), total=len(self.tasks))]
+
+    def query_from_DB_with_unps(self, table_name: str, columns: str = '*'):
+        default_tables = ('DB_REFERENCES', 'OTHER_DB_REFERENCES', 'ALTERNATIVE_PRODUCTS', 'FEATURES', 'INTERACTION', 'INFO')
+        assert table_name in default_tables
+        obs = tuple(i for i in self if i.source == 'UniProt')
+        if len(obs) == 0:
+            self.tasks = []
+            return self
+        accessions = tuple(i.identifier for i in obs)
+        if columns != '*' and table_name == 'INFO':
+            task = Identifier.sqlite_api.database.fetch_all(query=f'SELECT {columns} FROM INFO WHERE accession IN {accessions}')
+        else:
+            task = Identifier.sqlite_api.INFO.objects.filter(accession__in=accessions).all()
+        exists = unsync_run(task)
+        if len(exists) == 0:
+            self.tasks = [ob.query_from_DB_with_unp(table_name=table_name, columns=columns, exists=False) for ob in obs]
+            return self
+        else:
+            exist_ids = frozenset(i.accession for i in exists)
+            rest_ids = frozenset(accessions) - exist_ids
+            rest_dfs = [self[accession].query_from_DB_with_unp(table_name=table_name, columns=columns, exists=False) for accession in rest_ids]
+            if table_name == 'INFO':
+                ap = unsync_wrap(exists)
+            else:
+                if columns == '*':
+                    ap = unsync_wrap(getattr(Identifier.sqlite_api, table_name).objects.filter(accession__in=exist_ids).all())
+                else:
+                    ap = unsync_wrap(Identifier.sqlite_api.database.fetch_all(query=f'SELECT {columns} FROM {table_name} WHERE accession IN {tuple(exist_ids)}'))
+            rest_dfs.append(ap)
+            self.tasks = rest_dfs
+            return self

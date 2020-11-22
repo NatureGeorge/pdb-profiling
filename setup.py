@@ -36,7 +36,8 @@ setup(
         'orm>=0.1.5',
         'smart_open>=1.9.0',
         'scipy>=1.4.1',
-        'slugify>=0.0.1',
+        'scikit-learn>=0.22',
+        'python-slugify>=4.0.0',
         'cachetools>=4.1.0'
      ],
     license="MIT",

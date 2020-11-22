@@ -177,9 +177,14 @@ async def a_read_csv(path, read_mode='r',**kwargs):
     '''
     if isinstance(path, (Coroutine, Unfuture)):
         path = await path
-    async with aiofiles_open(path, read_mode) as file_io:
-        with StringIO(await file_io.read()) as text_io:
-            return read_csv(text_io, **kwargs)
+    if isinstance(path, (Path, str)):
+        async with aiofiles_open(path, read_mode) as file_io:
+            with StringIO(await file_io.read()) as text_io:
+                return read_csv(text_io, **kwargs)
+    elif isinstance(path, DataFrame):
+        return path
+    else:
+        return DataFrame(path, columns=kwargs.get('columns', None))
 
 
 async def a_load_json(path):
@@ -720,16 +725,30 @@ def lyst2range(lyst, add_end=1):
 def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
     if isinstance(mis_range, float) or mis_range is None:
         return pdb_range
-    if len(pdb_range) == 0:
+    elif len(pdb_range) == 0:
         return ()
+    elif len(mis_range) == 0:
+        return pdb_range
     pdb_range_set = interval2set(pdb_range)
     mis_range_set = interval2set(mis_range)
     return to_interval(pdb_range_set - mis_range_set)
 
 
+def check_range(i) -> bool:
+    if isinstance(i, float) or (i is None) or (len(i) == 0) or (i == 'nan'):
+        return False
+    return True
+
+
 def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
-    if isinstance(right, float) or right is None or left is None or isinstance(left, float) or not right or not left or left == 'nan' or right == 'nan':
-        return None
+    check_left = check_range(left)
+    check_right = check_range(right)
+    if check_left and not check_right:
+        return left
+    elif not check_left and check_right:
+        return right
+    elif not check_left and not check_right:
+        return np.nan
     try:
         left_range_set = interval2set(left)
         right_range_set = interval2set(right)
@@ -742,7 +761,7 @@ def add_range(left: Union[str, Iterable], right: Union[str, Iterable]) -> List:
 
 def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable]) -> List:
     if isinstance(unk_range, float) or unk_range is None:
-        return None
+        return ()
     '''
     obs_range_set = interval2set(obs_range)
     unk_range_set = interval2set(unk_range)
@@ -791,6 +810,14 @@ def red_seq_seg(seq, ranges):
         yield f"{seq[edge:start-1]}\x1b[31m{seq[start-1:end]}\x1b[0m"
         edge = end
     yield seq[end:]
+
+
+def outside_range(pdb_range: Union[str, Iterable], seqres_len: int):
+    pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
+    out_head = pdb_range[0][0] - 1
+    out_tail = pdb_range[-1][-1] + 1
+    ret = [[1, out_head], [out_tail, seqres_len]]
+    return [i for i in ret if i[0]<=i[1]]
 
 
 def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:
@@ -915,7 +942,7 @@ def dumpsParams(params: Dict) -> str:
 
 
 @unsync
-async def a_concat(pathes, sep='\t', sort=False, ignore_index=True):
+async def a_concat(pathes, sep='\t', sort=False, ignore_index=True, columns=None):
     if isinstance(pathes, (Unfuture, Coroutine)):
         pathes = await pathes
-    return concat([await a_read_csv((await path) if isinstance(Unfuture, Coroutine) else path, sep=sep) for path in pathes], sort=sort, ignore_index=ignore_index)
+    return concat([await a_read_csv((await path) if isinstance(Unfuture, Coroutine) else path, sep=sep, columns=columns) for path in pathes], sort=sort, ignore_index=ignore_index)

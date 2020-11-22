@@ -7,12 +7,14 @@
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from pathlib import Path
 from numpy import nan
-from pandas import DataFrame
+from pandas import DataFrame, Series
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
-from pdb_profiling.utils import dumpsParams
+from pdb_profiling.utils import dumpsParams, range_len
+from pdb_profiling.processors.uniprot.record import UniProts
 from urllib.parse import quote
 from slugify import slugify
+from unsync import unsync
 
 
 BASE_URL = 'https://www.ebi.ac.uk/proteins/api/'
@@ -116,7 +118,8 @@ class ProteinsAPI(Abclog):
             return data
 
     @classmethod
-    def pipe_summary(cls, data: List):
+    @unsync
+    async def pipe_summary(cls, data: List):
         if len(data) > 1:
             cls.logger.error(
                 f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}")
@@ -157,6 +160,24 @@ class ProteinsAPI(Abclog):
                     iso_df['else_iso'] = iso_df.isoform.apply(lambda x: x[1:] if isinstance(x, List) else nan)
                     focus_index = iso_df[(~iso_df.else_iso.isnull())].index
                     iso_df.loc[focus_index, 'isoform'] = iso_df.loc[focus_index, 'isoform'].apply(lambda x: x[0])
+                    iso_df.rename(columns={'sequence': 'VAR_SEQ'}, inplace=True)
+                    alt_seq_df = await UniProts.fetch_VAR_SEQ_from_DB((data['accession'], ), "%s+VAR_SEQ" % data['accession'], with_name_suffix=False)
+                    
+                    ac_len = data['sequence']['length']
+                    ac_seq = data['sequence']['sequence']
+                    
+                    if len(alt_seq_df) > 0:
+                        assert all(alt_seq_df.ftId.ne('')), f"{alt_seq_df[alt_seq_df.ftId.eq('')]}"
+                        alt_seq_dict = alt_seq_df[["ftId", "before_len", "after_len", "after", "begin", "end"]].to_dict('list')
+                        iso_alt_info = iso_df.VAR_SEQ.apply(lambda x: UniProts.get_alt_interval_base(x, alt_seq_dict) if not isinstance(x, float) else x)
+                        iso_df[["iso_range", "length", "sequence"]] = iso_alt_info.apply(lambda x: UniProts.get_affected_interval(x, ac_len, ac_seq)).apply(Series)
+                    else:
+                        iso_df['iso_range'] = nan
+                        iso_df['length'] = nan
+                        iso_df['sequence'] = nan
+                    iso_df['iso_range_len'] = iso_df.iso_range.apply(range_len)
+                    iso_df.loc[iso_df.sequenceStatus.eq('displayed').idxmax(), ["length", "sequence"]] = (ac_len, ac_seq)
+
                 if comment['type'] == 'INTERACTION':
                     int_df = DataFrame(comment['interactions'])
                     if 'accession1' not in int_df.columns:
@@ -172,5 +193,7 @@ class ProteinsAPI(Abclog):
 
         info_data = {key: data.get(key, nan) for key in (
             'accession', 'id', 'proteinExistence', 'info', 'organism', 'secondaryAccession', 'protein', 'gene')}
+        info_data['sequence'] = data['sequence']['sequence']
+        info_data['length'] = data['sequence']['length']
 
         return dbReferences_df, other_dbReferences_df, iso_df, features_df, int_df, info_data

@@ -5,7 +5,7 @@
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
-from numpy import array, where as np_where, count_nonzero, nan, dot
+from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
@@ -14,9 +14,12 @@ from aiofiles import open as aiofiles_open
 from smart_open import open as smart_open
 from re import compile as re_compile
 import orjson as json
+from zlib import compress, decompress
+from bisect import bisect_left
+from functools import reduce
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
-from pdb_profiling import default_id_tag
+from pdb_profiling.processors.pdbe import default_id_tag
 from pdb_profiling.exceptions import WithoutExpectedKeyError
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
@@ -32,18 +35,19 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  interval2set, expand_interval,
                                  lyst2range, select_ho_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader)
-from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBArchive, FUNCS as API_SET
+                                 a_seq_reader, dumpsParams, outside_range)
+from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.swissmodel.api import SMR
-from pdb_profiling.data import blosum62
+from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
 from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
+from sklearn.neighbors import NearestNeighbors
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -182,7 +186,7 @@ class PDB(Base):
     StatsNucleotideEntitySeq = namedtuple(
         'StatsNucleotideEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT dNTP_INDEX dNTP_COUNT NTP_INDEX NTP_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
     StatsChainSeq = namedtuple(
-        'StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT OBS_RATIO_SUM BINDING_LIGAND_INDEX BINDING_LIGAND_COUNT')
+        'StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT OBS_RATIO_ARRAY BINDING_LIGAND_INDEX BINDING_LIGAND_COUNT')
 
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
@@ -193,6 +197,7 @@ class PDB(Base):
         cls.assembly_cif_folder.mkdir(parents=True, exist_ok=True)
         tuple(init_folder_from_suffixes(cls.folder/'model-server', PDBeModelServer.api_set))
         tuple(init_folder_from_suffixes(cls.folder/'pdb/data/structures', PDBArchive.api_set))
+        tuple(init_folder_from_suffixes(cls.folder/'coordinate-server', PDBeCoordinateServer.api_set))
 
     @unsync
     async def prepare_property(self, raw_data):
@@ -251,9 +256,27 @@ class PDB(Base):
     def get_id(self):
         return self.pdb_id
 
+    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **params):
+        assert api_suffix in PDBeCoordinateServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeCoordinateServer.api_set}"
+        dparams = dumpsParams(params)
+        task = self.tasks.get((repr(self), PDBeCoordinateServer.roots[0], api_suffix, dparams, then_func), None)
+        if task is not None:
+            return task
+        task = PDBeCoordinateServer('random').single_retrieve(
+            pdb_id=self.pdb_id,
+            suffix=api_suffix,
+            params=params,
+            folder=self.get_folder()/'coordinate-server'/api_suffix,
+            semaphore=self.get_web_semaphore())
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((repr(self), PDBeCoordinateServer.roots[0], api_suffix, dparams, then_func), task)
+        return task
+
     def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
-        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), None)
+        dparams = dumpsParams(params) if params is not None else None
+        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), None)
         if task is not None:
             return task
         task = PDBeModelServer.single_retrieve(
@@ -267,7 +290,7 @@ class PDB(Base):
             **kwargs)
         if then_func is not None:
             task = task.then(then_func)
-        self.register_task((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, params, then_func), task)
+        self.register_task((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), task)
         return task
 
     def fetch_from_PDBArchive(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
@@ -288,7 +311,20 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    async def cif2residue_listing(cls, path: Unfuture):
+    def cif2atom_sites_df(cls, path: Union[Unfuture, str, Path]):
+        if isinstance(path, Unfuture):
+            path = path.result()
+        with open(path, 'rt') as handle:
+            mmcif_dict = MMCIF2DictPlus(handle)
+        if '_coordinate_server_result.has_error' in mmcif_dict:
+            assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
+        cols = [key for key in mmcif_dict.keys() if key.startswith('_atom_site.')]
+        dfrm = DataFrame(list(zip(*[mmcif_dict[col] for col in cols])), columns=cols)
+        return dfrm
+
+    @classmethod
+    @unsync
+    async def cif2residue_listing(cls, path: Union[Unfuture, Coroutine, str, Path]):
         cols = ('_pdbx_poly_seq_scheme.asym_id',
                 '_pdbx_poly_seq_scheme.entity_id',
                 '_pdbx_poly_seq_scheme.seq_id',
@@ -305,7 +341,9 @@ class PDB(Base):
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        with smart_open(await path) as handle:
+        if isinstance(path, (Unfuture, Coroutine)):
+            path = await path
+        with smart_open(path) as handle:
             mmcif_dict = MMCIF2DictPlus(handle, cols)
             mmcif_dict['data_'] = mmcif_dict['data_'].lower()
             dfrm = DataFrame(mmcif_dict)
@@ -628,7 +666,7 @@ class PDB(Base):
         store = await self.sqlite_api.StatsNucleotideEntitySeq.objects.filter(pdb_id=self.pdb_id).all()
         if not store:
             def regist_info(record):
-                if record['molecule_type'] not in ('polydeoxyribonucleotide', 'polyribonucleotide', 'polydeoxyribonucleotide/polyribonucleotide'):
+                if record['molecule_type'] not in ('polydeoxyribonucleotide', 'polyribonucleotide', 'polydeoxyribonucleotide/polyribonucleotide hybrid'):
                     return
                 seq = array(list(len(i) if i != '(UNK)' else
                                 -1 for i in self.nucleotide_sequence_pat.findall(record['pdb_sequence'])))
@@ -674,6 +712,16 @@ class PDB(Base):
         c_df.apply(regist_info, axis=1)
         return [self.StatsChainSeq(*key, value, range_len(value)) for key, value in store.items()]
     
+    @staticmethod
+    def ret_obs_res(value):
+        obs_index = []
+        obs_array = []
+        for index, ratio in value:
+            if ratio > 0:
+                obs_index.append(index)
+            obs_array.append(ratio)
+        return to_interval(obs_index), len(obs_index), compress(json.dumps(obs_array))
+
     @unsync
     async def stats_chain_seq(self):
         store = await self.sqlite_api.StatsChainSeq.objects.filter(pdb_id=self.pdb_id).all()
@@ -689,7 +737,7 @@ class PDB(Base):
         res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         # mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
         # res_df = res_df.merge(mol_df[mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))][['entity_id']])
-        res_df[res_df.observed_ratio.gt(0)].apply(lambda x: regist_info(x), axis=1)
+        res_df.apply(lambda x: regist_info(x), axis=1)
 
         summary_dict = (await self.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
                             )[self.pdb_id][0]['number_of_entities']
@@ -703,20 +751,16 @@ class PDB(Base):
             br_df = None
         if br_df is None:
             ret = [self.StatsChainSeq(*key,
-                                       to_interval(i[0] for i in value),
-                                       len(value),
-                                       sum(i[1] for i in value),
+                                      *self.ret_obs_res(value),
                                        tuple(),
                                        0
                                        ) for key, value in store.items()]
         else:
             br_dict = br_df[br_df.entity_id.ne(-1)].groupby('struct_asym_id').residue_number.apply(lambda x: (to_interval(x), len(frozenset(x)))).to_dict()
             ret = [self.StatsChainSeq(*key, 
-                                    to_interval(i[0] for i in value), 
-                                    len(value), 
-                                    sum(i[1] for i in value),
-                                    *br_dict.get(key[-1], (tuple(), 0))
-                                    ) for key, value in store.items()]
+                                      *self.ret_obs_res(value),
+                                      *br_dict.get(key[-1], (tuple(), 0))
+                                      ) for key, value in store.items()]
 
         await self.sqlite_api.async_insert(self.sqlite_api.StatsChainSeq, ret)
         return ret
@@ -745,11 +789,13 @@ class PDB(Base):
         '''
         sequence_col = 'sequence' if kwargs.get('one_letter_code', True) else 'pdb_sequence'
         mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+        if mol_df is None:
+            raise ValueError(f"None dataframe: {repr(self)}")
         if 'entity_id' in kwargs:
             try:
                 return mol_df.loc[mol_df.entity_id.eq(kwargs['entity_id']).idxmax(), sequence_col]
             except Exception:
-                raise ValueError(f"{mol_df}")
+                raise ValueError(f"{mol_df}\n{repr(self)}")
         elif 'struct_asym_id' in kwargs:
             struct_asym_id = kwargs['struct_asym_id']
             return mol_df.loc[mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x).idxmax(), sequence_col]
@@ -1361,6 +1407,8 @@ class SIFTS(PDB):
 
     weight = array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746])
 
+    deletion_part_kwargs = dict()
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -1401,6 +1449,24 @@ class SIFTS(PDB):
                             api_suffix='api/mappings/all_isoforms/',
                             then_func=Base.to_dataframe).tasks]
         return concat(res, sort=False, ignore_index=True)
+
+    @staticmethod
+    @unsync
+    async def check_pdb_status(dfrm):
+        if isinstance(dfrm, Unfuture):
+            dfrm = await dfrm
+        if isinstance(dfrm, Tuple):
+            dfrm = dfrm[0]
+        elif dfrm is None:
+            return
+        pdbs = PDBs(dfrm.pdb_id.unique())
+        tasks = [await task for task in pdbs.fetch('fetch_from_web_api', api_suffix='api/pdb/entry/status/', then_func=a_load_json, json=True).tasks]
+        pass_pdbs = [next(iter(i)) for i in tasks if next(iter(i.values()))[0]['status_code'] == 'REL']
+        res = dfrm[dfrm.pdb_id.isin(pass_pdbs)]
+        if len(res) > 0:
+            return res.reset_index(drop=True)
+        else:
+            return
 
     @staticmethod
     @unsync
@@ -1575,12 +1641,13 @@ class SIFTS(PDB):
         if len(indexes) > 0:
             pdb_diff_index, unp_diff_index = zip(*indexes)
             return (
-                json.dumps(dict(zip((str(i) for i in pdb_diff_index), (unp_seq[i-1] for i in unp_diff_index)))).decode('utf-8'), 
+                json.dumps(dict(zip((str(i) for i in pdb_diff_index), (unp_seq[i-1] for i in unp_diff_index)))).decode('utf-8'),
+                json.dumps(dict(zip((str(i) for i in pdb_diff_index), (pdb_seq[i-1] for i in pdb_diff_index)))).decode('utf-8'), 
                 json.dumps(to_interval(pdb_diff_index)).decode('utf-8'), 
                 json.dumps(to_interval(unp_diff_index)).decode('utf-8'), 
                 len(unp_seq))
         else:
-            return ('{}', '[]', '[]', len(unp_seq)) 
+            return ('{}', '{}', '[]', '[]', len(unp_seq)) 
 
     @classmethod
     @unsync
@@ -1605,7 +1672,7 @@ class SIFTS(PDB):
         f_dfrm = dfrm[focus+[pdb_range_col, 'Entry', unp_range_col]].drop_duplicates(subset=focus).reset_index(drop=True)
         tasks = f_dfrm.apply(lambda x: cls.get_residue_conflict(
             x['pdb_id'], x['entity_id'], x[pdb_range_col], x['Entry'], x['UniProt'], x[unp_range_col]), axis=1)
-        f_dfrm['conflict_pdb_index'], f_dfrm['conflict_pdb_range'], f_dfrm['conflict_unp_range'], f_dfrm['unp_len'] = zip(*[await i for i in tasks])
+        f_dfrm['conflict_pdb_index'], f_dfrm['raw_pdb_index'], f_dfrm['conflict_pdb_range'], f_dfrm['conflict_unp_range'], f_dfrm['unp_len'] = zip(*[await i for i in tasks])
         dfrm_ed = merge(dfrm, f_dfrm)
         assert dfrm_ed.shape[0] == dfrm.shape[0], f"\n{dfrm_ed.shape}\n{dfrm.shape}"
         return dfrm_ed
@@ -1742,9 +1809,13 @@ class SIFTS(PDB):
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False):
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, check_pdb_status:bool=False):
         if sifts_df is None:
-            init_task = await self.fetch_from_web_api('api/mappings/all_isoforms/', Base.to_dataframe)
+            init_task = self.fetch_from_web_api('api/mappings/all_isoforms/', Base.to_dataframe)
+            if check_pdb_status:
+                init_task = await self.check_pdb_status(init_task)
+            else:
+                init_task = await init_task
             if init_task is None: return
             if complete_chains:
                 init_task = await self.complete_chains(init_task)
@@ -1754,12 +1825,138 @@ class SIFTS(PDB):
                 ).then(self.add_residue_conflict)
         
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class',
-                    'experimental_method', 'multi_method']
+                    'experimental_method', 'multi_method', '-r_factor', '-r_free']
 
         if self.level == 'PDB Entry':
             return await self.pipe_score_for_pdb_entry(sifts_df, exp_cols)
         else:
             return await self.pipe_score_for_unp_isoform(sifts_df, exp_cols)
+
+    @staticmethod
+    def bs_score_aligned_part(new_pdb_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, NON_INDEX, OBS_RATIO_ARRAY):
+        assert new_pdb_range is not None
+        L_aligned = range_len(new_pdb_range)
+        un_range = add_range(conflict_pdb_range, NON_INDEX)
+        aligned_equal_range = subtract_range(new_pdb_range, un_range)
+        assert aligned_equal_range is not None
+        aligned_unequal_range = overlap_range(new_pdb_range, un_range)
+
+        aligned_unequal_score = 0
+        conflict_pdb_index = json.loads(conflict_pdb_index) if isinstance(conflict_pdb_index, str) else conflict_pdb_index
+        raw_pdb_index = json.loads(raw_pdb_index) if isinstance(raw_pdb_index, str) else raw_pdb_index
+        for i in expand_interval(aligned_unequal_range):
+            unp_aa = conflict_pdb_index.get(i, None)
+            pdb_aa = raw_pdb_index.get(i, None)
+            if (unp_aa is not None) and (unp_aa != pdb_aa):
+                # Conflict | (Modified & Conflict) Residues are fall into here
+                theta = miyata_similarity_matrix.get((unp_aa, pdb_aa), miyata_similarity_matrix.get((pdb_aa, unp_aa), -3.104))
+            else:
+                # UNK | (Modified Residue & NOT Conflict)
+                theta = -3.104
+            aligned_unequal_score += OBS_RATIO_ARRAY[i-1]*(theta+1)
+        
+        return -L_aligned + \
+               2*OBS_RATIO_ARRAY[[i-1 for i in expand_interval(aligned_equal_range)]].sum() + \
+               aligned_unequal_score
+    
+    @staticmethod
+    def bs_score_CN_terminal_part(new_pdb_range, ARTIFACT_INDEX, SEQRES_COUNT, OBS_RATIO_ARRAY):
+        outside_range_ignore_artifact = subtract_range(outside_range(new_pdb_range, SEQRES_COUNT), ARTIFACT_INDEX)
+        return -OBS_RATIO_ARRAY[[i-1 for i in expand_interval(outside_range_ignore_artifact)]].sum(), outside_range_ignore_artifact
+    
+    @classmethod
+    def bs_score_insertion_part(cls, new_pdb_range, OBS_RATIO_ARRAY):
+        insertion_range = cls.get_InDel_part(new_pdb_range)
+        if len(insertion_range) == 0:
+            return 0
+        else:
+            return -(OBS_RATIO_ARRAY[[i-1 for i in expand_interval(insertion_range)]].sum())-range_len(insertion_range)
+
+    @classmethod
+    @unsync
+    async def bs_score_deletion_part(cls, pdb_id, struct_asym_id, new_pdb_range, new_unp_range, OBS_INDEX):
+        new_unp_range = json.loads(new_unp_range) if isinstance(new_unp_range, str) else new_unp_range
+        deletion_range = cls.get_InDel_part(new_unp_range)
+        if len(deletion_range) == 0:
+            return 0
+        del_range_len = range_len(deletion_range)
+        deletion_edge = cls.convert_index(new_pdb_range, new_unp_range, [i-1 for i, j in deletion_range])
+        obs_lyst = tuple(expand_interval(OBS_INDEX))
+        assert len(obs_lyst) > 0, f"{pdb_id} {struct_asym_id}, {new_pdb_range}"
+        iedge = (bisect_left(obs_lyst, edge) for edge in deletion_edge)
+        score = 0
+        for i, j in zip(iedge, deletion_edge):
+            if i == 0:
+                edge = obs_lyst[0]
+            elif i == len(obs_lyst):
+                edge = obs_lyst[-1]
+            else:
+                this = obs_lyst[i]
+                that = obs_lyst[i-1]
+                if this - j <= j - that:
+                    edge = this
+                else:
+                    edge = that
+            score += await cls.clostest_distance_sum(pdb_id, struct_asym_id, edge, **cls.deletion_part_kwargs)
+        return -del_range_len*score
+        
+    @classmethod
+    @unsync
+    async def clostest_distance_sum(cls, pdb_id, struct_asym_id, residue_number, radius=5, modelId=1, d=10):
+        df = await PDB(pdb_id).fetch_from_coordinateServer_api(
+            'ambientResidues', then_func=PDB.cif2atom_sites_df,
+            asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+        # df['_atom_site.label_asym_id'].eq(struct_asym_id) &
+        df = df[df['_atom_site.label_comp_id'].ne('HOH')].reset_index(drop=True)
+        for col in ('_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z'):
+            df[col] = df[col].astype(float)
+        # df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(int)
+        # assert all(~df['_atom_site.label_seq_id'].eq('.')), f"{pdb_id} {struct_asym_id} {residue_number}"
+        coordinates_dict = cls.get_coordinates_dict(df)
+        nbrs = NearestNeighbors(n_neighbors=1).fit(coordinates_dict[(struct_asym_id, str(residue_number))])
+        total = 0
+        for key in coordinates_dict.keys() - {(struct_asym_id, str(residue_number))}:
+            distances, _ = nbrs.kneighbors(coordinates_dict[key])
+            total += cls.exp_score(distances.min(), d)
+        return total
+
+    @staticmethod
+    def get_coordinates(x):
+        return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy()
+
+    @classmethod
+    def get_coordinates_dict(cls, df):
+        return df.groupby(['_atom_site.label_asym_id', '_atom_site.label_seq_id']).apply(cls.get_coordinates).to_dict()
+    
+    @staticmethod
+    def exp_score(x, d):
+        return exp(-square(x)/d)
+
+    @staticmethod
+    def get_InDel_part(li):
+        '''
+        when li is new_pdb_range, the return value is insertion_range
+        when li is new_unp_range, the return value is deletion_range
+        '''
+        res = ((li[i][1]+1, li[i+1][0]-1) for i in range(len(li)-1))
+        return [[i, j] for i, j in res if i<=j]
+
+    @classmethod
+    @unsync
+    async def bs_score_base(cls, *args):
+        if len(args) == 1:
+            pdb_id, struct_asym_id, new_pdb_range, new_unp_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, SEQRES_COUNT, ARTIFACT_INDEX, OBS_INDEX, NON_INDEX, OBS_RATIO_ARRAY = args[0]
+        elif len(args) == 12:
+            pdb_id, struct_asym_id, new_pdb_range, new_unp_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, SEQRES_COUNT, ARTIFACT_INDEX, OBS_INDEX, NON_INDEX, OBS_RATIO_ARRAY = args
+        else:
+            raise TypeError("bs_score_base() with invalid positional arguments")
+        new_pdb_range = json.loads(new_pdb_range) if isinstance(new_pdb_range, str) else new_pdb_range
+        OBS_RATIO_ARRAY = array(json.loads(decompress(OBS_RATIO_ARRAY))) if isinstance(OBS_RATIO_ARRAY, bytes) else OBS_RATIO_ARRAY
+        aligned_part = cls.bs_score_aligned_part(new_pdb_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, NON_INDEX, OBS_RATIO_ARRAY)
+        CN_terminal_part, outside_range_ignore_artifact = cls.bs_score_CN_terminal_part(new_pdb_range, ARTIFACT_INDEX, SEQRES_COUNT, OBS_RATIO_ARRAY)
+        insertion_part = cls.bs_score_insertion_part(new_pdb_range, OBS_RATIO_ARRAY)
+        deletion_part = await cls.bs_score_deletion_part(pdb_id, struct_asym_id, new_pdb_range, new_unp_range, OBS_INDEX)
+        return aligned_part, CN_terminal_part, insertion_part, deletion_part, outside_range_ignore_artifact
 
     @unsync
     async def pipe_score_base(self, sifts_df, pec_df):
@@ -1775,9 +1972,17 @@ class SIFTS(PDB):
         assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
         # {full_df.duplicated(subset=['UniProt','pdb_id','struct_asym_id'], keep=False)}
         # f"{pec_df[pec_df.pdb_id.eq('6mzl')]}"
-        
+        cols = ['pdb_id', 'struct_asym_id', 'new_pdb_range', 'new_unp_range', 'conflict_pdb_range', 'conflict_pdb_index',
+                'raw_pdb_index', 'SEQRES_COUNT', 'ARTIFACT_INDEX', 'OBS_INDEX', 'NON_INDEX', 'OBS_RATIO_ARRAY']
+        # tasks = full_df[cols].agg(self.bs_score_base, axis=1).tolist()
+        tasks = tuple(map(self.bs_score_base, *tuple(full_df[col] for col in cols)))
+        bs_score_df = DataFrame([await task for task in tasks],
+            columns=['aligned_p', 'CN_terminal_p', 'insertion_p', 'deletion_p', 'mapped_out_range'])
+        assert bs_score_df.shape[0] == full_df.shape[0]
+        bs_score_df['bs_score'] = bs_score_df.aligned_p + bs_score_df.CN_terminal_p + bs_score_df.insertion_p + bs_score_df.deletion_p
         s1 = full_df.apply(lambda x: range_len(overlap_range(x['OBS_STD_INDEX'], x['new_pdb_range'])), axis=1)
-        s2 = full_df.apply(lambda x: outside_range_len(subtract_range(x['new_pdb_range'], x['ARTIFACT_INDEX']), x['SEQRES_COUNT']), axis=1)
+        # s2 = full_df.apply(lambda x: outside_range_len(subtract_range(x['new_pdb_range'], x['ARTIFACT_INDEX']), x['SEQRES_COUNT']), axis=1)
+        s2 = bs_score_df.mapped_out_range.apply(range_len)
         s3 = full_df.BINDING_LIGAND_COUNT
         s4 = full_df.new_pdb_range.apply(range_len) - full_df.apply(
             lambda x: range_len(overlap_range(x['OBS_INDEX'], x['new_pdb_range'])), axis=1)
@@ -1788,7 +1993,9 @@ class SIFTS(PDB):
         s_df = DataFrame(dict(s1=s1,s2=s2,s3=s3,s4=s4,s5=s5,s6=s6))
         s_df['RAW_BS'] = s_df.apply(raw_score, axis=1) / full_df.unp_len
         s_df['RAW_BS_IG3'] = s_df.drop(columns=['s3', 'RAW_BS']).apply(raw_score_ig3, axis=1) / full_df.unp_len
-        return full_df, s_df
+        ret = concat([full_df, bs_score_df], axis=1)
+        ret.bs_score = ret.bs_score/ret.unp_len
+        return ret, s_df
 
     @unsync
     async def pipe_score_for_pdb_entry(self, sifts_df, exp_cols):
@@ -1851,8 +2058,9 @@ class SIFTS(PDB):
         return sele_df
 
     @staticmethod
-    def select_mo(sele_df, OC_cutoff=0.2, sort_cols=['RAW_BS', '1/resolution', 'revision_date', 'id_score'], ascending=False, allow_mask=None):
-        allow_sele_df = sele_df[sele_df.RAW_BS > 0] if allow_mask is None else sele_df[allow_mask]
+    def select_mo(sele_df, OC_cutoff=0.2, sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], ascending=False, allow_mask=None):
+        sele_df.select_tag = False
+        allow_sele_df = sele_df[sele_df.bs_score > 0] if allow_mask is None else sele_df[allow_mask]
 
         def sele_func(dfrm):
             rank_index = dfrm.sort_values(by=sort_cols, ascending=ascending).index
@@ -1902,7 +2110,7 @@ class SIFTS(PDB):
         return DataFrame(res, columns=columns.split(','))
 
     @staticmethod
-    def parallel_interact_df(sifts_df, i3d_df, common_cols=('revision_date', 'deposition_date', 'experimental_method', 'experimental_method_class', 'multi_method', 'resolution', '1/resolution')):
+    def parallel_interact_df(sifts_df, i3d_df, common_cols=('revision_date', 'deposition_date', 'experimental_method', 'experimental_method_class', 'multi_method', '-r_factor', '-r_free','resolution', '1/resolution')):
         rename_dict = dict(zip((f'{i}_1' for i in common_cols), common_cols))
         rename_dict['pdb_id_1'] = 'pdb_id'
         sifts_df_ = sifts_df.add_suffix('_1').rename(columns=rename_dict)
@@ -1936,8 +2144,8 @@ class SIFTS(PDB):
                 pass
 
     @unsync
-    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs)
+    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, check_pdb_status=check_pdb_status)
         if sele_df is None:
             return
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
@@ -1951,7 +2159,7 @@ class SIFTS(PDB):
         return self.add_interact_common_cols(p_df)
 
     @staticmethod
-    def select_ho(p_df, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, sort_cols=['best_select_rank_score', 'second_select_rank_score', 'in_i3d'], ascending=False, allow_mask=None):
+    def select_ho(p_df, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.3, sort_cols=['best_select_rank_score', 'second_select_rank_score', 'in_i3d'], ascending=False, allow_mask=None):
         p_df['i_select_tag'] = False
         p_df['i_select_rank'] = -1
         if allow_mask is None:
@@ -1981,7 +2189,7 @@ class SIFTS(PDB):
         return p_df
 
     @unsync
-    async def pipe_select_ho(self, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.2, **kwargs):
+    async def pipe_select_ho(self, interface_mapped_cov_cutoff=0.8, unp_range_DSC_cutoff=0.8, wasserstein_distance_cutoff=0.3, **kwargs):
         p_df = await self.pipe_select_ho_base(**kwargs)
         if p_df is None:
             return
@@ -1989,8 +2197,8 @@ class SIFTS(PDB):
             return self.select_ho(p_df, interface_mapped_cov_cutoff, unp_range_DSC_cutoff, wasserstein_distance_cutoff)
 
     @unsync
-    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True)
+    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status)
         if sele_df is None:
             return
         sele_df = sele_df[sele_df.Entry.eq(self.identifier.split('-')[0])]
@@ -2001,7 +2209,7 @@ class SIFTS(PDB):
         return None if p_df is None else self.add_interact_common_cols(p_df)
     
     @classmethod
-    def select_ho_iso(cls, p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
+    def select_ho_iso(cls, p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['bs_score_1', 'bs_score_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
         return cls.select_he(p_df, interface_mapped_cov_cutoff, DSC_cutoff, sort_cols, ascending, allow_mask)
 
     @unsync
@@ -2019,8 +2227,8 @@ class SIFTS(PDB):
         return [i async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)]
 
     @unsync
-    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True)
+    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status)
         if sele_df is None:
             return
         if len(sele_df.Entry.unique()) == 1:
@@ -2032,7 +2240,7 @@ class SIFTS(PDB):
         return None if p_df is None else self.add_interact_common_cols(p_df)
 
     @staticmethod
-    def select_he(p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['RAW_BS_1', 'RAW_BS_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
+    def select_he(p_df, interface_mapped_cov_cutoff=0.8, DSC_cutoff=0.2, sort_cols=['bs_score_1', 'bs_score_2', '1/resolution', 'revision_date', 'in_i3d', 'id_score_1', 'id_score_2'], ascending=False, allow_mask=None):
         p_df['i_select_tag'] = False
         p_df['i_select_rank'] = -1
         
@@ -2108,7 +2316,7 @@ class SIFTS(PDB):
         return self.select_smr_mo(
             smr_df, 
             kwargs.get('allow_oligo_state', ('monomer',)),
-            sifts_mo_df[sifts_mo_df.select_tag.eq(True)].new_unp_range, 
+            sifts_mo_df[sifts_mo_df.select_tag.eq(True)].new_unp_range if sifts_mo_df is not None else [], 
             kwargs.get('smr_sort_cols', None),
             kwargs.get('ascending', False),
             kwargs.get('OC_cutoff', 0.2))
@@ -2207,7 +2415,10 @@ class PDBs(tuple):
                 i.get('resolution', None), 
                 i['experimental_method_class'], 
                 i['experimental_method'],
-                multi_method) for i in exp_data[pdb_ob.pdb_id])
+                multi_method,
+                -i.get('r_factor', nan) if i.get('r_factor', nan) is not None else nan,
+                -i.get('r_free', nan) if i.get('r_free', nan) is not None else nan,
+                ) for i in exp_data[pdb_ob.pdb_id])
     
     @staticmethod
     @unsync

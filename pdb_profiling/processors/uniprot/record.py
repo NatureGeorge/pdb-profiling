@@ -52,59 +52,82 @@ class UniProts(object):
         return toFrame(outputDict)
 
     @staticmethod
-    def getAffectedInterval(mis_info, inDe_info):
-        if isinstance(mis_info, float):
-            return nan
-        affect_Interval = []
-        for inDeRange, inDeLen in inDe_info:
-            start = inDeRange[0]
-            affect_Interval.append((start, start+inDeLen[1]-1))
+    def get_affected_interval(info, ac_len, ac_seq):
+        if isinstance(info, float):
+            return nan, nan, nan
+        n_data = []
+        delta_len = 0
+        iso_seq = ''
+        start_site = 0
+        for index in range(len(info)):
+            (cur_site, cur_old_end), (cur_old_len, cur_len), after_seq = info[index]
+            delta_len += cur_len - cur_old_len
+            iso_seq += ac_seq[start_site:cur_site-1] + after_seq
+            start_site = cur_old_end
+            if index == 0:
+                n_data.append((cur_site, cur_site+cur_len-1 if cur_len > 0 else None))
+            else:
+                (b_site, b_old_end), (b_old_len, _), _ = info[index-1]
+                b_start, b_end = n_data[index-1]
+                cur_start = (b_end + cur_site - b_old_end) if b_end is not None else (b_start - b_site + cur_site - b_old_len)
+                n_data.append((cur_start, cur_start+cur_len-1 if cur_len > 0 else None))
+        n_data = [i for i in n_data if i[1] is not None]
+        iso_seq += ac_seq[start_site:]
+        return (n_data if n_data else nan), ac_len + delta_len, iso_seq
 
-        for index in range(len(affect_Interval)):
-            raw = affect_Interval[index]
-            interval = list(raw)
-            for misRange, misLen in mis_info:
-                if misRange[-1] < raw[0]:
-                    interval = [x-misLen for x in interval]
-            affect_Interval[index] = interval
-
-        if affect_Interval:
-            return affect_Interval
-        else:
-            return nan
-
+    '''
     @classmethod
-    def getAltInterval(cls, alt_id, altSeq_dict):
+    def get_alt_interval(cls, alt_id, alt_seq_dict):
         if alt_id in ("Displayed", "External", "Not described"):
             return nan, nan
         elif not alt_id.startswith("VSP"):
             raise ValueError("Unexpected alt_id: %s" % alt_id)
         else:
             alt_id_lyst = alt_id.split(", ")
-            return cls.getAltInterval_base(alt_id_lyst, altSeq_dict)
+            return cls.get_alt_interval_base(alt_id_lyst, alt_seq_dict)
+    '''
 
     @staticmethod
-    def getAltInterval_base(alt_id_lyst, altSeq_dict):
-        mis_info = []
-        inDe_info = []
+    def get_alt_interval_base(alt_id_lyst, alt_seq_dict):
+        info = []
         for altID in alt_id_lyst:
-            index = altSeq_dict["AltID"].index(altID)
-            len_info = altSeq_dict["AltLen"][index]
-            range_info = altSeq_dict["AltRange"][index]
-            if isinstance(len_info, int):
-                mis_info.append((range_info, len_info))
-            else:
-                inDe_info.append((range_info, len_info))
-                if len_info[0] > len_info[1]:
-                    mis_info.append(([range_info[0], range_info[1]-1], len_info[0]-len_info[1]))
-        return mis_info, inDe_info
-
+            index = alt_seq_dict["ftId"].index(altID)
+            info.append((
+                (alt_seq_dict["begin"][index], alt_seq_dict["end"][index]), 
+                (alt_seq_dict["before_len"][index], alt_seq_dict["after_len"][index]),
+                alt_seq_dict["after"][index]))
+        return sorted(info, key=lambda x: x[0][0])
+    '''
     @classmethod
-    def deal_with_alternative_pro(cls, dfrm, altSeq_dict):
-        assert frozenset(dfrm.columns) >= frozenset(("Entry", "Alternative products (isoforms)"))
+    def get_iso_len(cls, ac_len, sequenceStatus, info):
+        if sequenceStatus == 'displayed':
+            return ac_len
+        elif sequenceStatus == 'described':
+            _, alt_lens, _ = zip(*info)
+            return ac_len + sum(after-before for before, after in alt_lens)
+        else:
+            return nan
+    '''
+
+    '''
+    @classmethod
+    def deal_with_alternative_pro(cls, dfrm, alt_seq_dict, ac_len, ac_seq):
+        assert frozenset(dfrm.columns) >= frozenset(("Entry", "Alternative products (isoforms)", "Sequence", "Length"))
         altPro_df = concat((cls.getAltProInfo(cls.pattern_iso_keyValue.findall(i)) for i in dfrm["Alternative products (isoforms)"].dropna()), sort=False)
-        altPro_df["AltInterval"] = altPro_df["Sequence"].apply(lambda x: cls.getAffectedInterval(*cls.getAltInterval(x, altSeq_dict)))
+        altPro_df["AltInterval"] = altPro_df["Sequence"].apply(lambda x: cls.get_affected_interval(cls.get_alt_interval(x, alt_seq_dict)))
         return altPro_df
+    '''
+
+    @staticmethod
+    def split_dot_range(x):
+        res = x.split("..")
+        if len(res) == 2:
+            return [int(i) for i in res]
+        elif len(res) == 1:
+            val = int(res[0])
+            return [val, val]
+        else:
+            raise AssertionError(f"Unexpected range: {x}")
 
     @classmethod
     @unsync
@@ -112,6 +135,8 @@ class UniProts(object):
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
         assert frozenset(dfrm.columns) >= frozenset(("Entry", "Alternative sequence"))
+        if all(dfrm['Alternative sequence'].isnull()):
+            return
         dfrm['Alternative sequence'] = dfrm.apply(lambda x: x['Alternative sequence'].replace("VAR_SEQ", f"{x['Entry']}:VAR_SEQ") if not isna(x['Alternative sequence']) else nan, axis=1)
         altSeq_li = []
         for content in dfrm['Alternative sequence'].dropna().to_numpy():
@@ -119,43 +144,50 @@ class UniProts(object):
             for i in range(1, len(result)-1, 3):
                 altSeq_li.append(result[i+2] + '; /Entry="%s"; /AltRange="%s"; ' % tuple(result[i:i+2]))
         altSeq_df = DataFrame(dict(i.groups() for i in cls.pattern_iso_Value.finditer(content)) for content in altSeq_li)
-        altSeq_df.rename(columns={"id": "AltID"}, inplace=True)
-        altSeq_df[["AltInfo", "AltIso"]] = altSeq_df.note.apply(lambda x: cls.pattern_inIso.search(x).groups()).apply(Series)
-        altSeq_df["AltRange"] = altSeq_df.AltRange.apply(lambda x: [int(i) for i in x.split("..")])
-        altSeq_df["AltLen"] = altSeq_df.apply(lambda x: [len(i) for i in cls.pattern_inDel.search(x["AltInfo"]).groups()] if x["AltInfo"] != "Missing" else len(range(*x["AltRange"]))+1, axis=1)
-        # altSeq_dict = altSeq_df[["AltID", "AltLen", "AltRange"]].to_dict("list")
+        altSeq_df.rename(columns={"id": "ftId"}, inplace=True)
+        altSeq_df[["AltInfo", "description"]] = altSeq_df.note.apply(lambda x: cls.pattern_inIso.search(x).groups()).apply(Series) 
+        altSeq_df[['begin', 'end']] = altSeq_df.AltRange.apply(cls.split_dot_range).apply(Series)
+        altSeq_df[["before", "after"]] = altSeq_df.AltInfo.apply(lambda x: cls.pattern_inDel.search(x).groups() if x != "Missing" else (nan, '')).apply(Series)
+        altSeq_df['before_len'] = altSeq_df.apply(lambda x: len(x['before']) if isinstance(x['before'], str) else len(range(x['begin'], x['end']))+1, axis=1)
+        altSeq_df['after_len'] = altSeq_df.after.apply(len)
+
         sup = DataFrame({
             'Entry': dfrm[dfrm['Alternative sequence'].isnull()].Entry.unique(),
-            'AltID': '',
-            'AltRange': nan,
-            'AltInfo': nan,
-            'AltIso': nan,
-            'AltLen': nan,
+            'ftId': '',
+            'begin': nan,
+            'end': nan,
+            'before': nan,
+            'after': nan,
+            'description': nan,
+            'before_len': nan,
+            'after_len': nan,
             'evidence': nan})
-        return concat((altSeq_df.drop(columns=['note']), sup), ignore_index=True, sort=False)
+        return concat((altSeq_df.drop(columns=['note', 'AltRange', 'AltInfo']), sup), ignore_index=True, sort=False)
     
     @classmethod
     @unsync
-    async def fetch_VAR_SEQ_to_localDB(cls, accessions, name='VAR_SEQ', **kwargs):
+    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', **kwargs):
         UniProtAPI.params['columns'] = kwargs.get('columns', 'id,feature(ALTERNATIVE%20SEQUENCE)')
         UniProtAPI.params['from'] = kwargs.get('from', 'ACC+ID')
         UniProtAPI.with_name_suffix = kwargs.get('with_name_suffix', True)
         for res in UniProtAPI.retrieve(accessions, name, **kwargs):
             dfrm = await a_read_csv(res, sep='\t').then(cls.deal_with_alternative_seq)
+            if dfrm is None:
+                continue
             await cls.sqlite_api.async_insert(cls.sqlite_api.VAR_SEQ, dfrm.to_dict('records'))
     
     @classmethod
     @unsync
-    async def fetch_VAR_SEQ_from_localDB(cls, accessions, name='VAR_SEQ', **kwargs):
+    async def fetch_VAR_SEQ_from_DB(cls, accessions, name='VAR_SEQ', **kwargs):
         res = await cls.sqlite_api.VAR_SEQ.objects.filter(Entry__in=accessions).all()
         if len(res) == 0:
-            await cls.fetch_VAR_SEQ_to_localDB(accessions, name, **kwargs)
+            await cls.fetch_VAR_SEQ_to_DB(accessions, name, **kwargs)
             dfrm = DataFrame(await cls.sqlite_api.VAR_SEQ.objects.filter(Entry__in=accessions).all())
         else:
             dfrm = DataFrame(res)
             rest = tuple(frozenset(accessions) - frozenset(dfrm.Entry))
             if len(rest) > 0:
-                await cls.fetch_VAR_SEQ_to_localDB(rest, name, **kwargs)
+                await cls.fetch_VAR_SEQ_to_DB(rest, name, **kwargs)
                 rest_df = DataFrame(await cls.sqlite_api.VAR_SEQ.objects.filter(Entry__in=rest).all())
                 dfrm = concat((dfrm, rest_df), ignore_index=True, sort=False)
         return dfrm

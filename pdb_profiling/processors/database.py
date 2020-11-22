@@ -4,8 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-09-27 03:18:19 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from asyncio import sleep as asyncio_sleep, Queue
-from queue import Queue
+from asyncio import sleep as asyncio_sleep
 import databases
 import orm
 import sqlalchemy
@@ -14,6 +13,7 @@ from unsync import unsync
 from typing import Dict, Iterable
 from pdb_profiling.log import Abclog
 from random import uniform
+# from queue import Queue
 
 
 class SqliteDB(Abclog):
@@ -50,14 +50,8 @@ class SqliteDB(Abclog):
     async def async_insert_queue(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE", insert_sleep: float = 30.5):
         self.queue.put_nowait(self.database.execute(table.__table__.insert().values(values).prefix_with(prefix_with)))
         now_task = self.queue.get_nowait()
-        while True:
-            try:
-                await now_task
-                self.queue.task_done()
-                break
-            except OperationalError as e:
-                self.logger.error(f"{e}, sleep {insert_sleep}s and try again")
-                await asyncio_sleep(insert_sleep)
+        await now_task
+        self.queue.task_done()
     '''
 
     @unsync
