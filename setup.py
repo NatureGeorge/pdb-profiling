@@ -16,6 +16,7 @@ setup(
     version=pdb_profiling.__version__,
 
     packages=find_namespace_packages(),
+    entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
         'aiosqlite>=0.13.0',
         'aioftp>=0.15.0',

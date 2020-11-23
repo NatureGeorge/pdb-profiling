@@ -16,7 +16,6 @@ from re import compile as re_compile
 import orjson as json
 from zlib import compress, decompress
 from bisect import bisect_left
-from functools import reduce
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
 from pdb_profiling.processors.pdbe import default_id_tag
@@ -30,8 +29,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  overlap_range, flat_dict_in_df,
                                  get_diff_index, get_seq_seg,
                                  get_gap_list,get_range_diff,
-                                 outside_range_len,add_range,
-                                 subtract_range, select_range,
+                                 add_range, subtract_range, select_range,
                                  interval2set, expand_interval,
                                  lyst2range, select_ho_range,
                                  select_he_range, init_folder_from_suffixes,
@@ -700,6 +698,7 @@ class PDB(Base):
                 await self.sqlite_api.async_insert(self.sqlite_api.StatsNucleotideEntitySeq, store)
         return store
 
+    '''
     @unsync
     async def stats_poly_chain_obs_seq(self):
         store = defaultdict(list)
@@ -711,6 +710,7 @@ class PDB(Base):
         c_df = await self.fetch_from_web_api('api/pdb/entry/polymer_coverage/', Base.to_dataframe)
         c_df.apply(regist_info, axis=1)
         return [self.StatsChainSeq(*key, value, range_len(value)) for key, value in store.items()]
+    '''
     
     @staticmethod
     def ret_obs_res(value):

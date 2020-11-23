@@ -239,41 +239,6 @@ def init_db(ctx, db, dropall, remotedburl, remotedbuser, remotedbpass, concurreq
         ctx.obj['Neo4j_API'] = Neo4j_API
 
 
-@Interface.command("DB.insert-sites-info")
-@click.option("--input", help="the file that contains sites info", type=click.Path())
-@click.option("--sep", default="\t", help="the seperator of input file", type=str)
-@click.option("--usecols", default='from_id,Ref,Pos,Alt', help="The comma-sep columns of site info", type=str)
-@click.option('--readchunk', type=int, help="the chunksize parameter of pandas.read_csv", default=100000)
-@click.option('--nrows', type=int, help="the nrows parameter of pandas.read_csv", default=None)
-@click.option('--skiprows', type=int, help="the skiprows parameter of pandas.read_csv", default=None)
-@click.option('--functionfile', help="the py file that contains custom function", default=None, type=click.Path())
-@click.option('--functionname', default='do_something', type=str)
-@click.pass_context
-def insert_sites(ctx, input, sep, usecols, readchunk, nrows, skiprows, functionfile, functionname):
-    def do_nothing(dfrm):
-        return dfrm.to_dict('records')
-    
-    click.echo(colorClick("DB Insertions"))
-    usecols = usecols.split(',')
-    if functionfile is not None:
-        spec = imp_util.spec_from_file_location("CustomFunc", functionfile)
-        CustomFunc = imp_util.module_from_spec(spec)
-        spec.loader.exec_module(CustomFunc)
-        deal = getattr(CustomFunc, functionname)
-        click.echo(f"Success: load func: {functionname} from {functionfile}")
-    else:
-        deal = do_nothing
-    df = read_csv(input, sep=sep, usecols=usecols, chunksize=readchunk,
-                  nrows=nrows, skiprows=skiprows)
-    sqlite_api = ctx.obj['sqlite_api']
-    start = 0
-    for index, dfrm in enumerate(df):
-        end = readchunk*(index+1)
-        click.echo(f"Try to insert: {start}-{end}")
-        start = end+1
-        sqlite_api.sync_insert(sqlite_api.Site_Info, deal(dfrm))
-
-
 @Interface.command("DB.GraphDB.unp-to-pdb")
 @click.option("--input", default="", help="the file of UniProt Mapping result", type=click.Path())
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)

@@ -175,25 +175,31 @@ async def a_read_csv(path, read_mode='r',**kwargs):
     '''
     only suitable for small dataframe
     '''
-    if isinstance(path, (Coroutine, Unfuture)):
-        path = await path
-    if isinstance(path, (Path, str)):
-        async with aiofiles_open(path, read_mode) as file_io:
-            with StringIO(await file_io.read()) as text_io:
-                return read_csv(text_io, **kwargs)
-    elif isinstance(path, DataFrame):
-        return path
-    else:
-        return DataFrame(path, columns=kwargs.get('columns', None))
+    try:
+        if isinstance(path, (Coroutine, Unfuture)):
+            path = await path
+        if isinstance(path, (Path, str)):
+            async with aiofiles_open(path, read_mode) as file_io:
+                with StringIO(await file_io.read()) as text_io:
+                    return read_csv(text_io, **kwargs)
+        elif isinstance(path, DataFrame):
+            return path
+        else:
+            return DataFrame(path, columns=kwargs.get('columns', None))
+    except Exception:
+        raise ValueError(f'{path}')
 
 
 async def a_load_json(path):
-    if isinstance(path, (Coroutine, Unfuture)):
-        path = await path
-    if path is None:
-        return None
-    async with aiofiles_open(path) as inFile:
-        return json.loads(await inFile.read())
+    try:
+        if isinstance(path, (Coroutine, Unfuture)):
+            path = await path
+        if path is None:
+            return None
+        async with aiofiles_open(path) as inFile:
+            return json.loads(await inFile.read())
+    except Exception:
+        raise ValueError(str(path))
 
 
 async def pipe_out(df, path, **kwargs):

@@ -10,6 +10,7 @@ from pathlib import Path
 from pandas import DataFrame, concat, isna, Series
 from numpy import nan
 from re import compile as re_compile
+from cachetools import LRUCache
 from pdb_profiling.utils import init_folder_from_suffix, a_concat, a_read_csv
 from pdb_profiling.processors.uniprot import UniProtDB
 from pdb_profiling.processors.uniprot.api import UniProtAPI
@@ -22,6 +23,12 @@ class UniProts(object):
     pattern_iso_keyValue = re_compile(r"([^=]+)=([^;]+);\s+")
     pattern_inDel = re_compile(r"([A-z]+)\s->\s([A-z]+)")
     
+    tasks = LRUCache(maxsize=1024)
+
+    @classmethod
+    def register_task(cls, key, task):
+        cls.tasks[key] = task
+
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
         cls.sqlite_api = UniProtDB("sqlite:///%s" % (init_folder_from_suffix(folder, 'local_db')/"uniprot.db"))
@@ -134,7 +141,7 @@ class UniProts(object):
     def deal_with_alternative_seq(cls, dfrm):
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
-        assert frozenset(dfrm.columns) >= frozenset(("Entry", "Alternative sequence"))
+        assert frozenset(dfrm.columns) >= frozenset(("Entry", "Alternative sequence")), str(dfrm.columns)
         if all(dfrm['Alternative sequence'].isnull()):
             return
         dfrm['Alternative sequence'] = dfrm.apply(lambda x: x['Alternative sequence'].replace("VAR_SEQ", f"{x['Entry']}:VAR_SEQ") if not isna(x['Alternative sequence']) else nan, axis=1)
@@ -179,6 +186,9 @@ class UniProts(object):
     @classmethod
     @unsync
     async def fetch_VAR_SEQ_from_DB(cls, accessions, name='VAR_SEQ', **kwargs):
+        task = cls.tasks.get(('fetch_VAR_SEQ_from_DB', tuple(accessions)), None)
+        if task is not None:
+            return task
         res = await cls.sqlite_api.VAR_SEQ.objects.filter(Entry__in=accessions).all()
         if len(res) == 0:
             await cls.fetch_VAR_SEQ_to_DB(accessions, name, **kwargs)
@@ -190,6 +200,7 @@ class UniProts(object):
                 await cls.fetch_VAR_SEQ_to_DB(rest, name, **kwargs)
                 rest_df = DataFrame(await cls.sqlite_api.VAR_SEQ.objects.filter(Entry__in=rest).all())
                 dfrm = concat((dfrm, rest_df), ignore_index=True, sort=False)
+        cls.register_task(('fetch_VAR_SEQ_from_DB', tuple(accessions)), dfrm)
         return dfrm
         
         

@@ -26,12 +26,16 @@ def test_identifiers():
     demo.fetch('map2unp').run().result()
 
 def test_uniprots_alt():
-    from pdb_profiling.processors import UniProts, Identifier
-    from pandas import concat
-    from numpy import nan
-    UniProts.fetch_VAR_SEQ_from_localDB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972')).result()
-    lyst = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092')
-    altSeq_df = UniProts.fetch_VAR_SEQ_from_localDB(lyst).result()
-    altSeq_dict = altSeq_df[altSeq_df.AltID.ne('')][["AltID", "AltLen", "AltRange"]].to_dict("list")
-    iso_df = Identifier.query_from_localDB_with_unps(lyst, 'ALTERNATIVE_PRODUCTS').result()
-    iso_df["alt_range"] = iso_df.sequence.apply(lambda x: UniProts.getAffectedInterval(*UniProts.getAltInterval_base(x, altSeq_dict)) if not isinstance(x, float) else nan)
+    from pdb_profiling.processors import UniProts, Identifiers
+    from pdb_profiling.utils import a_concat
+    UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972')).result()
+    
+    demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092')
+    Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
+
+def test_command():
+    from os import system
+    system('pdb_profiling --help')
+    system('pdb_profiling insert-mutation --help')
+    system('pdb_profiling id-mapping --help')
+    system('pdb_profiling sifts-mapping --help')

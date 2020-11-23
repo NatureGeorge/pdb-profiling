@@ -22,6 +22,7 @@ from collections import OrderedDict
 class Identifier(Abclog):
     suffix = r'[0-9]+)[\.]*([0-9]*)'
     pats = OrderedDict({
+        ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_{%s}' % suffix),
         ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
         ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
         ('Ensembl', 'gene'): re_compile(f'(ENSG{suffix}'),
@@ -186,10 +187,11 @@ class Identifier(Abclog):
     @unsync
     async def get_all_level_identifiers(self):
         try:
+            cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
             return dict(zip(('protein', 'transcript', 'gene'), await self.sqlite_api.database.fetch_one(
                 query=f"""
                     SELECT protein,transcript,gene FROM dbReferences
-                    WHERE type == '{self.source}' AND {self.level} == '{self.raw_identifier}'""")))
+                    WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")))
         except TypeError:
             return
 
@@ -198,10 +200,11 @@ class Identifier(Abclog):
         '''
         return accession, UniProt Isoform, is_canonical
         '''
+        cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
         res = await self.sqlite_api.database.fetch_one(
             query=f"""
                 SELECT accession,isoform FROM dbReferences
-                WHERE type == '{self.source}' AND {self.level} == '{self.raw_identifier}'""")
+                WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")
         if res is None:
             return
         else:
@@ -221,7 +224,7 @@ class Identifier(Abclog):
             if sequenceStatus is None:
                 return self.raw_identifier, accession, accession, True
             else:
-                return self.raw_identifier, accession, None, True
+                return self.raw_identifier, accession, 'NaN', True
 
     @unsync
     async def fetch_sequence(self, newest: bool = True):
@@ -258,6 +261,8 @@ class Identifier(Abclog):
 
     @unsync
     async def map2unp(self, **kwargs):
+        if self.level == 'model' or self.source == 'UniProt':
+            return
         try:
             res = await self.map2unp_from_DB()
         except AssertionError:
