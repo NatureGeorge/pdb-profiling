@@ -79,7 +79,8 @@ async def reader(url):
                     yield remain_part
             else:
                 raise Exception(
-                    "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp))
+                    "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp) + \
+                    f"\nurl={url}")
 
 
 @unsync

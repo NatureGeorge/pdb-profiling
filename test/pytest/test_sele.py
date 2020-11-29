@@ -39,3 +39,22 @@ def test_command():
     system('pdb_profiling insert-mutation --help')
     system('pdb_profiling id-mapping --help')
     system('pdb_profiling sifts-mapping --help')
+
+def test_other_api():
+    from pdb_profiling.processors import PDB
+    from pdb_profiling.processors.pdbe.api import PDBVersioned
+    pdb_ob = PDB('1a01')
+    pdb_ob.fetch_from_web_api('api/pdb/entry/secondary_structure/').result()
+    pdb_ob.fetch_from_web_api('api/pdb/entry/files/').result()
+    pdb_ob.fetch_from_web_api('graph-api/pdb/funpdbe_annotation/').result()
+    pdb_ob.fetch_from_web_api('graph-api/pdb/sequence_conservation/').result()
+    PDB('4zai').fetch_from_PDBArchive('obsolete/mmCIF/', PDB.cif2residue_listing).result()
+    pv_path = PDB.get_folder()/'pdb-versioned/entries'
+    pv_path.mkdir(parents=True, exist_ok=True)
+    PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore()).result()
+
+def test_fetch_residue_mapping():
+    from pdb_profiling.processors import SIFTS
+    pdb_ob = SIFTS('1a01')
+    pdb_ob.fetch_residue_mapping(entity_id=1, start=20, end=25).result()
+    pdb_ob.fetch_residue_mapping(entity_id=1, start=24, end=27).result()

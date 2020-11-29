@@ -8,14 +8,12 @@ import os
 from time import perf_counter
 import asyncio
 import aiohttp
-import aioftp
 import aiofiles
 from unsync import unsync, Unfuture
 from tenacity import retry, wait_random, stop_after_attempt, after_log, RetryError
 import logging
 from tqdm import tqdm
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
-from furl import furl
 from pdb_profiling.log import Abclog
 import re
 from pdb_profiling.utils import init_semaphore, unsync_wrap
@@ -84,13 +82,15 @@ class UnsyncFetch(Abclog):
     @classmethod
     @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
     async def ftp_download(cls, method: str, info: Dict, path: str):
+        from furl import furl
+        from aioftp import ClientSession as aioftp_ClientSession
         url = furl(info['url'])
         fileName = url.path.segments[-1]
         filePath = os.path.join(path, fileName)
         if cls.use_existing is True and os.path.exists(filePath) and (os.stat(filePath).st_size > 0):
             return filePath
         cls.logger.debug(f"Start to download file: {url}")  # info
-        async with aioftp.ClientSession(url.host) as session:
+        async with aioftp_ClientSession(url.host) as session:
             await session.change_directory('/'.join(url.path.segments[:-1]))
             await session.download(fileName, path) # , write_info=True
         cls.logger.debug(f"File has been saved in: {filePath}")

@@ -4,10 +4,8 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-02-11 04:22:22 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-import os
 from numpy import array, nan, count_nonzero
 import pandas as pd
-from tablib import Dataset, InvalidDimensions, UnsupportedFormat
 from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Callable, Tuple
 from json import JSONDecodeError
 import orjson as json
@@ -17,7 +15,7 @@ from collections import defaultdict
 from unsync import unsync, Unfuture
 from random import choice
 from pdb_profiling.processors.pdbe import default_id_tag
-from pdb_profiling.utils import decompression, related_dataframe, flatten_dict, pipe_out, dumpsParams
+from pdb_profiling.utils import related_dataframe, flatten_dict, pipe_out, dumpsParams
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
@@ -89,19 +87,19 @@ class ProcessPDBe(Abclog):
     use_existing: bool = False
 
     @staticmethod
-    def yieldTasks(pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 25, task_id: int = 0) -> Generator:
+    def yieldTasks(pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 25, task_id: int = 0) -> Generator:
         file_prefix = suffix.replace('/', '%')
         method = method.lower()
         if method == 'post':
             url = f'{BASE_URL}{suffix}'
             for i in range(0, len(pdbs), chunksize):
                 params = {'url': url, 'data': ','.join(pdbs[i:i+chunksize])}
-                yield method, params, os.path.join(folder, f'{file_prefix}+{task_id}+{i}.json')
+                yield method, params, folder/f'{file_prefix}+{task_id}+{i}.json'
         elif method == 'get':
             for pdb in pdbs:
                 # pdb = pdb.lower()
                 identifier = pdb.replace('/', '%')
-                yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, os.path.join(folder, f'{file_prefix}+{identifier}.json')
+                yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
         else:
             raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
 
@@ -114,7 +112,7 @@ class ProcessPDBe(Abclog):
             rate=rate)
 
     @classmethod
-    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: str, chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res:bool=True, **kwargs):
+    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res:bool=True, **kwargs):
         # t0 = time.perf_counter()
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, method, folder, chunksize, task_id), 
@@ -480,47 +478,26 @@ class PDBeModelServer(Abclog):
                 'residueSurroundings', 'symmetryMates', 'query-many'))
     
     @classmethod
-    def yieldTasks(cls, pdbs, suffix: str, method: str, folder: str, data_collection, params, filename='subset') -> Generator:
+    def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='subset'):
         if data_collection is None:
             assert method == 'get', 'Invalid method!'
-            for pdb in pdbs:
-                args = dict(
-                    url=f'{cls.root}{pdb}/{suffix}?',
-                    headers=cls.headers,
-                    params=params)
-                yield method, args, os.path.join(folder, f'{pdb}_{filename}.{params.get("encoding", "cif")}')
+            args = dict(
+                url=f'{cls.root}{pdb}/{suffix}?{dumpsParams(params)}',
+                headers=cls.headers)
         else:
             assert method == 'post', 'Invalid method!'
-            for pdb, data in zip(pdbs, data_collection):
-                args = dict(
-                    url=f'{cls.root}{pdb}/{suffix}?',
-                    headers=cls.headers,
-                    params=params,
-                    data=data)
-                yield method, args, os.path.join(folder, f'{pdb}_{filename}.{params.get("encoding", "cif")}')
+            args = dict(
+                url=f'{cls.root}{pdb}/{suffix}?{dumpsParams(params)}',
+                headers=cls.headers,
+                data=data_collection)
+        return method, args, folder/f'{pdb}_{filename}.{params.get("encoding", "cif")}'
 
     @classmethod
-    def retrieve(cls, pdbs, suffix: str, method: str, folder: str, data_collection=None, params=None, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
-        if params is None:
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, params=None, data_collection=None, rate: float = 1.5, filename='subset'):
+        if params is None or len(params) == 0:
             params = {'model_nums': 1, 'encoding': 'cif'}
-        res = UnsyncFetch.multi_tasks(
-            cls.yieldTasks(pdbs, suffix, method, folder,
-                           data_collection, params, kwargs.get('filename', 'subset')),
-            concur_req=concur_req,
-            rate=rate,
-            ret_res=ret_res,
-            semaphore=kwargs.get('semaphore', None))
-        return res
-    
-    @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, data_collection=None, params=None, rate: float = 1.5, filename='subset'):
-        if params is None:
-            params = {'encoding': 'cif'}
-        if data_collection is not None:
-            data_collection = (data_collection, )
         return UnsyncFetch.single_task(
-            task=next(cls.yieldTasks((pdb, ), suffix, method, folder,
-                                     data_collection, params, filename=filename)),
+            task=cls.task_unit(pdb, suffix, method, folder, data_collection, params, filename=filename),
             semaphore=semaphore,
             rate=rate)
 

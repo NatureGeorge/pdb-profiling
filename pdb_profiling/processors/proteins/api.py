@@ -127,7 +127,7 @@ class ProteinsAPI(Abclog):
                                 P0DTE7 (AMY1B_HUMAN)
                                 P0DTE8 (AMY1C_HUMAN)
                                 with identical sequence
-                                Causion from UniProtlKB: 'Three distinct genes (AMY1A, AMY1B and AMY1C), located in a gene cluster on 1p21, encode proteins sharing the same peptidic sequence.'
+                                Causion from UniProt-KB: 'Three distinct genes (AMY1A, AMY1B and AMY1C), located in a gene cluster on 1p21, encode proteins sharing the same peptidic sequence.'
             '''
             # raise AssertionError("With Unexpected length!")
         elif len(data) == 0:

@@ -11,7 +11,7 @@ from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
-from smart_open import open as smart_open
+from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
 from zlib import compress, decompress
@@ -41,11 +41,12 @@ from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
-from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning
+from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning, ConflictChainIDWarning
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
 from sklearn.neighbors import NearestNeighbors
+from random import choice
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -254,13 +255,13 @@ class PDB(Base):
     def get_id(self):
         return self.pdb_id
 
-    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **params):
+    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, root='random', **params):
         assert api_suffix in PDBeCoordinateServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeCoordinateServer.api_set}"
         dparams = dumpsParams(params)
-        task = self.tasks.get((repr(self), PDBeCoordinateServer.roots[0], api_suffix, dparams, then_func), None)
+        task = self.tasks.get((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), None)
         if task is not None:
             return task
-        task = PDBeCoordinateServer('random').single_retrieve(
+        task = PDBeCoordinateServer(root).single_retrieve(
             pdb_id=self.pdb_id,
             suffix=api_suffix,
             params=params,
@@ -268,12 +269,12 @@ class PDB(Base):
             semaphore=self.get_web_semaphore())
         if then_func is not None:
             task = task.then(then_func)
-        self.register_task((repr(self), PDBeCoordinateServer.roots[0], api_suffix, dparams, then_func), task)
+        self.register_task((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), task)
         return task
 
-    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, params=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, **kwargs) -> Unfuture:
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='subset', **params) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
-        dparams = dumpsParams(params) if params is not None else None
+        dparams = dumpsParams(params) if len(params) > 0 else None
         task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), None)
         if task is not None:
             return task
@@ -283,9 +284,9 @@ class PDB(Base):
             method=method,
             folder=self.get_folder()/'model-server'/api_suffix,
             semaphore=self.get_web_semaphore(),
-            data_collection=data_collection,
             params=params,
-            **kwargs)
+            data_collection=data_collection,
+            filename=filename)
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), task)
@@ -309,11 +310,12 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    def cif2atom_sites_df(cls, path: Union[Unfuture, str, Path]):
-        if isinstance(path, Unfuture):
-            path = path.result()
-        with open(path, 'rt') as handle:
-            mmcif_dict = MMCIF2DictPlus(handle)
+    async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
+        if isinstance(path, (Unfuture, Coroutine)):
+            path = await path
+        async with aiofiles_open(path, 'rt') as file_io:
+            handle = await file_io.read()
+            mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
         cols = [key for key in mmcif_dict.keys() if key.startswith('_atom_site.')]
@@ -341,7 +343,7 @@ class PDB(Base):
                     'author_insertion_code')
         if isinstance(path, (Unfuture, Coroutine)):
             path = await path
-        with smart_open(path) as handle:
+        with gzip_open(path, 'rt') as handle:
             mmcif_dict = MMCIF2DictPlus(handle, cols)
             mmcif_dict['data_'] = mmcif_dict['data_'].lower()
             dfrm = DataFrame(mmcif_dict)
@@ -358,7 +360,7 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    async def to_assg_oper_df(cls, path: Unfuture):
+    async def to_assg_oper_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
         '''
         EXAMPLE OF model_id != asym_id_rank
         
@@ -378,10 +380,11 @@ class PDB(Base):
         oper_cols = ('_pdbx_struct_oper_list.id',
                      '_pdbx_struct_oper_list.symmetry_operation',
                      '_pdbx_struct_oper_list.name')
-        async with aiofiles_open(await path, 'rt') as file_io:
+        if isinstance(path, (Unfuture, Coroutine)):
+            path = await path
+        async with aiofiles_open(path, 'rt') as file_io:
             handle = await file_io.read()
-            handle = (i+'\n' for i in handle.split('\n'))
-            mmcif_dict = MMCIF2DictPlus(handle, assg_cols+oper_cols)
+            mmcif_dict = MMCIF2DictPlus((i+'\n' for i in handle.split('\n')), assg_cols+oper_cols)
         
         if len(mmcif_dict) < 2:
             return None
@@ -425,10 +428,13 @@ class PDB(Base):
         # res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
         # assert res_dict is not None, f"{self.pdb_ob}: Unexpected Cases, without observed residues?!"
         res_dict = res_df.loc[res_df.observed_ratio.gt(0).idxmax()].to_dict()
+        '''
         demo_dict = dict(atom_site=[dict(
             label_asym_id=res_dict['struct_asym_id'],
             label_seq_id=int(res_dict['residue_number']))])
         return json.dumps(demo_dict).decode('utf-8')
+        '''
+        return {col: res_dict[col] for col in ('struct_asym_id', 'residue_number')}
 
     @classmethod
     @unsync
@@ -528,14 +534,6 @@ class PDB(Base):
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
     
-    @unsync
-    async def get_eec_as_df(self):
-        if hasattr(self, 'eec_as_df'):
-            return self.eec_as_df
-        else:
-            self.eec_as_df = await self.profile_id()
-            return self.eec_as_df
-
     @staticmethod
     def parseOperatorList(value: str) -> Iterable[Iterable[str]]:
         '''
@@ -806,39 +804,99 @@ class PDB(Base):
             raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
 
     @unsync
+    async def profile_asym_id_in_assembly_unit(self, parent, assembly_id, replace):
+        header = f'{self.pdb_id}-assembly-{assembly_id}'
+        task = self.tasks.get(header, None)
+        if task is not None:
+            return task
+        target_file = parent/f'{header}-pdbe_chain_remapping.cif'
+        if (not target_file.exists()) or replace:
+            await cif_gz_stream.writer(
+                cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
+                target_file,
+                b'data_%s\n#\nloop_\n' % bytes(header, 'utf-8'),
+                b'_pdbe_chain_remapping')
+        async with aiofiles_open(target_file, 'rt') as file_io:
+            handle = await file_io.read()
+            try:
+                cur_df = DataFrame(MMCIF2DictPlus(i+'\n' for i in handle.split('\n')))
+            except ValueError as e:
+                warn(f"{target_file}", WithoutCifKeyWarning)
+                raise e
+            cur_df['_pdbe_chain_remapping.assembly_id'] = assembly_id  # NOTE: exception: 6E5N-assembly-1
+        self.register_task(header, cur_df)
+        return cur_df
+
+    @unsync
     async def profile_asym_id_in_assembly(self, assembly_ids, replace:bool=False):
-        dfs = []
         parent = self.assembly_cif_folder/self.pdb_id[1:3]
         parent.mkdir(parents=True, exist_ok=True)
-        for assembly_id in assembly_ids:
-            header = f'{self.pdb_id}-assembly-{assembly_id}'
-            target_file = parent/f'{header}-pdbe_chain_remapping.cif'
-            if (not target_file.exists()) or replace:
-                await cif_gz_stream.writer(
-                    cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
-                    target_file,
-                    b'data_%s\n#\nloop_\n' % bytes(header, 'utf-8'),
-                    b'_pdbe_chain_remapping'
-                    )
-            async with aiofiles_open(target_file, 'rt') as file_io:
-                handle = await file_io.read()
-                handle = (i+'\n' for i in handle.split('\n'))
-                try:
-                    cur_df = DataFrame(MMCIF2DictPlus(handle))
-                except ValueError as e:
-                    warn(f"{target_file}", WithoutCifKeyWarning)
-                    raise e
-                cur_df['_pdbe_chain_remapping.assembly_id'] = assembly_id  # NOTE: exception: 6E5N-assembly-1
-                dfs.append(cur_df)
+        dfs = [await self.profile_asym_id_in_assembly_unit(parent, assembly_id, replace) for assembly_id in assembly_ids]
         return concat(dfs, ignore_index=True, sort=False)
 
     @unsync
+    async def ms_source_ass_oper_df(self, struct_asym_id, residue_number):
+        assg_oper_df = await self.fetch_from_modelServer_api('atoms',
+            data_collection=json.dumps(dict(atom_site=[dict(
+                label_asym_id=struct_asym_id,
+                label_seq_id=int(residue_number))])).decode('utf-8'),
+            then_func=PDB.to_assg_oper_df)
+        return assg_oper_df
+    
+    @unsync
+    async def cs_source_ass_oper_df(self, struct_asym_id, residue_number):
+        assg_oper_df = await self.fetch_from_coordinateServer_api(
+            'residues', 
+            then_func=PDB.to_assg_oper_df,
+            root='ebi',
+            asymId=struct_asym_id, 
+            seqNumber=int(residue_number), 
+            modelId=1)
+        return assg_oper_df
+    
+    @unsync
+    async def set_subset_assembly_from_df(self, profile_id_df, **kwargs):
+        mask = profile_id_df.assembly_id.ne(0)
+        if not any(mask):
+            self.subset_assembly = frozenset()
+        else:
+            if not hasattr(self, 'assembly'):
+                await self.set_assembly(**kwargs)
+            to_fetch_assembly = profile_id_df[
+                mask & 
+                profile_id_df.symmetry_id.ne('["1_555"]') &
+                profile_id_df.assembly_id.isin(self.assembly.keys())
+                ].assembly_id.unique()
+            self.subset_assembly = frozenset(profile_id_df.assembly_id) - frozenset(to_fetch_assembly) - {0}
+            self.subset_assembly = {ass: profile_id_df[profile_id_df.assembly_id.eq(ass)].struct_asym_id.tolist() for ass in self.subset_assembly}
+
+    @unsync
+    async def profile_id_from_DB(self, **kwargs):
+        task = self.tasks.get((repr(self), 'profile_id'), None)
+        if task is None:
+            task = await self.sqlite_api.profile_id.objects.filter(pdb_id=self.pdb_id).all()
+            if not task:
+                return
+            task = DataFrame(task).sort_values(['assembly_id', 'model_id', 'entity_id', 'struct_asym_id'])
+        if not hasattr(self, 'subset_assembly'):
+            await self.set_subset_assembly_from_df(task, **kwargs)
+        self.register_task((repr(self), 'profile_id'), task)
+        return task
+    
+    @unsync
     async def profile_id(self, **kwargs):
-        '''except water'''
-        assg_oper_df = await self.fetch_from_modelServer_api(
-                'atoms',
-                data_collection=await self.pipe_assg_data_collection(), 
-                then_func=PDB.to_assg_oper_df)
+        '''
+        NOTE: except water
+        TODO: CLEAN CODE
+              PISA DB
+        '''
+        profile_id_df = await self.profile_id_from_DB(**kwargs)
+        if profile_id_df is not None:
+            return profile_id_df
+        
+        demo_dict = await self.pipe_assg_data_collection()
+        assg_oper_df = await (choice((self.ms_source_ass_oper_df, self.cs_source_ass_oper_df))(**demo_dict))
+        # assg_oper_df = await self.ms_source_ass_oper_df(**demo_dict)
         res2eec_df = await self.get_res2eec_df()
         focus_res2eec_df = res2eec_df[['pdb_id', 'entity_id', 'molecule_type', 'chain_id', 'struct_asym_id']]
         add_0_assg_oper_df = focus_res2eec_df.copy()
@@ -860,6 +918,8 @@ class PDB(Base):
             add_0_assg_oper_df['struct_asym_id_in_assembly'] = add_0_assg_oper_df.struct_asym_id
             add_0_assg_oper_df['details'] = 'asymmetric_unit'
             self.subset_assembly = frozenset()
+            await self.sqlite_api.async_insert(self.sqlite_api.profile_id, add_0_assg_oper_df.to_dict('records'))
+            self.register_task((repr(self), 'profile_id'), add_0_assg_oper_df)
             return add_0_assg_oper_df
         
         to_fetch_assembly = new_focus_assg_oper_df[
@@ -883,7 +943,7 @@ class PDB(Base):
             profile_id_df = new_focus_assg_oper_df.merge(in_ass_df, how='left')
             self.subset_assembly = frozenset(profile_id_df.assembly_id)-frozenset(to_fetch_assembly)
             rest = frozenset(profile_id_df[profile_id_df.struct_asym_id_in_assembly.isnull()].assembly_id)
-            assert rest == self.subset_assembly, f"\n{rest}\n{self.subset_assembly}\n{to_fetch_assembly}"
+            assert rest == self.subset_assembly, f"{repr(self)}\n{rest}\n{self.subset_assembly}\n{to_fetch_assembly}"
             a0_index = profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index
             self.subset_assembly = self.subset_assembly - {0}
             profile_id_df.loc[a0_index, 'struct_asym_id_in_assembly'] = profile_id_df.loc[a0_index, 'struct_asym_id']
@@ -905,6 +965,8 @@ class PDB(Base):
             assert profile_lyst == ass_lyst, f"\n{self.pdb_id}\n{assembly_id}\n{entity_id}\n{profile_lyst},\n{ass_lyst}"
         profile_id_df = profile_id_df.merge(ass_df[['assembly_id', 'details']].drop_duplicates(), how='left')
         profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.eq(0)].index, 'details'] = 'asymmetric_unit'
+        await self.sqlite_api.async_insert(self.sqlite_api.profile_id, profile_id_df.to_dict('records'))
+        self.register_task((repr(self), 'profile_id'), profile_id_df)
         return profile_id_df
     
     @unsync
@@ -981,7 +1043,9 @@ class PDB(Base):
                 return ret
 
     async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, discard_multimer_chains_cutoff_for_au=None, **kwargs):
+        chain_pairs = chain_pairs[self.pdb_id]
         await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
+        res = []
         for assembly in self.assembly.values():
             await getattr(assembly, func)(**kwargs)
             if len(assembly.interface) == 0:
@@ -1002,7 +1066,8 @@ class PDB(Base):
                 cur_chain_pairs = chain_pairs
             for interface in assembly.interface.values():
                 if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
-                    yield await interface.get_interface_res_dict()
+                    res.append(await interface.get_interface_res_dict())
+        return res
 
     @staticmethod
     @unsync
@@ -1142,7 +1207,7 @@ class PDBAssemble(PDB):
 
     @unsync
     async def set_assemble_eec_as_df(self):
-        eec_as_df = await self.pdb_ob.get_eec_as_df()
+        eec_as_df = await self.pdb_ob.profile_id()
         assert self.assembly_id in eec_as_df.assembly_id, f"{repr(self)}: Invalid assembly_id!"
         self.assemble_eec_as_df = eec_as_df[eec_as_df.assembly_id.eq(self.assembly_id)]
     
@@ -1169,11 +1234,11 @@ class PDBAssemble(PDB):
         '''
         
         eec_as_df = await self.get_assemble_eec_as_df()
+        eec_as_df = eec_as_df[eec_as_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))]
         if len(eec_as_df) == 1:
             self.interface = dict()
             return
-        protein_type_asym = eec_as_df[
-            eec_as_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))].struct_asym_id_in_assembly
+        protein_type_asym = eec_as_df.struct_asym_id_in_assembly
         self.interface_filters['struct_asym_id_in_assembly_1'] = ('isin', protein_type_asym)
         self.interface_filters['struct_asym_id_in_assembly_2'] = ('isin', protein_type_asym)
         await self.set_interface()
@@ -1181,6 +1246,7 @@ class PDBAssemble(PDB):
     @unsync
     async def pipe_protein_else_interface(self, molecule_types, allow_same_class_interaction=False):
         eec_as_df = await self.get_assemble_eec_as_df()
+        eec_as_df = eec_as_df[eec_as_df.molecule_type.isin(frozenset({'polypeptide(L)', 'polypeptide(D)'}) | frozenset(molecule_types))]
         if len(eec_as_df) == 1:
             self.interface = dict()
             return
@@ -1287,6 +1353,21 @@ class PDBInterface(PDBAssemble):
 
     @unsync
     async def set_interface_res(self, keep_interface_res_df:bool=False):
+        run_following = False
+        task = self.tasks.get((repr(self), 'PISAInterfaceDict'), None)
+        if task is None:
+            res = await self.sqlite_api.PISAInterfaceDict.objects.filter(pdb_id=self.pdb_id, assembly_id=self.assembly_id, interface_id=self.interface_id).all()
+            if len(res) == 1:
+                self.interface_res_dict = res[0]
+                self.register_task((repr(self), 'PISAInterfaceDict'), self.interface_res_dict)
+            elif len(res) > 1:
+                raise AssertionError(f"{repr(self)}: Unexpected length of {res}")
+            else:
+                run_following = True
+        else:
+            self.interface_res_dict = task
+        if not run_following and not keep_interface_res_df:
+            return
         try:
             interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
         except WithoutExpectedKeyError:
@@ -1311,6 +1392,8 @@ class PDBInterface(PDBAssemble):
         interfacedetail_df = interfacedetail_df.merge(res_df, how="left")
         if keep_interface_res_df:
             self.interface_res_df = interfacedetail_df
+            if hasattr(self, 'interface_res_dict'):
+                return
         # NOTE: Not rigorous filter for multiple_conformers
         check_merge = interfacedetail_df.residue_number.isnull()
         check_mc = interfacedetail_df.author_residue_number < 0
@@ -1367,6 +1450,9 @@ class PDBInterface(PDBAssemble):
             record_dict[key] = records[0][key]
         record_dict['use_au'] = self.use_au
         self.interface_res_dict = record_dict
+        self.register_task((repr(self), 'PISAInterfaceDict'), record_dict)
+        # self.sqlite_api.sync_insert(self.sqlite_api.PISAInterfaceDict, [record_dict])
+        # await self.sqlite_api.PISAInterfaceDict.objects.create(**record_dict)
 
     @unsync
     async def get_interface_res_df(self):
@@ -1809,14 +1895,19 @@ class SIFTS(PDB):
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, check_pdb_status:bool=False):
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None):
         if sifts_df is None:
             init_task = self.fetch_from_web_api('api/mappings/all_isoforms/', Base.to_dataframe)
             if check_pdb_status:
                 init_task = await self.check_pdb_status(init_task)
             else:
                 init_task = await init_task
-            if init_task is None: return
+            if init_task is None:
+                return
+            elif skip_pdbs is not None:
+                init_task = init_task[~init_task.pdb_id.isin(skip_pdbs)].reset_index(drop=True)
+                if len(init_task) == 0:
+                    return
             if complete_chains:
                 init_task = await self.complete_chains(init_task)
             sifts_df = await self.reformat(init_task
@@ -1844,14 +1935,15 @@ class SIFTS(PDB):
         aligned_unequal_score = 0
         conflict_pdb_index = json.loads(conflict_pdb_index) if isinstance(conflict_pdb_index, str) else conflict_pdb_index
         raw_pdb_index = json.loads(raw_pdb_index) if isinstance(raw_pdb_index, str) else raw_pdb_index
+        non_set = frozenset(expand_interval(NON_INDEX))
         for i in expand_interval(aligned_unequal_range):
             unp_aa = conflict_pdb_index.get(i, None)
             pdb_aa = raw_pdb_index.get(i, None)
-            if (unp_aa is not None) and (unp_aa != pdb_aa):
-                # Conflict | (Modified & Conflict) Residues are fall into here
+            if (i not in non_set) and (unp_aa is not None) and (unp_aa != pdb_aa):
+                # NOT Modified & Conflict Residues are fall into here
                 theta = miyata_similarity_matrix.get((unp_aa, pdb_aa), miyata_similarity_matrix.get((pdb_aa, unp_aa), -3.104))
             else:
-                # UNK | (Modified Residue & NOT Conflict)
+                # UNK | Modified Residue
                 theta = -3.104
             aligned_unequal_score += OBS_RATIO_ARRAY[i-1]*(theta+1)
         
@@ -1903,15 +1995,27 @@ class SIFTS(PDB):
     @classmethod
     @unsync
     async def clostest_distance_sum(cls, pdb_id, struct_asym_id, residue_number, radius=5, modelId=1, d=10):
-        df = await PDB(pdb_id).fetch_from_coordinateServer_api(
-            'ambientResidues', then_func=PDB.cif2atom_sites_df,
-            asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
-        # df['_atom_site.label_asym_id'].eq(struct_asym_id) &
-        df = df[df['_atom_site.label_comp_id'].ne('HOH')].reset_index(drop=True)
+        try:
+            df = await PDB(pdb_id).fetch_from_coordinateServer_api(
+                'ambientResidues', then_func=PDB.cif2atom_sites_df,
+                asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+        except TypeError:
+            df = None
+        if df is None:
+            try:
+                df = await PDB(pdb_id).fetch_from_coordinateServer_api(
+                    'ambientResidues', then_func=PDB.cif2atom_sites_df, root='ebi',
+                    asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+            except TypeError:
+                raise AssertionError(f"{pdb_id} {struct_asym_id} {residue_number}")
+        df = df[df['_atom_site.label_comp_id'].ne('HOH') & df['_atom_site.type_symbol'].ne('H')].reset_index(drop=True)
         for col in ('_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z'):
             df[col] = df[col].astype(float)
-        # df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(int)
-        # assert all(~df['_atom_site.label_seq_id'].eq('.')), f"{pdb_id} {struct_asym_id} {residue_number}"
+        '''
+        # for some ligand | carbohydrate
+        df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(int)
+        assert all(~df['_atom_site.label_seq_id'].eq('.')), f"{pdb_id} {struct_asym_id} {residue_number}"
+        '''
         coordinates_dict = cls.get_coordinates_dict(df)
         nbrs = NearestNeighbors(n_neighbors=1).fit(coordinates_dict[(struct_asym_id, str(residue_number))])
         total = 0
@@ -1969,9 +2073,18 @@ class SIFTS(PDB):
         def raw_score_ig3(vec): return dot(vec, weight_ig3)
 
         full_df = sifts_df.merge(pec_df)
-        assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
-        # {full_df.duplicated(subset=['UniProt','pdb_id','struct_asym_id'], keep=False)}
-        # f"{pec_df[pec_df.pdb_id.eq('6mzl')]}"
+        try:
+            assert sifts_df.shape[0] == full_df.shape[0]
+            # {full_df.duplicated(subset=['UniProt','pdb_id','struct_asym_id'], keep=False)}
+            # f"{pec_df[pec_df.pdb_id.eq('6mzl')]}"
+            '''
+            FOR O00330 1zy8 struct_asym_id O
+            '''
+        except AssertionError:
+            warn(f"{repr(self)}: {sifts_df.shape}, {full_df.shape}", ConflictChainIDWarning)
+            full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
+            assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
+        
         cols = ['pdb_id', 'struct_asym_id', 'new_pdb_range', 'new_unp_range', 'conflict_pdb_range', 'conflict_pdb_index',
                 'raw_pdb_index', 'SEQRES_COUNT', 'ARTIFACT_INDEX', 'OBS_INDEX', 'NON_INDEX', 'OBS_RATIO_ARRAY']
         # tasks = full_df[cols].agg(self.bs_score_base, axis=1).tolist()
@@ -2129,6 +2242,7 @@ class SIFTS(PDB):
         assert all((i3d_df.struct_asym_id_1 < i3d_df.struct_asym_id_2) | ((i3d_df.struct_asym_id_1 == i3d_df.struct_asym_id_2) & (i3d_df.model_id_1 < i3d_df.model_id_2)))
         return i3d_df
 
+    '''
     @staticmethod
     async def pipe_interface_res_dict(p_df, pdb_id):
         chain_pairs = p_df[p_df.pdb_id.eq(pdb_id)][['struct_asym_id_1', 'struct_asym_id_2']].apply(frozenset, axis=1).to_list()
@@ -2142,10 +2256,11 @@ class SIFTS(PDB):
                         yield await interface.get_interface_res_dict()
             except Exception:
                 pass
+    '''
 
     @unsync
-    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, check_pdb_status=check_pdb_status)
+    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, check_pdb_status:bool=False, skip_pdbs=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, check_pdb_status=check_pdb_status, skip_pdbs=skip_pdbs)
         if sele_df is None:
             return
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
@@ -2197,8 +2312,8 @@ class SIFTS(PDB):
             return self.select_ho(p_df, interface_mapped_cov_cutoff, unp_range_DSC_cutoff, wasserstein_distance_cutoff)
 
     @unsync
-    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status)
+    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, skip_pdbs=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status, skip_pdbs=skip_pdbs)
         if sele_df is None:
             return
         sele_df = sele_df[sele_df.Entry.eq(self.identifier.split('-')[0])]
@@ -2219,16 +2334,11 @@ class SIFTS(PDB):
             return
         else:
             p_df = self.select_ho_iso(p_df, interface_mapped_cov_cutoff, DSC_cutoff)
-            return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df
-    
-    @staticmethod
-    @unsync
-    async def pird_task_unit(pdb_id, chain_pairs, **kwargs):
-        return [i async for i in PDB(pdb_id).pipe_interface_res_dict(chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)]
+            return (await self.sort_interact_cols(p_df)) if then_sort_interact else p_df    
 
     @unsync
-    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status)
+    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, check_pdb_status:bool=False, skip_pdbs=None, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status, skip_pdbs=skip_pdbs)
         if sele_df is None:
             return
         if len(sele_df.Entry.unique()) == 1:
@@ -2334,18 +2444,15 @@ class SIFTS(PDB):
 
     @unsync
     async def integrate_i3d_with_pisa_interact(self, sele_df, chain_pairs, interaction_type:str, run_as_completed:bool=False, progress_bar=None, **kwargs):
-        tasks = [self.pird_task_unit(pdb_id, chain_pairs[pdb_id], **kwargs) for pdb_id in chain_pairs.index]
+        ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_dict', chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)
         if run_as_completed:
-            if progress_bar is not None:
-                iter_ob = progress_bar(as_completed(tasks), total=len(tasks))
-            else:
-                iter_ob = as_completed(tasks)
+            res = await ob.run(tqdm=progress_bar)
         else:
-            iter_ob = tasks
-        res = [await i for i in iter_ob]
+            res = [await i for i in ob.tasks]
         interact_df = DataFrame(j for i in res for j in i if j is not None)
         if len(interact_df) == 0:
             return
+        await self.sqlite_api.async_insert(self.sqlite_api.PISAInterfaceDict, interact_df.to_dict('records'))
         '''
         NOTE: exception case: 5b0y (see api%pisa%interfacelist%+5b0y%0.tsv)
 
@@ -2427,11 +2534,11 @@ class PDBs(tuple):
         data = summary_data[pdb_ob.pdb_id][0]
         return pdb_ob.pdb_id, data['revision_date'], data['deposition_date']
     
-    def fetch(self, func:Union[Callable[[PDB], List], str], **kwargs):
-        if isinstance(func, str):
-            self.tasks = [getattr(pdb_ob, func)(**kwargs) for pdb_ob in self]
+    def fetch(self, fetch_func:Union[Callable[[PDB], List], str], **kwargs):
+        if isinstance(fetch_func, str):
+            self.tasks = [getattr(pdb_ob, fetch_func)(**kwargs) for pdb_ob in self]
         else:
-            self.tasks = [func(pdb_ob, **kwargs) for pdb_ob in self]
+            self.tasks = [fetch_func(pdb_ob, **kwargs) for pdb_ob in self]
         return self
 
     @unsync

@@ -14,7 +14,6 @@ import numpy as np
 from pathlib import Path
 from aiofiles import open as aiofiles_open
 from re import compile as re_compile
-from tablib import Dataset
 from pyexcel import Sheet
 import asyncio
 from unsync import unsync, Unfuture
@@ -107,6 +106,7 @@ async def init_semaphore(concurreq) -> Unfuture:
     return asyncio.Semaphore(concurreq)
 
 
+'''
 def decompression(path: str, extension: str =".gz", remove: bool =True, outputPath: Optional[str] = None, logger: Optional[Logger] = None):
     """
     Decompress gz file
@@ -137,6 +137,7 @@ def decompression(path: str, extension: str =".gz", remove: bool =True, outputPa
             logger.error(e)
 
     return outputPath
+'''
 
 
 def related_dataframe(filters: Optional[Union[Dict, Iterable[Tuple]]] = None, dfrm: Optional[DataFrame] = None, path: Union[str, Path, None] = None, sep: str = '\t', **kwargs):
@@ -203,7 +204,7 @@ async def a_load_json(path):
 
 
 async def pipe_out(df, path, **kwargs):
-    if not isinstance(df, (DataFrame, Dataset, Sheet)):
+    if not isinstance(df, Sheet):
         raise TypeError(f"Invalid Object for pipe_out(): {type(df)}")
     if len(df) == 0:
         raise ValueError("Zero record!")
@@ -212,6 +213,7 @@ async def pipe_out(df, path, **kwargs):
     clear_headers:bool = path.exists() and mode.startswith('a')
     var_format = kwargs.get('format', 'tsv').lower()
     async with aiofiles_open(path, mode) as file_io:
+        """
         if isinstance(df, DataFrame):
             sorted_col = sorted(df.columns)
             if clear_headers:
@@ -225,13 +227,11 @@ async def pipe_out(df, path, **kwargs):
             if clear_headers:
                 df.headers = None
             to_write = df.export(var_format, lineterminator='\n')
-        elif isinstance(df, Sheet):
-            df = df.project(sorted(df.colnames))
-            if clear_headers:
-                df.colnames = []
-            to_write = getattr(df, f"get_{var_format}")(lineterminator='\n')
-        else:
-            pass
+        """
+        df = df.project(sorted(df.colnames))
+        if clear_headers:
+            df.colnames = []
+        to_write = getattr(df, f"get_{var_format}")(lineterminator='\n')
         await file_io.write(to_write)
 
 

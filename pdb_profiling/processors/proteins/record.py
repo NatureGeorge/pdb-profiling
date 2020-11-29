@@ -22,7 +22,7 @@ from collections import OrderedDict
 class Identifier(Abclog):
     suffix = r'[0-9]+)[\.]*([0-9]*)'
     pats = OrderedDict({
-        ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_{%s}' % suffix),
+        ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_%s' % suffix),
         ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
         ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
         ('Ensembl', 'gene'): re_compile(f'(ENSG{suffix}'),
@@ -206,7 +206,7 @@ class Identifier(Abclog):
                 SELECT accession,isoform FROM dbReferences
                 WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")
         if res is None:
-            return
+            return self.raw_identifier, 'NaN', 'NaN', False
         else:
             accession, isoform = res
         if isoform is not None:
@@ -261,8 +261,10 @@ class Identifier(Abclog):
 
     @unsync
     async def map2unp(self, **kwargs):
-        if self.level == 'model' or self.source == 'UniProt':
-            return
+        if self.level == 'model':
+            return self.raw_identifier, 'NaN', 'NaN', False
+        elif self.source == 'UniProt':
+            return self.raw_identifier, self.identifier, self.raw_identifier, (self.raw_identifier == self.identifier)
         try:
             res = await self.map2unp_from_DB()
         except AssertionError:

@@ -102,7 +102,56 @@ class PDBeDB(SqliteDB):
             BINDING_LIGAND_INDEX = orm.JSON()
             BINDING_LIGAND_COUNT = orm.Integer()
 
+        class profile_id(orm.Model):
+            __tablename__ = 'profile_id'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            molecule_type = orm.Text()  # redundant
+            chain_id = orm.String(max_length=10)  # redundant
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            assembly_id = orm.Integer(primary_key=True)
+            model_id = orm.Integer()
+            asym_id_rank = orm.Integer()
+            oper_expression = orm.Text(allow_blank=True)
+            symmetry_operation = orm.Text(allow_blank=True)
+            symmetry_id = orm.Text(allow_blank=True)
+            struct_asym_id_in_assembly = orm.Integer(primary_key=True)
+            au_subset = orm.Boolean()
+            details = orm.Text()
+        
+        
+        class PISAInterfaceDict(orm.Model):
+            __tablename__ = 'PISAInterface'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            entity_id_1 = orm.Integer()
+            chain_id_1 = orm.String(max_length=50)
+            struct_asym_id_1 = orm.String(max_length=50)
+            struct_asym_id_in_assembly_1 = orm.String(max_length=50)
+            asym_id_rank_1 = orm.Integer()
+            model_id_1 = orm.Integer()
+            molecule_type_1 = orm.Text()
+            surface_range_1 = orm.JSON(allow_null=True)
+            interface_range_1 = orm.JSON(allow_null=True)
+            entity_id_2 = orm.Integer()
+            chain_id_2 = orm.String(max_length=50)
+            struct_asym_id_2 = orm.String(max_length=50)
+            struct_asym_id_in_assembly_2 = orm.String(max_length=50)
+            asym_id_rank_2 = orm.Integer()
+            model_id_2 = orm.Integer()
+            molecule_type_2 = orm.Text()
+            surface_range_2 = orm.JSON(allow_null=True)
+            interface_range_2 = orm.JSON(allow_null=True)
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            assembly_id = orm.Integer(primary_key=True)
+            interface_id = orm.Integer(primary_key=True)
+            use_au = orm.Boolean()
+
         self.ResidueMapping = ResidueMapping
         self.StatsProteinEntitySeq = StatsProteinEntitySeq
         self.StatsNucleotideEntitySeq = StatsNucleotideEntitySeq
         self.StatsChainSeq = StatsChainSeq
+        self.profile_id = profile_id
+        self.PISAInterfaceDict = PISAInterfaceDict

@@ -19,3 +19,7 @@ class PISAErrorWarning(UserWarning):
 
 class MultipleConformersWarning(UserWarning):
     pass
+
+
+class ConflictChainIDWarning(UserWarning):
+    pass

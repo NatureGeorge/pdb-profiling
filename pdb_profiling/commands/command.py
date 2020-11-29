@@ -77,18 +77,21 @@ def insert_sites(ctx, input, sep, usecols, readchunk, nrows, skiprows, functionf
 def id_mapping(ctx, chunksize):
     sqlite_api = ctx.obj['custom_db']
     total = unsync_run(sqlite_api.database.fetch_one(
-        query="SELECT COUNT(DISTINCT ftId) FROM Mutation"))[0]
+        query="SELECT COUNT(DISTINCT ftId) FROM Mutation WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)"))[0]
     cols = ('ftId', 'Entry', 'isoform', 'is_canonical')
     click.echo(f"Total {total} to query")
-    for i in range(ceil(total/chunksize)):
-        res = unsync_run(sqlite_api.database.fetch_all(query=f"""
+    query = f"""
             SELECT DISTINCT ftId FROM Mutation
             WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)
-            LIMIT {chunksize} OFFSET {chunksize*i}
-            """))
+            LIMIT {chunksize}
+            """
+    for _ in range(ceil(total/chunksize)):
+        res = unsync_run(sqlite_api.database.fetch_all(query=query))
+        if len(res) == 0:
+            break
         res = Identifiers(i[0] for i in res).fetch(
             'map2unp').run(tqdm).result()
-        values = [dict(zip(cols, i)) for i in res if i is not None]
+        values = [dict(zip(cols, i)) for i in res]
         if values:
             sqlite_api.sync_insert(sqlite_api.IDMapping, values)
         sleep(uniform(1, 10))
@@ -97,28 +100,33 @@ def id_mapping(ctx, chunksize):
 @Interface.command("sifts-mapping")
 @click.option('--func', type=str, default='pipe_select_mo')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
-@click.option('--output', type=str)
+@click.option('--output', type=str, default='')
 @click.pass_context
 def sifts_mapping(ctx, func, chunksize, output):
     def get_unp_id(args):
-        if args is None:
-            return
         Entry, isoform, is_canonical = args
-        return Entry if is_canonical and isoform != 'NaN' else isoform
+        return Entry if is_canonical else isoform
 
     sqlite_api = ctx.obj['custom_db']
     total = unsync_run(sqlite_api.database.fetch_one(
-        query="SELECT COUNT(DISTINCT isoform) FROM IDMapping"))[0]
+        query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0]
     click.echo(f"Total {total} to query")
+    output = f'{func}.tsv' if output == '' else output
     for i in range(ceil(total/chunksize)):
         res = unsync_run(sqlite_api.database.fetch_all(
-            query=f"SELECT DISTINCT Entry,isoform,is_canonical FROM IDMapping LIMIT {chunksize} OFFSET {chunksize*i}"))
-        res = SIFTSs(i for i in map(get_unp_id, res)
-                     if i is not None).fetch(func).run(tqdm).result()
+            query=f"""
+            SELECT DISTINCT Entry,isoform,is_canonical FROM IDMapping
+            WHERE isoform != 'NaN'
+            LIMIT {chunksize} OFFSET {chunksize*i}
+            """))
+        res = SIFTSs(map(get_unp_id, res)).fetch(func, skip_pdbs=(
+            '6vnn', '2i6l', '4zai', '5jn1', '6bj0', '6yth')+('4fc3', '7acu', '6lsd', '6llc', '6xoz')).run(tqdm).result()
         output_path = ctx.obj['folder']/output
         for dfrm in res:
+            if dfrm is None:
+                continue
             dfrm.to_csv(output_path, sep='\t', index=False,
-                        header=not output_path.exists())
+                        header=not output_path.exists(), mode='a+')
         sleep(uniform(1, 10))
 
 

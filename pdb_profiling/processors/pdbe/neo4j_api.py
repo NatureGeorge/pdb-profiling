@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-04-08 09:44:05 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+"""
 from typing import List, Iterable, Iterator, Union, Dict, Optional, Tuple
 from functools import partial, reduce
 import pandas as pd
@@ -334,12 +335,12 @@ class Entry(object):
 
     @classmethod
     def summary_entity_chain(cls, pdbs, session=None):
-        query = """
+        query = '''
                 MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{POLYMER_TYPE:'P'})-[:CONTAINS_CHAIN]-(chain:Chain)
                 WHERE entry.ID IN $pdbs
                 WITH entry, entity, COLLECT(chain.AUTH_ASYM_ID) as chain_ids
                 RETURN entry.ID as pdb_id, COLLECT([entity.ID, chain_ids]) as entity_chain_map
-            """
+            '''
         if session is None:
             if cls.session is not None:
                 session = cls.session
@@ -459,7 +460,7 @@ class Entry(object):
 class SIFTS(Entry):
     @classmethod
     def summary_entity_unp(cls, pdbs, tax_id: Optional[str]=None, session=None):
-        query = """
+        query = '''
                 MATCH (entry:Entry)-[:HAS_ENTITY]-(entity:Entity{POLYMER_TYPE:'P'})-[unp_rel:HAS_UNIPROT{BEST_MAPPING:"1"}]-(unp:UniProt)-[:HAS_TAXONOMY]-(tax:Taxonomy)
                 WHERE entry.ID in $pdbs %s
                 WITH entry, entity, unp, tax
@@ -467,7 +468,7 @@ class SIFTS(Entry):
                 WITH COLLECT(DISTINCT [toInteger(seg.UNP_START), toInteger(seg.UNP_END)]) as range_info, unp, entry, entity, tax
                 WITH COLLECT([entity.ID, range_info]) as eneitiy_unp_info, entry, unp, tax
                 RETURN entry.ID as pdb_id, COLLECT([[unp.ACCESSION,tax.TAX_ID], eneitiy_unp_info]) as unp_entity_info
-            """
+            '''
         if tax_id is None:
             query = query % ''
         else:
@@ -1403,5 +1404,5 @@ class Neo4j_API(Abclog):
         sifts_df = await cls.pipe_new_sifts(pdbs, 'pdb') # ! FILTERED & Can be optimized
         sifts_df = cls.pipe_sifts2interact(sifts_df)
         return int_df.merge(sifts_df, how='left').merge(i3d.unp_chain_pairs_p(pdbs), how='left').merge(i3d.all_unp_pairs_12, how='left')
-
+"""
 

@@ -5,10 +5,10 @@
 # @Last Modified: 2020-02-11 04:22:22 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pyexcel import get_sheet, Sheet
-from tablib import Dataset
 from pandas import DataFrame, concat
 from collections import OrderedDict
 from typing import Dict, Iterable, Tuple
+# from tablib import Dataset
 
 
 class Dict2Tabular(object):
@@ -83,6 +83,7 @@ class Dict2Tabular(object):
         yield cur_sheet
         yield from new_sheets
 
+    '''
     @staticmethod
     def sync_with_tablib(*args) -> Dataset:
         records, *remain = args
@@ -112,3 +113,4 @@ class Dict2Tabular(object):
             except AttributeError:
                 cur_ob = cls.sync_with_tablib(*res)
         return cur_ob
+    '''
