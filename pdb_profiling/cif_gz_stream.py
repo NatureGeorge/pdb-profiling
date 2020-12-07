@@ -9,7 +9,9 @@ from aiofiles import open as aiofiles_open
 from unsync import unsync
 import zlib
 from typing import Iterable
-from pdb_profiling.utils import MMCIF2DictPlus
+from pdb_profiling.utils import MMCIF2DictPlus, init_semaphore, unsync_run
+from pdb_profiling.fetcher.webfetch import UnsyncFetch
+from gzip import open as gzip_open
 
 '''
 >>> pdb_id, assembly_id = '2o2q', 2
@@ -29,6 +31,8 @@ from pdb_profiling.utils import MMCIF2DictPlus
         )
 >>> 
 '''
+
+semaphore = unsync_run(init_semaphore(10))
 
 
 def iter_index(text, target, add):
@@ -51,36 +55,47 @@ def iter_index(text, target, add):
             break
 
 
+@unsync
+def full_io(url, path, remove=True):
+    path = UnsyncFetch.fetch_file(semaphore, 'get', dict(url=url), path, 1).result()
+    with gzip_open(path, 'rt') as handle:
+        mmcif_dict = MMCIF2DictPlus(handle, ('_pdbe_chain_remapping.',))
+    if remove:
+        path.unlink()
+    return mmcif_dict
+
+
 async def reader(url):
     dec = zlib.decompressobj(32 + zlib.MAX_WBITS)
     remain_part = b''
-    async with ClientSession() as session:
-        async with session.get(url=url) as resp:
-            if resp.status == 200:
-                async for chunk in resp.content.iter_any():
-                    rv = dec.decompress(chunk)
-                    if rv:
-                        # yield rv
-                        index = (None, *iter_index(rv, b'\n', 1), None)
-                        if len(index) == 2:
-                            remain_part += rv
-                            continue
-                        if remain_part:
-                            yield remain_part + rv[:index[1]]
-                            remain_part = b''
-                            for start, end in zip(index[1:-1], index[2:-1]):
-                                yield rv[start:end]
-                        else:
-                            for start, end in zip(index[:-1], index[1:-1]):
-                                yield rv[start:end]
-                        if index[-2] != len(rv):
-                            remain_part = rv[index[-2]:]
-                if remain_part:
-                    yield remain_part
-            else:
-                raise Exception(
-                    "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp) + \
-                    f"\nurl={url}")
+    async with semaphore:
+        async with ClientSession() as session:
+            async with session.get(url=url, timeout=3600) as resp:
+                if resp.status == 200:
+                    async for chunk in resp.content.iter_any():
+                        rv = dec.decompress(chunk)
+                        if rv:
+                            # yield rv
+                            index = (None, *iter_index(rv, b'\n', 1), None)
+                            if len(index) == 2:
+                                remain_part += rv
+                                continue
+                            if remain_part:
+                                yield remain_part + rv[:index[1]]
+                                remain_part = b''
+                                for start, end in zip(index[1:-1], index[2:-1]):
+                                    yield rv[start:end]
+                            else:
+                                for start, end in zip(index[:-1], index[1:-1]):
+                                    yield rv[start:end]
+                            if index[-2] != len(rv):
+                                remain_part = rv[index[-2]:]
+                    if remain_part:
+                        yield remain_part
+                else:
+                    raise Exception(
+                        "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp) + \
+                        f"\nurl={url}")
 
 
 @unsync

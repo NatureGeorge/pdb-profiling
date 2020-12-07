@@ -10,7 +10,7 @@ import asyncio
 import aiohttp
 import aiofiles
 from unsync import unsync, Unfuture
-from tenacity import retry, wait_random, stop_after_attempt, after_log, RetryError
+from tenacity import retry, wait_random, stop_after_attempt, RetryError
 import logging
 from tqdm import tqdm
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
@@ -70,8 +70,8 @@ class UnsyncFetch(Abclog):
                             await fileOb.write(chunk)
                     cls.logger.debug(f"File has been saved in: {path}")
                     return path
-                elif resp.status in (403, 404, 405):
-                    cls.logger.debug(f"403|404|405 for: {info}")
+                elif resp.status in (300, 403, 404, 405):
+                    cls.logger.debug(f"300|403|404|405 for: {info}")
                     return None
                 else:
                     mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)

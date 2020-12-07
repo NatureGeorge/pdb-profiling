@@ -23,3 +23,11 @@ class MultipleConformersWarning(UserWarning):
 
 class ConflictChainIDWarning(UserWarning):
     pass
+
+
+class PossibleObsoletedUniProtWarning(UserWarning):
+    pass
+
+
+class PossibleObsoletedPDBWarning(UserWarning):
+    pass

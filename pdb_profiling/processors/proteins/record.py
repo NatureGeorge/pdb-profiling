@@ -206,7 +206,7 @@ class Identifier(Abclog):
                 SELECT accession,isoform FROM dbReferences
                 WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")
         if res is None:
-            return self.raw_identifier, 'NaN', 'NaN', False
+            return
         else:
             accession, isoform = res
         if isoform is not None:
@@ -272,7 +272,7 @@ class Identifier(Abclog):
         if res is None:
             val = await self.fetch_from_ProteinsAPI(**kwargs)
             if val is None:
-                return
+                return self.raw_identifier, 'NaN', 'NaN', False
             else:
                 res = await self.map2unp_from_DB()
         return res

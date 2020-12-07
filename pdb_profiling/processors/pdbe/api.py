@@ -14,6 +14,7 @@ from aiofiles import open as aiofiles_open
 from collections import defaultdict
 from unsync import unsync, Unfuture
 from random import choice
+from hashlib import sha1
 from pdb_profiling.processors.pdbe import default_id_tag
 from pdb_profiling.utils import related_dataframe, flatten_dict, pipe_out, dumpsParams
 from pdb_profiling.log import Abclog
@@ -466,6 +467,15 @@ class PDBeDecoder(object):
                 com_keys = tuple(key for key in info.keys() if key != 'residues')
                 yield info['residues'], ('pdb_id',)+com_keys, (pdb,)+tuple(info[key] for key in com_keys)
 
+    @staticmethod
+    @dispatch_on_set('graph-api/pdb/bound_molecule_interactions/')
+    def graph_api_bound(data: Dict):
+        for pdb in data:
+            info = data[pdb]
+            for interactions in info:
+                ret = [{j: json.dumps(i[j]).decode('utf-8') for j in i.keys()} for i in interactions['interactions']]
+                yield ret, ('pdb_id', 'bm_id'), (pdb, interactions['bm_id'])
+
 
 class PDBeModelServer(Abclog):
     '''
@@ -597,3 +607,23 @@ class PDBVersioned(PDBArchive):
         args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/pdb_0000{pdb}/{file_name}')
         return 'get', args, folder/file_name
 
+
+class RCSBDataAPI(Abclog):
+    root = 'https://data.rcsb.org/'
+    rest_api_root = f'{root}rest/v1/core/'
+    graphql_root = f'{root}graphql'
+    headers = {'accept': 'text/plain'}
+    api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/'
+                         'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/'))
+
+    @classmethod
+    def task_unit(cls, identifier, suffix: str, folder):
+        return 'get', dict(url=f'{cls.rest_api_root}{suffix}{identifier}', headers=cls.headers), Path(folder)/f'{identifier.replace("/", "%")}.json'
+    
+    @classmethod
+    def single_retrieve(cls, identifier: str, suffix: str, folder: Union[Path, str], semaphore, to_do_func=None, rate: float = 1.5):
+        return UnsyncFetch.single_task(task=cls.task_unit(identifier, suffix, folder), semaphore=semaphore, to_do_func=to_do_func, rate=rate)
+
+    @classmethod
+    def graphql_retrieve(cls, query, folder, semaphore, to_do_func=None, rate: float = 1.5):
+        return UnsyncFetch.single_task(task=('get', dict(url=cls.graphql_root, params=dict(query=query), headers=cls.headers), Path(folder)/f'{sha1(bytes(query, encoding="utf-8")).hexdigest()}.json'), semaphore=semaphore, to_do_func=to_do_func, rate=rate)

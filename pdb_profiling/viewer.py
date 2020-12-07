@@ -51,7 +51,7 @@ class NGL(object):
 
     @classmethod
     def get_interface_sele_str(cls, record):
-        res_df = PDB(record['pdb_id']).fetch_from_web_api('api/pdb/entry/residue_listing/', PDB.to_dataframe).result()
+        res_df = PDB(record['pdb_id']).fetch_from_pdbe_api('api/pdb/entry/residue_listing/', PDB.to_dataframe).result()
         type_1, i_str_1, s_str_1 = cls.interface_sele_str_unit(res_df, record, '_1')
         type_2, i_str_2, s_str_2 = cls.interface_sele_str_unit(res_df, record, '_2')
         chain_id_1 = record['chain_id_1']

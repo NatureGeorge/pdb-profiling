@@ -7,3 +7,11 @@
 
 class WithoutExpectedKeyError(Exception):
     pass
+
+
+class PossibleConnectionError(Exception):
+    pass
+
+
+class PossibleObsoletedUniProtError(Exception):
+    pass

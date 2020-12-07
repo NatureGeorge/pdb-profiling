@@ -32,6 +32,7 @@ def handle_exac_df(exac_df):
         )
     )
     exac_df.rename(columns=columns, inplace=True)
+    exac_df.Pos = exac_df.Pos.astype(int)
     return exac_df.drop_duplicates().to_dict('records')
 
 
@@ -49,6 +50,7 @@ def handle_premptc(premptc_df):
     )
     premptc_df.rename(columns=columns, inplace=True)
     premptc_df = split_df(premptc_df, 'ftId', ';').drop_duplicates()
+    premptc_df.Pos = premptc_df.Pos.astype(int)
     return premptc_df.drop_duplicates().to_dict('records')
 
 
@@ -59,4 +61,5 @@ def handle_cgi_df(cgi_df):
     cgi_df[['Ref', 'Pos', 'Alt']] = cgi_df.apply(
         lambda x: pat_cgi.search(x['mutation_unp']).groups(), axis=1, result_type='expand')
     cgi_df.rename(columns={'gene': 'ftId'}, inplace=True)
+    cgi_df.Pos = cgi_df.Pos.astype(int)
     return cgi_df.drop_duplicates().to_dict('records')

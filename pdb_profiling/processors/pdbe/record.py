@@ -18,8 +18,9 @@ from zlib import compress, decompress
 from bisect import bisect_left
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
+from operator import itemgetter
 from pdb_profiling.processors.pdbe import default_id_tag
-from pdb_profiling.exceptions import WithoutExpectedKeyError
+from pdb_profiling.exceptions import WithoutExpectedKeyError, PossibleConnectionError, PossibleObsoletedUniProtError
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
                                  related_dataframe, slice_series, 
@@ -34,14 +35,14 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  lyst2range, select_ho_range,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, outside_range)
-from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, FUNCS as API_SET
+from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, RCSBDataAPI, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
-from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning, ConflictChainIDWarning
+from pdb_profiling.warnings import PISAErrorWarning, MultiWrittenWarning, WithoutCifKeyWarning, ConflictChainIDWarning, PossibleObsoletedUniProtWarning, PossibleObsoletedPDBWarning
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
@@ -90,6 +91,14 @@ class Base(object):
     def register_task(cls, key: Hashable, task: Unfuture):
         cls.tasks[key] = task
 
+    @classmethod
+    def pipe_register_task(cls, key, task_func, **kwargs):
+        task = cls.tasks.get(key, None)
+        if task is None:
+            task = task_func(**kwargs)
+            cls.tasks[key] = task
+        return task
+
     def set_neo4j_connection(self, api):
         pass
 
@@ -100,6 +109,7 @@ class Base(object):
     @unsync
     async def set_web_semaphore(cls, web_semaphore_value):
         cls.web_semaphore = await init_semaphore(web_semaphore_value)
+        cls.rcsb_semaphore = await init_semaphore(web_semaphore_value)
 
     @classmethod
     def get_web_semaphore(cls):
@@ -120,6 +130,7 @@ class Base(object):
         assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
         cls.folder = folder
         tuple(init_folder_from_suffixes(cls.folder, API_SET))
+        tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql'}))
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -131,7 +142,7 @@ class Base(object):
         if cls.folder is None:
             raise ValueError(f"Please set folder via {cls.__name__}.set_folder(folder: Union[Path, str])")
     
-    def fetch_from_web_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
+    def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
         task = self.tasks.get((repr(self), api_suffix, then_func, json, mask_id), None)
         if task is not None:
@@ -148,6 +159,29 @@ class Base(object):
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((repr(self), api_suffix, then_func, json, mask_id), task)
+        return task
+    
+    def fetch_from_rcsb_data_api(self, api_suffix: str, query=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None):
+        task = self.tasks.get((repr(self), api_suffix, query, then_func, json, mask_id), None)
+        if task is not None:
+            return task
+        if api_suffix in RCSBDataAPI.api_set:
+            args = dict(identifier=self.get_id() if mask_id is None else mask_id,
+                        suffix=api_suffix,
+                        folder=self.get_folder()/'data_rcsb'/api_suffix,
+                        semaphore=self.rcsb_semaphore)
+            task_func = RCSBDataAPI.single_retrieve
+        elif api_suffix == 'graphql':
+            args = dict(query=query, folder=self.get_folder()/'data_rcsb/graphql', semaphore=self.rcsb_semaphore)
+            task_func = RCSBDataAPI.graphql_retrieve
+        else:
+            raise AssertionError(f"Invlaid API SUFFIX! Valid set:\n{RCSBDataAPI.api_set} or graphql")
+        if json:
+            args['to_do_func'] = None
+        task = task_func(**args)
+        if then_func is not None:
+            task = task.then(then_func)
+        self.register_task((repr(self), api_suffix, query, then_func, json, mask_id), task)
         return task
 
     @classmethod
@@ -179,13 +213,19 @@ class PDB(Base):
 
     protein_sequence_pat = re_compile(r'([A-Z]{1}|\([A-Z0-9]+\))')
     nucleotide_sequence_pat = re_compile(r'([AUCGI]{1}|\(DA\)|\(DT\)|\(DC\)|\(DG\)|\(DI\)|\(UNK\))')
-    author_residue_pat = re_compile(r'([0-9]+)([A-Z]*)')
+    author_residue_pat = re_compile(r'([\-]*[0-9]+)([A-Z]*)')
+    binding_details_pat = re_compile(r'BINDING SITE FOR RESIDUE (.+) ([A-Z]+) ([\-]*[0-9]+)([A-Z]*)')
     StatsProteinEntitySeq = namedtuple(
         'StatsProteinEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT STD_INDEX STD_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT ARTIFACT_INDEX')
     StatsNucleotideEntitySeq = namedtuple(
         'StatsNucleotideEntitySeq', 'pdb_id molecule_type entity_id ca_p_only SEQRES_COUNT dNTP_INDEX dNTP_COUNT NTP_INDEX NTP_COUNT NON_INDEX NON_COUNT UNK_INDEX UNK_COUNT')
     StatsChainSeq = namedtuple(
         'StatsChainSeq', 'pdb_id entity_id chain_id struct_asym_id OBS_INDEX OBS_COUNT OBS_RATIO_ARRAY BINDING_LIGAND_INDEX BINDING_LIGAND_COUNT')
+
+    fix_molecule_type_dict = {
+        'Bound': 'bound',
+        'Carbohydrate-polymer': 'carbohydrate polymer'
+    }
 
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
@@ -210,7 +250,7 @@ class PDB(Base):
     @unsync
     async def prepare_properties(self, property_suffixes):
         tasks = {
-            var_property: self.pdb_ob.fetch_from_web_api(
+            var_property: self.pdb_ob.fetch_from_pdbe_api(
                     suffix, a_load_json, json=True
                 ).then(self.prepare_property) for var_property, suffix in property_suffixes.items()}
         for var_property, task in tasks.items():
@@ -358,6 +398,49 @@ class PDB(Base):
         dfrm.author_insertion_code = dfrm.author_insertion_code.apply(lambda x: '' if x == '.' else x)
         return dfrm
 
+    @staticmethod
+    @unsync
+    async def assg_oper_cif_base(path):
+        assg_cols = ('_pdbx_struct_assembly_gen.asym_id_list',
+                    '_pdbx_struct_assembly_gen.oper_expression',
+                    '_pdbx_struct_assembly_gen.assembly_id')
+        oper_cols = ('_pdbx_struct_oper_list.id',
+                    '_pdbx_struct_oper_list.symmetry_operation',
+                    '_pdbx_struct_oper_list.name')
+        async with aiofiles_open(path, 'rt') as file_io:
+            handle = await file_io.read()
+            mmcif_dict = MMCIF2DictPlus((i+'\n' for i in handle.split('\n')), assg_cols+oper_cols)
+        if len(mmcif_dict) < 7:
+            return None
+        assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
+        assg_df = split_df_by_chain(assg_df, assg_cols, assg_cols[0:1]).rename(columns={col: col.split(
+            '.')[1] for col in assg_cols}).rename(columns={'asym_id_list': 'struct_asym_id'}).reset_index(drop=True)
+        oper_dict_1 = dict(zip(*[mmcif_dict[col] for col in oper_cols[:2]]))
+        oper_dict_2 = dict(zip(*[mmcif_dict[col] for col in (oper_cols[0], oper_cols[2])]))
+        return assg_df, oper_dict_1, oper_dict_2
+    
+    @staticmethod
+    @unsync
+    async def assg_oper_json_base(path):
+        data = await a_load_json(path)
+        oper_dict_1, oper_dict_2 = dict(), dict()
+        pdbx_struct_assembly_gen_lyst = []
+        for ass in data['data']['assemblies']:
+            for i in ass['pdbx_struct_oper_list']:
+                cur_id = i['id']
+                cur_so = i['symmetry_operation']
+                cur_so = '?' if cur_so is None else cur_so
+                cur_na = i['name']
+                cur_na = '?' if cur_na is None else cur_na
+                assert oper_dict_1.get(cur_id, cur_so) == cur_so
+                assert oper_dict_2.get(cur_id, cur_na) == cur_na
+                oper_dict_1[cur_id] = cur_so
+                oper_dict_2[cur_id] = cur_na
+            pdbx_struct_assembly_gen_lyst.extend(ass['pdbx_struct_assembly_gen'])
+        assg_df = DataFrame(sorted(pdbx_struct_assembly_gen_lyst, key=itemgetter('ordinal'))).drop(columns=['ordinal']).rename(columns={'asym_id_list': 'struct_asym_id'})
+        assg_df = split_df_by_chain(assg_df, assg_df.columns, ['struct_asym_id'], mode='list').reset_index(drop=True)
+        return assg_df, oper_dict_1, oper_dict_2
+
     @classmethod
     @unsync
     async def to_assg_oper_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
@@ -374,28 +457,22 @@ class PDB(Base):
             assert var[1] <= var[0]
             return var[1]
         
-        assg_cols = ('_pdbx_struct_assembly_gen.asym_id_list',
-                     '_pdbx_struct_assembly_gen.oper_expression',
-                     '_pdbx_struct_assembly_gen.assembly_id')
-        oper_cols = ('_pdbx_struct_oper_list.id',
-                     '_pdbx_struct_oper_list.symmetry_operation',
-                     '_pdbx_struct_oper_list.name')
         if isinstance(path, (Unfuture, Coroutine)):
             path = await path
-        async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.read()
-            mmcif_dict = MMCIF2DictPlus((i+'\n' for i in handle.split('\n')), assg_cols+oper_cols)
-        
-        if len(mmcif_dict) < 2:
-            return None
-        assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
-        assg_df = split_df_by_chain(assg_df, assg_cols, assg_cols[0:1]).rename(columns={col: col.split(
-            '.')[1] for col in assg_cols}).rename(columns={'asym_id_list': 'struct_asym_id'})
-        
+        path = Path(path)
+        if path.suffix == '.cif':
+            assg_oper_res = await cls.assg_oper_cif_base(path)
+        elif path.suffix == '.json':
+            assg_oper_res = await cls.assg_oper_json_base(path)
+        else:
+            raise ValueError(f'Invalid file: {path}')
+        if assg_oper_res is None:
+            return
+        else:
+            assg_df, oper_dict_1, oper_dict_2 = assg_oper_res
         assg_df.oper_expression = assg_df.oper_expression.apply(
             lambda x: cls.expandOperators(cls.parseOperatorList(x)))
-        assg_df = split_df_by_chain(
-            assg_df, assg_df.columns, ('oper_expression', ), mode='list')
+        assg_df = split_df_by_chain(assg_df, assg_df.columns, ('oper_expression', ), mode='list').reset_index(drop=True)
         assg_df.oper_expression = assg_df.oper_expression.apply(
             lambda x: json.dumps(x).decode('utf-8'))
         
@@ -407,12 +484,10 @@ class PDB(Base):
         
         assg_df['asym_id_rank'] = assg_df.apply(lambda x: to_rank(
             rank_dict, x['assembly_id'], x['struct_asym_id']), axis=1)
-        oper_dict_1 = dict(zip(*[mmcif_dict[col] for col in oper_cols[:2]]))
         assg_df['symmetry_operation'] = assg_df.oper_expression.apply(
             lambda x: [oper_dict_1[i] for i in json.loads(x)])
         assg_df.symmetry_operation = assg_df.symmetry_operation.apply(
             lambda x: json.dumps(x).decode('utf-8'))
-        oper_dict_2 = dict(zip(*[mmcif_dict[col] for col in (oper_cols[0], oper_cols[2])]))
         assg_df['symmetry_id'] = assg_df.oper_expression.apply(
             lambda x: [oper_dict_2[i] for i in json.loads(x)])
         assg_df.symmetry_id = assg_df.symmetry_id.apply(
@@ -424,7 +499,7 @@ class PDB(Base):
     @unsync
     async def pipe_assg_data_collection(self) -> str:
         '''demo_dict = {"atom_site": [{"label_asym_id": "A", "label_seq_id": 23}]}'''
-        res_df = await self.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        res_df = await self.pdb_ob.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         # res_dict = iter_first(res_df, lambda row: row.observed_ratio > 0)
         # assert res_dict is not None, f"{self.pdb_ob}: Unexpected Cases, without observed residues?!"
         res_dict = res_df.loc[res_df.observed_ratio.gt(0).idxmax()].to_dict()
@@ -465,12 +540,12 @@ class PDB(Base):
             * 6a8r
             * 6e32
         '''
-        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         eec_df = res_df[['pdb_id', 'entity_id', 'chain_id',
                          'struct_asym_id']].drop_duplicates().reset_index(drop=True)
         # eec_df['struct_asym_id_in_assembly'] = eec_df.struct_asym_id
         if merge_with_molecules_info:
-            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+            mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
             self.res2eec_df = eec_df.merge(mol_df, how='left')
         else:
             self.res2eec_df = eec_df
@@ -512,8 +587,8 @@ class PDB(Base):
             for assembly_id in assemblys:
                 yield f"{pdb_id}/{assembly_id}"
         
-        ass_eec_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', Base.to_dataframe)
-        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+        ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
+        mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
         mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate_polymer'))]
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull() & ass_eec_df.entity_id.isin(mol_df.entity_id)]
         check_chain_num = ass_eec_df.groupby('assembly_id').in_chains.apply(lambda x: sum(i.count(',')+1 for i in x))
@@ -610,7 +685,7 @@ class PDB(Base):
         store = await self.sqlite_api.StatsProteinEntitySeq.objects.filter(pdb_id=self.pdb_id).all()
         if not store:
             muta_df = await Base.to_dataframe_with_kwargs(
-                self.fetch_from_web_api('api/pdb/entry/mutated_AA_or_NA/'),
+                self.fetch_from_pdbe_api('api/pdb/entry/mutated_AA_or_NA/'),
                 usecols=lambda x: not x.startswith('author') and not x in ('struct_asym_id', 'chain_id'))
             if muta_df is not None:
                 muta_df = muta_df.drop_duplicates().reset_index(drop=True)
@@ -651,7 +726,7 @@ class PDB(Base):
                     muta_dict.get(record['entity_id'], tuple())))
                 # assert len(seq)-len(std_res) == len(non_res)
             
-            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+            mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
             mol_df.apply(regist_info, axis=1)
             if store:
                 await self.sqlite_api.async_insert(self.sqlite_api.StatsProteinEntitySeq, store)
@@ -690,7 +765,7 @@ class PDB(Base):
                     to_interval(unk_res),
                     len(unk_res)))
 
-            mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+            mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
             mol_df.apply(regist_info, axis=1)
             if store:
                 await self.sqlite_api.async_insert(self.sqlite_api.StatsNucleotideEntitySeq, store)
@@ -705,7 +780,7 @@ class PDB(Base):
             ].append(
                 (json.loads(record['start'])['residue_number'], json.loads(record['end'])['residue_number']))
 
-        c_df = await self.fetch_from_web_api('api/pdb/entry/polymer_coverage/', Base.to_dataframe)
+        c_df = await self.fetch_from_pdbe_api('api/pdb/entry/polymer_coverage/', Base.to_dataframe)
         c_df.apply(regist_info, axis=1)
         return [self.StatsChainSeq(*key, value, range_len(value)) for key, value in store.items()]
     '''
@@ -732,18 +807,18 @@ class PDB(Base):
             store[(record['pdb_id'], record['entity_id'], record['chain_id'], record['struct_asym_id'])
                   ].append((record['residue_number'], record['observed_ratio']))
         
-        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
-        # mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        # mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
         # res_df = res_df.merge(mol_df[mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)'))][['entity_id']])
         res_df.apply(lambda x: regist_info(x), axis=1)
 
-        summary_dict = (await self.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
+        summary_dict = (await self.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
                             )[self.pdb_id][0]['number_of_entities']
         # TODO: make sure whether bound_count including sugar & other
         bound_count = sum(value for key, value in summary_dict.items() if key in ('ligand', 'sugar', 'other', 'carbohydrate_polymer'))
         if bound_count:
             br_df = await Base.to_dataframe_with_kwargs(
-                self.fetch_from_web_api('api/pdb/entry/binding_sites/'),
+                self.fetch_from_pdbe_api('api/pdb/entry/binding_sites/'),
                 usecols=lambda x: not x.startswith('author'))
         else:
             br_df = None
@@ -786,7 +861,7 @@ class PDB(Base):
         Get SEQRES Sequence via entity_id | chain_id (default protein) | struct_asym_id
         '''
         sequence_col = 'sequence' if kwargs.get('one_letter_code', True) else 'pdb_sequence'
-        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+        mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
         if mol_df is None:
             raise ValueError(f"None dataframe: {repr(self)}")
         if 'entity_id' in kwargs:
@@ -806,9 +881,6 @@ class PDB(Base):
     @unsync
     async def profile_asym_id_in_assembly_unit(self, parent, assembly_id, replace):
         header = f'{self.pdb_id}-assembly-{assembly_id}'
-        task = self.tasks.get(header, None)
-        if task is not None:
-            return task
         target_file = parent/f'{header}-pdbe_chain_remapping.cif'
         if (not target_file.exists()) or replace:
             await cif_gz_stream.writer(
@@ -816,23 +888,78 @@ class PDB(Base):
                 target_file,
                 b'data_%s\n#\nloop_\n' % bytes(header, 'utf-8'),
                 b'_pdbe_chain_remapping')
-        async with aiofiles_open(target_file, 'rt') as file_io:
-            handle = await file_io.read()
-            try:
-                cur_df = DataFrame(MMCIF2DictPlus(i+'\n' for i in handle.split('\n')))
-            except ValueError as e:
-                warn(f"{target_file}", WithoutCifKeyWarning)
-                raise e
-            cur_df['_pdbe_chain_remapping.assembly_id'] = assembly_id  # NOTE: exception: 6E5N-assembly-1
-        self.register_task(header, cur_df)
+        try:
+            async with aiofiles_open(target_file, 'rt') as file_io:
+                handle = await file_io.read()
+                mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
+                if (len(mmcif_dict) == 0) or (not handle.endswith('\n#\n')):
+                    raise PossibleConnectionError(target_file)
+                del mmcif_dict['data_']
+                cur_df = DataFrame(mmcif_dict)
+        except (KeyError, ValueError, PossibleConnectionError) as e:
+            warn(f"{target_file}, {e.__class__.__name__}, need retry", WithoutCifKeyWarning)
+            target_file.unlink()
+            raise e
+        '''
+        mmcif_dict = await cif_gz_stream.full_io(
+            f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz',
+            target_file)
+        del mmcif_dict['data_']
+        cur_df = DataFrame(mmcif_dict)
+        if len(cur_df) == 0:
+            raise PossibleConnectionError(target_file)
+        '''
+        cur_df['_pdbe_chain_remapping.assembly_id'] = assembly_id  # NOTE: exception: 6E5N-assembly-1
         return cur_df
 
     @unsync
     async def profile_asym_id_in_assembly(self, assembly_ids, replace:bool=False):
         parent = self.assembly_cif_folder/self.pdb_id[1:3]
         parent.mkdir(parents=True, exist_ok=True)
-        dfs = [await self.profile_asym_id_in_assembly_unit(parent, assembly_id, replace) for assembly_id in assembly_ids]
-        return concat(dfs, ignore_index=True, sort=False)
+        dfs = [await self.pipe_register_task(
+            f'{self.pdb_id}-assembly-{assembly_id}',
+            self.profile_asym_id_in_assembly_unit,
+            parent=parent, assembly_id=assembly_id, replace=replace) for assembly_id in assembly_ids]
+        in_ass_df =  concat(dfs, ignore_index=True, sort=False)
+        in_ass_df.columns = [i.replace('_pdbe_chain_remapping.', '') for i in in_ass_df.columns]
+        in_ass_df = in_ass_df[['assembly_id', 'entity_id', 'orig_label_asym_id', 'new_label_asym_id', 'applied_operations']].rename(
+            columns={'orig_label_asym_id': 'struct_asym_id',
+                     'new_label_asym_id': 'struct_asym_id_in_assembly',
+                     'applied_operations': 'oper_expression'}).copy()
+        in_ass_df.oper_expression = in_ass_df.oper_expression.apply(lambda x: json.dumps([i for i in x.split('_')[::-1] if i != '']).decode('utf-8'))
+        # in_ass_df.assembly_id = in_ass_df.assembly_id.astype(int)  # NOTE: exception: 6E5N-assembly-1
+        in_ass_df.entity_id = in_ass_df.entity_id.astype(int)
+        return in_ass_df
+
+    @unsync
+    async def rd_source_ass_oper_df(self):
+        upper_id = self.pdb_id.upper()
+        try:
+            assembly_ids = (await self.fetch_from_rcsb_data_api('graphql', 
+                query='{entry(entry_id:"%s"){rcsb_entry_container_identifiers{assembly_ids}}}' % upper_id, 
+                then_func=a_load_json,
+                json=True))['data']['entry']['rcsb_entry_container_identifiers']['assembly_ids']
+        except TypeError:
+            warn(repr(self), PossibleObsoletedPDBWarning)
+            assembly_ids = None
+        if assembly_ids is None:
+            return
+        query = '''{
+            assemblies(assembly_ids: %s) {
+                pdbx_struct_assembly_gen{
+                    assembly_id
+                    asym_id_list
+                    oper_expression
+                    ordinal}
+                pdbx_struct_oper_list{
+                    id
+                    name
+                    symmetry_operation}
+                rcsb_assembly_info{
+                    entry_id
+                    assembly_id}}}
+            ''' % json.dumps([f'{upper_id}-{assembly_id}' for assembly_id in assembly_ids]).decode('utf-8')
+        return await self.fetch_from_rcsb_data_api('graphql', query=query).then(self.to_assg_oper_df)
 
     @unsync
     async def ms_source_ass_oper_df(self, struct_asym_id, residue_number):
@@ -877,7 +1004,7 @@ class PDB(Base):
             task = await self.sqlite_api.profile_id.objects.filter(pdb_id=self.pdb_id).all()
             if not task:
                 return
-            task = DataFrame(task).sort_values(['assembly_id', 'model_id', 'entity_id', 'struct_asym_id'])
+            task = DataFrame(task).sort_values(['assembly_id', 'model_id', 'entity_id', 'struct_asym_id']).reset_index(drop=True)
         if not hasattr(self, 'subset_assembly'):
             await self.set_subset_assembly_from_df(task, **kwargs)
         self.register_task((repr(self), 'profile_id'), task)
@@ -894,8 +1021,11 @@ class PDB(Base):
         if profile_id_df is not None:
             return profile_id_df
         
-        demo_dict = await self.pipe_assg_data_collection()
-        assg_oper_df = await (choice((self.ms_source_ass_oper_df, self.cs_source_ass_oper_df))(**demo_dict))
+        if choice((1, 0)):
+            assg_oper_df = await self.rd_source_ass_oper_df()
+        else:
+            demo_dict = await self.pipe_assg_data_collection()
+            assg_oper_df = await (choice((self.ms_source_ass_oper_df, self.cs_source_ass_oper_df))(**demo_dict))
         # assg_oper_df = await self.ms_source_ass_oper_df(**demo_dict)
         res2eec_df = await self.get_res2eec_df()
         focus_res2eec_df = res2eec_df[['pdb_id', 'entity_id', 'molecule_type', 'chain_id', 'struct_asym_id']]
@@ -926,20 +1056,6 @@ class PDB(Base):
             new_focus_assg_oper_df.assembly_id.ne(0) & new_focus_assg_oper_df.symmetry_id.ne('["1_555"]')].assembly_id.unique()
         if len(to_fetch_assembly)> 0:
             in_ass_df = await self.profile_asym_id_in_assembly(to_fetch_assembly)
-            in_ass_df.columns = [i.replace('_pdbe_chain_remapping.', '') for i in in_ass_df.columns]
-
-            try:
-                in_ass_df = in_ass_df[['assembly_id', 'entity_id', 'orig_label_asym_id',
-                                    'new_label_asym_id', 'applied_operations']].rename(
-                    columns={'orig_label_asym_id': 'struct_asym_id',
-                            'new_label_asym_id': 'struct_asym_id_in_assembly',
-                            'applied_operations': 'oper_expression'}).copy()
-            except KeyError:
-                raise ValueError(self.pdb_id+'\n'+str(in_ass_df))
-
-            in_ass_df.oper_expression = in_ass_df.oper_expression.apply(lambda x: json.dumps([i for i in x.split('_')[::-1] if i != '']).decode('utf-8'))
-            # in_ass_df.assembly_id = in_ass_df.assembly_id.astype(int)  # NOTE: exception: 6E5N-assembly-1
-            in_ass_df.entity_id = in_ass_df.entity_id.astype(int)
             profile_id_df = new_focus_assg_oper_df.merge(in_ass_df, how='left')
             self.subset_assembly = frozenset(profile_id_df.assembly_id)-frozenset(to_fetch_assembly)
             rest = frozenset(profile_id_df[profile_id_df.struct_asym_id_in_assembly.isnull()].assembly_id)
@@ -957,7 +1073,7 @@ class PDB(Base):
         profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index, 'au_subset'] = True
 
         # TODO: Check
-        ass_df = await self.fetch_from_web_api('api/pdb/entry/assembly/', Base.to_dataframe)
+        ass_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
         a_df = profile_id_df[['assembly_id', 'entity_id']].drop_duplicates().query('assembly_id != 0')
         for assembly_id, entity_id in zip(a_df.assembly_id, a_df.entity_id):
             profile_lyst = tuple(profile_id_df[profile_id_df.assembly_id.eq(assembly_id) & profile_id_df.entity_id.eq(entity_id)].struct_asym_id_in_assembly.sort_values().tolist())
@@ -974,10 +1090,10 @@ class PDB(Base):
         assert kwargs.keys() <= frozenset({'chain_id', 'entity_id', 'struct_asym_id', 'pdb_id'})
         res_map_df = DataFrame(zip(expand_interval(unp_range),expand_interval(pdb_range)), columns=['unp_residue_number', 'residue_number'])
         res_map_df['UniProt'] = UniProt
-        res_df = await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         res_map_df_full = res_map_df.merge(res_df.query(
             'and '.join(f'{key}=="{value}"' if isinstance(value, str) else f'{key}=={value}' for key,value in kwargs.items())))
-        assert res_map_df_full.shape[0] == res_map_df.shape[0]
+        assert res_map_df_full.shape[0] == res_map_df.shape[0], f"{(repr(self), UniProt, unp_range, pdb_range, kwargs)}"
         if conflict_pdb_index is None:
             return res_map_df_full
         else:
@@ -1008,7 +1124,7 @@ class PDB(Base):
             your_sites_df = your_sites_df[~your_sites_df.residue_number.isnull()]
             if len(your_sites_df) == 0:
                 return
-            ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+            ret = (await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
         else:
             if author_site:
                 author_residue_numbers, author_insertion_codes = zip(*(self.author_residue_pat.fullmatch(i).groups() for i in your_sites))
@@ -1018,7 +1134,7 @@ class PDB(Base):
                     'UniProt': UniProt}
                 your_sites_df = DataFrame({**info, **kwargs})
                 # your_sites_df.author_residue_number = your_sites_df.author_residue_number.astype(int)
-                ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+                ret = (await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
                 ret['unp_residue_number'] = SIFTS.convert_index(unp_range, pdb_range, ret.residue_number)
                 ret = ret[~ret.unp_residue_number.isnull()]
                 if len(ret) == 0:
@@ -1032,7 +1148,7 @@ class PDB(Base):
                 your_sites_df = your_sites_df[~your_sites_df.unp_residue_number.isnull()]
                 if len(your_sites_df) == 0:
                     return
-                ret = (await self.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
+                ret = (await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)).merge(your_sites_df)
         if conflict_pdb_index is None:
             return ret
         else:
@@ -1043,7 +1159,8 @@ class PDB(Base):
                 return ret
 
     async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, discard_multimer_chains_cutoff_for_au=None, **kwargs):
-        chain_pairs = chain_pairs[self.pdb_id]
+        if chain_pairs is not None:
+            chain_pairs = chain_pairs[self.pdb_id]
         await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
         res = []
         for assembly in self.assembly.values():
@@ -1078,7 +1195,72 @@ class PDB(Base):
             dfrm = await dfrm
         '''
         pass
-        
+    
+    @unsync
+    async def get_binding_sites(self):
+        br_df = await self.to_dataframe_with_kwargs(
+            self.fetch_from_pdbe_api('api/pdb/entry/binding_sites/'),
+            usecols=lambda x: not x.startswith('author'))
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        if br_df is None:
+            return
+        else:
+            '''
+            try:
+                br_df = br_df.merge(res_df)
+                br_df[['details.chem_comp_id',
+                    'details.chain_id',
+                    'details.author_residue_number',
+                    'details.author_insertion_code']] = br_df.details.apply(
+                        lambda x: self.binding_details_pat.fullmatch(x).groups()).apply(Series)
+                br_df['details.author_residue_number'] = br_df['details.author_residue_number'].astype(int)
+                br_df['details.author_insertion_code'] = br_df['details.author_insertion_code'].fillna('')
+            except Exception:
+                # raise AssertionError(f"{repr(self)}: Unexpected Case for get_binding_sites")
+                return br_df
+            return br_df.drop(columns=['details'])
+            '''
+            return br_df.merge(res_df)
+
+    @unsync
+    async def get_bound_molecules(self, excluding_branched=True, molecules_col=['pdb_id', 'entity_id', 'molecule_name']):
+        suffix = 'bound_excluding_branched' if excluding_branched else 'bound_molecules'
+        bm_df = await self.fetch_from_pdbe_api(f'graph-api/pdb/{suffix}/', Base.to_dataframe)
+        if bm_df is None:
+            return
+        if isinstance(bm_df.composition.iloc[0], str):
+            bm_df.composition = bm_df.composition.apply(lambda x: json.loads(x)['ligands'])
+        bm_df = split_df_by_chain(bm_df, bm_df.columns, ['composition'], 'list')
+        bm_df = concat([bm_df, bm_df.composition.apply(Series)], axis=1).drop(columns=['composition']).rename(columns={'entity': 'entity_id'})
+        bm_df[['chain_id', 'chain_id_suffix']] = bm_df.chain_id.str.split('_').apply(Series)
+        bm_df.author_insertion_code = bm_df.author_insertion_code.str.strip()
+        bm_df.entity_id = bm_df.entity_id.astype(int)
+        bm_df.molecule_type = bm_df.molecule_type.apply(lambda x: self.fix_molecule_type_dict[x])
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        mol_df = (await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe))[molecules_col]
+        new_bm_df = bm_df.merge(res_df).merge(mol_df)
+        assert new_bm_df.shape[0] == bm_df.shape[0]
+        return new_bm_df
+    
+    @staticmethod
+    def get_fixed_site_for_bm(info):
+        if isinstance(info ,str):
+            info = json.loads(info)
+        rets = info['chain_id'].split('_')
+        return rets[0], rets[1], info['chem_comp_id'], int(info['author_residue_number']), info['author_insertion_code'].strip()
+
+    @unsync
+    async def get_bound_molecule_interaction(self, bm_id, molecules_col=['pdb_id', 'entity_id', 'molecule_type', 'molecule_name']):
+        br_df = await self.fetch_from_pdbe_api('graph-api/pdb/bound_molecule_interactions/', Base.to_dataframe, mask_id=f"{self.pdb_id}/{bm_id}")
+        if br_df is None:
+            return
+        bind_res_df = br_df.end.apply(self.get_fixed_site_for_bm).apply(Series)
+        bind_res_df.columns = ['chain_id', 'chain_id_suffix', 'residue_name', 'author_residue_number', 'author_insertion_code']
+        bind_res_df['bm_id'] = br_df.bm_id
+        res_df = await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        mol_df = (await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe))[molecules_col]
+        return bind_res_df.merge(res_df.merge(mol_df))  # excpet waters
+
 
 class PDBAssemble(PDB):
 
@@ -1166,7 +1348,7 @@ class PDBAssemble(PDB):
         use_au = self.assembly_id in self.pdb_ob.subset_assembly
 
         try:
-            interfacelist_df = await self.fetch_from_web_api(
+            interfacelist_df = await self.fetch_from_pdbe_api(
                 'api/pisa/interfacelist/', 
                 PDBAssemble.to_interfacelist_df,
                 mask_id=f'{self.pdb_id}/0' if use_au else None)
@@ -1369,7 +1551,7 @@ class PDBInterface(PDBAssemble):
         if not run_following and not keep_interface_res_df:
             return
         try:
-            interfacedetail_df = await self.fetch_from_web_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
+            interfacedetail_df = await self.fetch_from_pdbe_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
         except WithoutExpectedKeyError:
             warn(f"cannot get interfacedetail data from PISA: {self.get_id()}", PISAErrorWarning)
             return
@@ -1387,7 +1569,7 @@ class PDBInterface(PDBAssemble):
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
             warn(f"{repr(self)}: interfacedetail({struct_sele_set}) inconsistent with interfacelist({set(self.info['chains'])}) ! May miss some data.", PISAErrorWarning)
         eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
-        res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_web_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
         interfacedetail_df = interfacedetail_df.merge(res_df, how="left")
         if keep_interface_res_df:
@@ -1527,11 +1709,11 @@ class SIFTS(PDB):
         if isinstance(dfrm, (Coroutine, Unfuture)):
             dfrm = await dfrm
         if cls.complete_chains_run_as_completed:
-            res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_web_api', 
+            res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
                             api_suffix='api/mappings/all_isoforms/',
                             then_func=Base.to_dataframe).run()
         else:
-            res = [await task for task in SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_web_api', 
+            res = [await task for task in SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
                             api_suffix='api/mappings/all_isoforms/',
                             then_func=Base.to_dataframe).tasks]
         return concat(res, sort=False, ignore_index=True)
@@ -1546,7 +1728,7 @@ class SIFTS(PDB):
         elif dfrm is None:
             return
         pdbs = PDBs(dfrm.pdb_id.unique())
-        tasks = [await task for task in pdbs.fetch('fetch_from_web_api', api_suffix='api/pdb/entry/status/', then_func=a_load_json, json=True).tasks]
+        tasks = [await task for task in pdbs.fetch('fetch_from_pdbe_api', api_suffix='api/pdb/entry/status/', then_func=a_load_json, json=True).tasks]
         pass_pdbs = [next(iter(i)) for i in tasks if next(iter(i.values()))[0]['status_code'] == 'REL']
         res = dfrm[dfrm.pdb_id.isin(pass_pdbs)]
         if len(res) > 0:
@@ -1670,14 +1852,14 @@ class SIFTS(PDB):
         def min_unp(info_dict):
             return min(len(set(res)) for res in product(*info_dict.values()))
         
-        mol_df = await self.fetch_from_web_api('api/pdb/entry/molecules/', Base.to_dataframe)
+        mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
         mol_df = mol_df[mol_df.molecule_type.eq('polypeptide(L)')]
         info_dict = dict(zip(mol_df.entity_id,mol_df.in_chains))
         entity_count = len(info_dict)
         chain_count = sum(i.count(',')+1 for i in info_dict.values())
 
         try:
-            best_iso = await self.fetch_from_web_api('api/mappings/isoforms/', Base.to_dataframe).then(self.reformat)
+            best_iso = await self.fetch_from_pdbe_api('api/mappings/isoforms/', Base.to_dataframe).then(self.reformat)
             # best_iso = best_iso.sort_values(by='identity', ascending=False).drop_duplicates(subset='entity_id')
             unp_entity_info = defaultdict(dict)
             best_iso.apply(lambda x: regist_info(unp_entity_info, x), axis=1)
@@ -1722,7 +1904,10 @@ class SIFTS(PDB):
     @unsync
     async def get_residue_conflict(cls, pdb_id, entity_id, pdb_range, Entry, UniProt, unp_range):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        _, unp_seq = await cls.fetch_unp_fasta(UniProt)
+        try:
+            _, unp_seq = await cls.fetch_unp_fasta(UniProt)
+        except TypeError:
+            raise PossibleObsoletedUniProtError(UniProt)
         indexes = tuple(get_diff_index(pdb_seq, pdb_range, unp_seq, unp_range))
         if len(indexes) > 0:
             pdb_diff_index, unp_diff_index = zip(*indexes)
@@ -1765,7 +1950,7 @@ class SIFTS(PDB):
 
     @unsync
     async def fetch_new_residue_mapping(self, entity_id, start, end):
-        df = await self.fetch_from_web_api(
+        df = await self.fetch_from_pdbe_api(
             'graph-api/residue_mapping/', 
             Base.to_dataframe, 
             mask_id=f'{self.pdb_id}/{entity_id}/{start}/{end}')
@@ -1806,6 +1991,21 @@ class SIFTS(PDB):
             else:
                 return
     
+    @staticmethod
+    def check_range_tail(new_pdb_range, new_unp_range, pdb_range):
+        pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
+        new_tail = new_pdb_range[-1][-1]
+        ori_tail = pdb_range[-1][-1]
+        tail_gap = new_tail - ori_tail
+        if tail_gap > 0:
+            new_pdb_range = list(list(i) for i in new_pdb_range)
+            new_unp_range = list(list(i) for i in new_unp_range)
+            new_pdb_range[-1][-1] -= tail_gap
+            new_unp_range[-1][-1] -= tail_gap
+            new_pdb_range = tuple(tuple(i) for i in new_pdb_range)
+            new_unp_range = tuple(tuple(i) for i in new_unp_range)
+        return new_pdb_range, new_unp_range
+
     @classmethod
     @unsync
     async def fix_range(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine]):
@@ -1823,6 +2023,7 @@ class SIFTS(PDB):
                 x['range_diff'], x['pdb_range'], x['unp_range'], x['pdb_id'], x['entity_id'], x['UniProt']), axis=1)
             res = [await i for i in tasks]
             f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame(list(zip(*i)) for i in res)
+            f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame([cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)])
             dfrm_ed = merge(dfrm, f_dfrm.drop(columns=['range_diff']), how='left')
             assert dfrm_ed.shape[0] == dfrm.shape[0]
             dfrm_ed.new_pdb_range = dfrm_ed.apply(lambda x: x['pdb_range'] if isna(x['new_pdb_range']) else x['new_pdb_range'],axis=1)
@@ -1888,33 +2089,46 @@ class SIFTS(PDB):
     @unsync
     async def a_sliding_alignment(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        _, unp_seq = await cls.fetch_unp_fasta(UniProt)
+        try:
+            _, unp_seq = await cls.fetch_unp_fasta(UniProt)
+        except TypeError:
+            raise PossibleObsoletedUniProtError(UniProt)
         pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
         unp_range = json.loads(unp_range) if isinstance(unp_range, str) else unp_range
         return cls.sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None):
-        if sifts_df is None:
-            init_task = self.fetch_from_web_api('api/mappings/all_isoforms/', Base.to_dataframe)
-            if check_pdb_status:
-                init_task = await self.check_pdb_status(init_task)
-            else:
-                init_task = await init_task
-            if init_task is None:
+    async def pipe_base(self, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None):
+        init_task = self.fetch_from_pdbe_api('api/mappings/all_isoforms/', Base.to_dataframe)
+        if check_pdb_status:
+            init_task = await self.check_pdb_status(init_task)
+        else:
+            init_task = await init_task
+        if init_task is None:
+            return
+        elif skip_pdbs is not None:
+            init_task = init_task[~init_task.pdb_id.isin(skip_pdbs)].reset_index(drop=True)
+            if len(init_task) == 0:
                 return
-            elif skip_pdbs is not None:
-                init_task = init_task[~init_task.pdb_id.isin(skip_pdbs)].reset_index(drop=True)
-                if len(init_task) == 0:
-                    return
-            if complete_chains:
-                init_task = await self.complete_chains(init_task)
+        if complete_chains:
+            init_task = await self.complete_chains(init_task)
+        try:
             sifts_df = await self.reformat(init_task
                 ).then(self.dealWithInDel
                 ).then(self.fix_range
                 ).then(self.add_residue_conflict)
-        
+        except PossibleObsoletedUniProtError as e:
+            warn(f'{repr(self)}, {e}', PossibleObsoletedUniProtWarning)
+            return None
+        return sifts_df
+    
+    @unsync
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None):
+        if sifts_df is None:
+            sifts_df = await self.pipe_base(complete_chains=complete_chains, check_pdb_status=check_pdb_status, skip_pdbs=skip_pdbs)
+        if sifts_df is None:
+            return
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class',
                     'experimental_method', 'multi_method', '-r_factor', '-r_free']
 
@@ -2113,10 +2327,11 @@ class SIFTS(PDB):
     @unsync
     async def pipe_score_for_pdb_entry(self, sifts_df, exp_cols):
         exp_df = DataFrame(await PDBs.fetch_exp_pipe(self), columns=exp_cols)
-        summary_dict = await self.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
+        summary_dict = await self.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
         d = summary_dict[self.pdb_id][0]
         exp_df['revision_date'] = d['revision_date']
         exp_df['deposition_date'] = d['deposition_date']
+        exp_df['release_date'] = d['release_date']
 
         pec_df, _ = await self.stats_chain()
 
@@ -2136,7 +2351,7 @@ class SIFTS(PDB):
         # tasks = await pdbs.fetch(PDBs.fetch_date).run()
         tasks = [await task for task in pdbs.fetch(PDBs.fetch_date).tasks]
         exp_df = exp_df.merge(
-            DataFrame(tasks, columns=['pdb_id', 'revision_date', 'deposition_date']))
+            DataFrame(tasks, columns=['pdb_id', 'revision_date', 'deposition_date', 'release_date']))
         assert r_len == exp_df.shape[0]
 
         # tasks = await PDBs(cur_pdbs).fetch('stats_chain').run()
@@ -2223,7 +2438,7 @@ class SIFTS(PDB):
         return DataFrame(res, columns=columns.split(','))
 
     @staticmethod
-    def parallel_interact_df(sifts_df, i3d_df, common_cols=('revision_date', 'deposition_date', 'experimental_method', 'experimental_method_class', 'multi_method', '-r_factor', '-r_free','resolution', '1/resolution')):
+    def parallel_interact_df(sifts_df, i3d_df, common_cols=('revision_date', 'deposition_date', 'release_date', 'experimental_method', 'experimental_method_class', 'multi_method', '-r_factor', '-r_free','resolution', '1/resolution')):
         rename_dict = dict(zip((f'{i}_1' for i in common_cols), common_cols))
         rename_dict['pdb_id_1'] = 'pdb_id'
         sifts_df_ = sifts_df.add_suffix('_1').rename(columns=rename_dict)
@@ -2516,7 +2731,7 @@ class PDBs(tuple):
     @staticmethod
     @unsync
     async def fetch_exp_pipe(pdb_ob:PDB):
-        exp_data = await pdb_ob.fetch_from_web_api('api/pdb/entry/experiment/', a_load_json, json=True)
+        exp_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/experiment/', a_load_json, json=True)
         multi_method = len(exp_data[pdb_ob.pdb_id]) > 1
         return ((pdb_ob.pdb_id, 
                 i.get('resolution', None), 
@@ -2530,9 +2745,9 @@ class PDBs(tuple):
     @staticmethod
     @unsync
     async def fetch_date(pdb_ob: PDB):
-        summary_data = await pdb_ob.fetch_from_web_api('api/pdb/entry/summary/', a_load_json, json=True)
+        summary_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
         data = summary_data[pdb_ob.pdb_id][0]
-        return pdb_ob.pdb_id, data['revision_date'], data['deposition_date']
+        return pdb_ob.pdb_id, data['revision_date'], data['deposition_date'], data['release_date']
     
     def fetch(self, fetch_func:Union[Callable[[PDB], List], str], **kwargs):
         if isinstance(fetch_func, str):
