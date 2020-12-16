@@ -116,6 +116,7 @@ class Base(object):
     def get_web_semaphore(cls):
         return cls.web_semaphore
 
+    '''
     @classmethod
     @unsync
     async def set_db_semaphore(cls, db_semaphore_value):
@@ -124,6 +125,7 @@ class Base(object):
     @classmethod
     def get_db_semaphore(cls):
         return cls.db_semaphore
+    '''
 
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):

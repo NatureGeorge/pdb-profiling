@@ -83,8 +83,8 @@ class ProcessPDBe(Abclog):
         'oper_expression': str,
         'structure_1.range': str,
         'structure_2.range': str
-        }
-    
+    }
+
     use_existing: bool = False
 
     @staticmethod
@@ -102,7 +102,8 @@ class ProcessPDBe(Abclog):
                 identifier = pdb.replace('/', '%')
                 yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
         else:
-            raise ValueError(f'Invalid method: {method}, method should either be "get" or "post"')
+            raise ValueError(
+                f'Invalid method: {method}, method should either be "get" or "post"')
 
     @classmethod
     def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, rate: float = 1.5, **kwargs):
@@ -113,25 +114,25 @@ class ProcessPDBe(Abclog):
             rate=rate)
 
     @classmethod
-    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res:bool=True, **kwargs):
+    def retrieve(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 20, concur_req: int = 20, rate: float = 1.5, task_id: int = 0, ret_res: bool = True, **kwargs):
         # t0 = time.perf_counter()
         res = UnsyncFetch.multi_tasks(
-            cls.yieldTasks(pdbs, suffix, method, folder, chunksize, task_id), 
-            cls.process, 
-            concur_req=concur_req, 
-            rate=rate, 
+            cls.yieldTasks(pdbs, suffix, method, folder, chunksize, task_id),
+            cls.process,
+            concur_req=concur_req,
+            rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         # elapsed = time.perf_counter() - t0
         # cls.logger.info('{} ids downloaded in {:.2f}s'.format(len(res), elapsed))
         return res
-    
+
     @classmethod
     @unsync
     async def process(cls, path: Union[str, Path, Unfuture]):
         cls.logger.debug('Start to decode')
         if not isinstance(path, (str, Path)):
-            path = await path # .result()
+            path = await path  # .result()
         if path is None:
             return path
         path = Path(path)
@@ -156,7 +157,8 @@ class ProcessPDBe(Abclog):
                         await pipe_out(df=r, path=new_path, format='tsv', mode='a' if count else 'w')
                         count += 1
                 if not count:
-                    cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
+                    cls.logger.debug(
+                        f"Without Expected Data ({suffix}): {data}")
                     return None
             else:
                 await pipe_out(df=res, path=new_path, format='tsv', mode='w')
@@ -171,16 +173,16 @@ class PDBeDecoder(object):
 
     @staticmethod
     @dispatch_on_set('api/pdb/entry/status/', 'api/pdb/entry/summary/', 'api/pdb/entry/modified_AA_or_NA/',
-                      'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
-                      'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/', 'api/pdb/entry/carbohydrate_polymer/',
-                      'api/pdb/entry/electron_density_statistics/', 'api/pdb/entry/related_experiment_data/',
-                      'api/pdb/entry/drugbank/', 'api/mappings/best_structures/',
-                      'graph-api/pdb/mutated_AA_or_NA/', 'graph-api/pdb/modified_AA_or_NA/',
-                      'graph-api/mappings/best_structures/', 'graph-api/compound/atoms/',
-                      'graph-api/compound/bonds/', 'graph-api/compound/summary/',
-                      'graph-api/compound/cofactors/', 'graph-api/pdb/funpdbe/',
-                      'graph-api/pdb/bound_excluding_branched/',
-                      'graph-api/pdb/bound_molecules/', 'graph-api/pdb/ligand_monomers/')
+                     'api/pdb/entry/mutated_AA_or_NA/', 'api/pdb/entry/cofactor/', 'api/pdb/entry/molecules/',
+                     'api/pdb/entry/ligand_monomers/', 'api/pdb/entry/experiment/', 'api/pdb/entry/carbohydrate_polymer/',
+                     'api/pdb/entry/electron_density_statistics/', 'api/pdb/entry/related_experiment_data/',
+                     'api/pdb/entry/drugbank/', 'api/mappings/best_structures/',
+                     'graph-api/pdb/mutated_AA_or_NA/', 'graph-api/pdb/modified_AA_or_NA/',
+                     'graph-api/mappings/best_structures/', 'graph-api/compound/atoms/',
+                     'graph-api/compound/bonds/', 'graph-api/compound/summary/',
+                     'graph-api/compound/cofactors/', 'graph-api/pdb/funpdbe/',
+                     'graph-api/pdb/bound_excluding_branched/',
+                     'graph-api/pdb/bound_molecules/', 'graph-api/pdb/ligand_monomers/')
     def yieldCommon(data: Dict) -> Generator:
         for pdb in data:
             values = data[pdb]
@@ -201,7 +203,8 @@ class PDBeDecoder(object):
                     observed = chain['observed']
                     for fragement in observed:
                         for key in ('start', 'end'):
-                            fragement[key] = json.dumps(fragement[key]).decode('utf-8')
+                            fragement[key] = json.dumps(
+                                fragement[key]).decode('utf-8')
                     yield observed, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
@@ -224,7 +227,8 @@ class PDBeDecoder(object):
                         if 'multiple_conformers' not in res:
                             res['multiple_conformers'] = ''
                         else:
-                            res['multiple_conformers'] = json.dumps(res['multiple_conformers']).decode('utf-8')
+                            res['multiple_conformers'] = json.dumps(
+                                res['multiple_conformers']).decode('utf-8')
                     yield residues, ('chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
 
     @staticmethod
@@ -241,7 +245,8 @@ class PDBeDecoder(object):
                         for record in fragment:
                             for key in record:
                                 if isinstance(record[key], (Dict, List)):
-                                    record[key] = json.dumps(record[key]).decode('utf-8')
+                                    record[key] = json.dumps(
+                                        record[key]).decode('utf-8')
                             if 'sheet_id' not in record:
                                 record['sheet_id'] = None
                         yield fragment, ('secondary_structure', 'chain_id', 'struct_asym_id', 'entity_id', 'pdb_id'), (name, chain['chain_id'], chain['struct_asym_id'], entity['entity_id'], pdb)
@@ -267,7 +272,8 @@ class PDBeDecoder(object):
                 for entity in entities:
                     for key in entity:
                         if isinstance(entity[key], (Dict, List)):
-                            entity[key] = json.dumps(entity[key]).decode('utf-8')
+                            entity[key] = json.dumps(
+                                entity[key]).decode('utf-8')
                 keys = list(biounit)
                 keys.remove('entities')
                 yield entities, tuple(keys)+('pdb_id',), tuple(biounit[key] for key in keys)+(pdb, )
@@ -286,24 +292,25 @@ class PDBeDecoder(object):
 
     @staticmethod
     @dispatch_on_set('api/mappings/all_isoforms/', 'api/mappings/uniprot/',
-                      'api/mappings/uniprot_segments/', 'api/mappings/isoforms/',
-                      'api/mappings/uniref90/', 'api/mappings/homologene_uniref90/',
-                      'api/mappings/interpro/', 'api/mappings/pfam/',
-                      'api/mappings/cath/', 'api/mappings/cath_b/',
-                      'api/mappings/scop/', 'api/mappings/go/',
-                      'api/mappings/ec/', 'api/mappings/ensembl/',
-                      'api/mappings/hmmer/', 'api/mappings/sequence_domains/',
-                      'api/mappings/structural_domains/', 'api/mappings/homologene/',
-                      'api/mappings/uniprot_to_pfam/', 'api/mappings/uniprot_publications/',
-                      'graph-api/mappings/uniprot/', 'graph-api/mappings/uniprot_segments/',
-                      'graph-api/mappings/all_isoforms/', 'graph-api/mappings/',
-                      'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
-                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/',
-                      'api/mappings/'
-                      # 'graph-api/uniprot/'
-                      )
+                     'api/mappings/uniprot_segments/', 'api/mappings/isoforms/',
+                     'api/mappings/uniref90/', 'api/mappings/homologene_uniref90/',
+                     'api/mappings/interpro/', 'api/mappings/pfam/',
+                     'api/mappings/cath/', 'api/mappings/cath_b/',
+                     'api/mappings/scop/', 'api/mappings/go/',
+                     'api/mappings/ec/', 'api/mappings/ensembl/',
+                     'api/mappings/hmmer/', 'api/mappings/sequence_domains/',
+                     'api/mappings/structural_domains/', 'api/mappings/homologene/',
+                     'api/mappings/uniprot_to_pfam/', 'api/mappings/uniprot_publications/',
+                     'graph-api/mappings/uniprot/', 'graph-api/mappings/uniprot_segments/',
+                     'graph-api/mappings/all_isoforms/', 'graph-api/mappings/',
+                     'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
+                     'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/',
+                     'api/mappings/'
+                     # 'graph-api/uniprot/'
+                     )
     def yieldSIFTSAnnotation(data: Dict) -> Generator:
-        valid_annotation_set = {'UniProt', 'Ensembl', 'Pfam', 'CATH', 'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER'}
+        valid_annotation_set = {'UniProt', 'Ensembl', 'Pfam', 'CATH',
+                                'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER'}
         for top_root in data:
             # top_root: PDB_ID or else ID
             if data[top_root].keys() <= valid_annotation_set:
@@ -316,12 +323,15 @@ class PDBeDecoder(object):
                         chains = child[annotation]['mappings']
                         for chain in chains:
                             for key, value in chain.items():
-                                chain[key] = json.dumps(value).decode('utf-8') if isinstance(value, Dict) else value
+                                chain[key] = json.dumps(value).decode(
+                                    'utf-8') if isinstance(value, Dict) else value
                             for key, value in child[annotation].items():
                                 if key == 'mappings':
                                     continue
-                                chain[key] = json.dumps(value).decode('utf-8') if isinstance(value, Dict) else value
-                            chain[default_id_tag(top_root, raise_error=True)] = top_root
+                                chain[key] = json.dumps(value).decode(
+                                    'utf-8') if isinstance(value, Dict) else value
+                            chain[default_id_tag(
+                                top_root, raise_error=True)] = top_root
                             chain[sec_root] = annotation
                         yield chains, None
             elif len(data[top_root].keys()) == 1 and 'PDB' in data[top_root].keys():
@@ -331,11 +341,14 @@ class PDBeDecoder(object):
                     for pdb in child:
                         chains = child[pdb]
                         for chain in chains:
-                            chain['start'] = json.dumps(chain['start']).decode('utf-8')
-                            chain['end'] = json.dumps(chain['end']).decode('utf-8')
+                            chain['start'] = json.dumps(
+                                chain['start']).decode('utf-8')
+                            chain['end'] = json.dumps(
+                                chain['end']).decode('utf-8')
                         yield chains, ('pdb_id', 'UniProt'), (pdb, top_root)
             else:
-                raise ValueError(f'Unexpected data structure for inputted data: {data}')
+                raise ValueError(
+                    f'Unexpected data structure for inputted data: {data}')
 
     @staticmethod
     @dispatch_on_set('api/pisa/interfacelist/')
@@ -344,14 +357,16 @@ class PDBeDecoder(object):
             try:
                 records = data[pdb]['interfaceentries']
             except KeyError:
-                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
+                raise WithoutExpectedKeyError(
+                    f"Without Expected interface_detail: {data}")
             for record in records:
                 flatten_dict(record, 'structure_1')
                 flatten_dict(record, 'structure_2')
             flatten_dict(data[pdb], 'page_title', False)
-            cols = sorted(i for i in data[pdb].keys() if i != 'interfaceentries')
+            cols = sorted(i for i in data[pdb].keys()
+                          if i != 'interfaceentries')
             yield records, cols, tuple(data[pdb][col] for col in cols)
-    
+
     @staticmethod
     @dispatch_on_set('api/pisa/interfacedetail/')
     def yieldPISAInterfaceDetail(data: Dict):
@@ -359,16 +374,21 @@ class PDBeDecoder(object):
             'pdb_code', 'assemble_code', 'interface_number',
             'interface_detail.interface_structure_1.structure.selection',
             'interface_detail.interface_structure_2.structure.selection')
-        edge_cols1 = ('structure',)  # 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy'
-        edge_cols2 = ('structure',)  # 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy'
+        # 'interface_atoms', 'interface_residue', 'interface_area', 'solvation_energy'
+        edge_cols1 = ('structure',)
+        # 'interface_atoms', 'interface_residues', 'interface_area', 'solvation_energy'
+        edge_cols2 = ('structure',)
         for pdb in data:
             try:
                 records = data[pdb]['interface_detail']
             except KeyError:
-                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
+                raise WithoutExpectedKeyError(
+                    f"Without Expected interface_detail: {data}")
             del records['bonds']
-            for col in edge_cols1: flatten_dict(records['interface_structure_1'], col)
-            for col in edge_cols2: flatten_dict(records['interface_structure_2'], col)
+            for col in edge_cols1:
+                flatten_dict(records['interface_structure_1'], col)
+            for col in edge_cols2:
+                flatten_dict(records['interface_structure_2'], col)
             flatten_dict(data[pdb], 'page_title', False)
             flatten_dict(records, 'interface_structure_1')
             flatten_dict(records, 'interface_structure_2')
@@ -407,14 +427,14 @@ class PDBeDecoder(object):
     def sequence_conservation(data: Dict):
         for pdb in data:
             yield [{
-                    'pdb_id': pdb, 
-                    'entity_id': data[pdb]['entity_id'],
-                    'length': data[pdb]['length'],
-                    'residue_number': val['start'],
-                    'conservation_score': val['conservation_score'],
-                    'letter_array': json.dumps(tuple(i['letter'] for i in val['amino'])).decode('utf-8'),
-                    'proba_array': json.dumps(tuple(i['proba'] for i in val['amino'])).decode('utf-8')}
-                    for val in data[pdb]['data']], None
+                'pdb_id': pdb,
+                'entity_id': data[pdb]['entity_id'],
+                'length': data[pdb]['length'],
+                'residue_number': val['start'],
+                'conservation_score': val['conservation_score'],
+                'letter_array': json.dumps(tuple(i['letter'] for i in val['amino'])).decode('utf-8'),
+                'proba_array': json.dumps(tuple(i['proba'] for i in val['amino'])).decode('utf-8')}
+                for val in data[pdb]['data']], None
             # letter_array, proba_array = zip(*((i['letter'], i['proba']) for i in val['amino']))
 
     @staticmethod
@@ -464,7 +484,8 @@ class PDBeDecoder(object):
             for info in data[pdb]['data']:
                 if 'additionalData' in info:
                     flatten_dict(info, 'additionalData')
-                com_keys = tuple(key for key in info.keys() if key != 'residues')
+                com_keys = tuple(key for key in info.keys()
+                                 if key != 'residues')
                 yield info['residues'], ('pdb_id',)+com_keys, (pdb,)+tuple(info[key] for key in com_keys)
 
     @staticmethod
@@ -473,7 +494,8 @@ class PDBeDecoder(object):
         for pdb in data:
             info = data[pdb]
             for interactions in info:
-                ret = [{j: json.dumps(i[j]).decode('utf-8') for j in i.keys()} for i in interactions['interactions']]
+                ret = [{j: json.dumps(i[j]).decode('utf-8') for j in i.keys()}
+                       for i in interactions['interactions']]
                 yield ret, ('pdb_id', 'bm_id'), (pdb, interactions['bm_id'])
 
 
@@ -481,12 +503,12 @@ class PDBeModelServer(Abclog):
     '''
     Implement ModelServer API
     '''
-    
+
     root = f'{BASE_URL}model-server/v1/'
-    headers =  {'accept': 'text/plain', 'Content-Type': 'application/json'}
+    headers = {'accept': 'text/plain', 'Content-Type': 'application/json'}
     api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
-                'residueSurroundings', 'symmetryMates', 'query-many'))
-    
+                         'residueSurroundings', 'symmetryMates', 'query-many'))
+
     @classmethod
     def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='subset'):
         if data_collection is None:
@@ -507,7 +529,8 @@ class PDBeModelServer(Abclog):
         if params is None or len(params) == 0:
             params = {'model_nums': 1, 'encoding': 'cif'}
         return UnsyncFetch.single_task(
-            task=cls.task_unit(pdb, suffix, method, folder, data_collection, params, filename=filename),
+            task=cls.task_unit(pdb, suffix, method, folder,
+                               data_collection, params, filename=filename),
             semaphore=semaphore,
             rate=rate)
 
@@ -529,18 +552,18 @@ class PDBeCoordinateServer(Abclog):
             self.root = self.roots[1]
         else:
             raise ValueError("root should be (ebi, litemol, random)")
-    
+
     def __repr__(self):
         return f'<CoordinateServerAPI: {self.root}>'
-    
+
     def task_unit(self, pdb_id, suffix: str, params, folder):
         args = dict(
-                url=f'{self.root}{pdb_id}/{suffix}?',
-                headers=self.headers,
-                params=params)
+            url=f'{self.root}{pdb_id}/{suffix}?',
+            headers=self.headers,
+            params=params)
         return 'get', args, Path(folder)/f'{pdb_id}_{dumpsParams(params)}.{params.get("encoding", "cif")}'
-    
-    def single_retrieve(self, pdb_id: str, suffix: str, params:Dict, folder: Union[Path, str], semaphore, rate: float = 1.5):
+
+    def single_retrieve(self, pdb_id: str, suffix: str, params: Dict, folder: Union[Path, str], semaphore, rate: float = 1.5):
         return UnsyncFetch.single_task(
             task=self.task_unit(pdb_id, suffix, params, folder),
             semaphore=semaphore,
@@ -556,7 +579,7 @@ class PDBArchive(Abclog):
     '''
     root = PDB_ARCHIVE_URL_EBI
     api_set = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
-                for j in ('mmCIF', 'pdb', 'XML'))
+                        for j in ('mmCIF', 'pdb', 'XML'))
     file_dict = {
         'mmCIF': '.cif.gz',
         'pdb': '.ent.gz',
@@ -569,17 +592,19 @@ class PDBArchive(Abclog):
             return f"pdb{pdb_id}"
         else:
             return pdb_id
-    
+
     @classmethod
     def get_file_suffix(cls, api_suffix):
         for key, value in cls.file_dict.items():
             if key in api_suffix:
                 return value
-        raise AssertionError(f"Unexpected Case for api_suffix: {api_suffix}, {cls.file_dict}")
+        raise AssertionError(
+            f"Unexpected Case for api_suffix: {api_suffix}, {cls.file_dict}")
 
     @classmethod
     def task_unit(cls, pdb: str, suffix: str, file_suffix: str, folder: Path):
-        args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{cls.wrap_id(pdb, suffix)}{cls.get_file_suffix(suffix)}')
+        args = dict(
+            url=f'{cls.root}{suffix}{pdb[1:3]}/{cls.wrap_id(pdb, suffix)}{cls.get_file_suffix(suffix)}')
         return 'get', args, folder/f'{pdb}{file_suffix}'
 
     @classmethod
@@ -588,7 +613,7 @@ class PDBArchive(Abclog):
             yield cls.task_unit(pdb, suffix, file_suffix, folder)
 
     @classmethod
-    def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: Optional[str] = None, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+    def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: Optional[str] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, file_suffix, folder),
             concur_req=concur_req,
@@ -596,7 +621,7 @@ class PDBArchive(Abclog):
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
         return res
-    
+
     @classmethod
     def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: Optional[str] = None, rate: float = 1.5):
         if file_suffix is None:
@@ -640,7 +665,7 @@ class RCSBDataAPI(Abclog):
     @classmethod
     def task_unit(cls, identifier, suffix: str, folder):
         return 'get', dict(url=f'{cls.rest_api_root}{suffix}{identifier}', headers=cls.headers), Path(folder)/f'{identifier.replace("/", "%")}.json'
-    
+
     @classmethod
     def single_retrieve(cls, identifier: str, suffix: str, folder: Union[Path, str], semaphore, to_do_func=None, rate: float = 1.5):
         return UnsyncFetch.single_task(task=cls.task_unit(identifier, suffix, folder), semaphore=semaphore, to_do_func=to_do_func, rate=rate)

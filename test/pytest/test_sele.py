@@ -51,7 +51,7 @@ def test_other_api():
     PDB('4zai').fetch_from_PDBArchive('obsolete/mmCIF/', PDB.cif2residue_listing).result()
     pv_path = PDB.get_folder()/'pdb-versioned/entries'
     pv_path.mkdir(parents=True, exist_ok=True)
-    PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore()).result()
+    PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore(), file_suffix='.cif.gz').result()
     bm_df = pdb_ob.get_bound_molecules().result()
     [pdb_ob.get_bound_molecule_interaction(bm_id).result() for bm_id in bm_df.bm_id.unique()[:2]]
 
