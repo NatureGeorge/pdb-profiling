@@ -10,13 +10,15 @@ import asyncio
 import aiohttp
 import aiofiles
 from unsync import unsync, Unfuture
-from tenacity import retry, wait_random, stop_after_attempt, RetryError
+from tenacity import retry, wait_random, stop_after_attempt, RetryError, retry_if_exception_type
 import logging
 from tqdm import tqdm
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
 from pdb_profiling.log import Abclog
 import re
 from pdb_profiling.utils import init_semaphore, unsync_wrap
+from pdb_profiling.exceptions import InvalidFileContentError, RemoteServerError
+from pdb_profiling.fetcher.validate import ValidateBase
 
 
 class UnsyncFetch(Abclog):
@@ -55,7 +57,8 @@ class UnsyncFetch(Abclog):
     use_existing: bool = False
 
     @classmethod
-    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
+    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5), 
+           retry=retry_if_exception_type(InvalidFileContentError) | retry_if_exception_type(RemoteServerError) | retry_if_exception_type(aiohttp.client_exceptions.ServerDisconnectedError))
     async def http_download(cls, method: str, info: Dict, path: str):
         if cls.use_existing is True and os.path.exists(path) and (os.stat(path).st_size > 0):
             return path
@@ -69,15 +72,21 @@ class UnsyncFetch(Abclog):
                         async for chunk in resp.content.iter_any():
                             await fileOb.write(chunk)
                     cls.logger.debug(f"File has been saved in: {path}")
+                    try:
+                        await ValidateBase.validate(path)
+                    except InvalidFileContentError as e:
+                        # await aiofiles.os.remove(path)
+                        os.remove(path)
+                        cls.logger.error(f"InvalidFileContentError for {path}, will retry")
+                        raise e
                     return path
                 elif resp.status in (300, 403, 404, 405):
                     cls.logger.debug(f"300|403|404|405 for: {info}")
                     return None
                 else:
                     mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
-                    cls.logger.error(mes)
-                    cls.logger.error(info)
-                    raise Exception(mes)
+                    cls.logger.error(f"{info} -> {mes}")
+                    raise RemoteServerError(mes)
 
     @classmethod
     @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
@@ -125,6 +134,7 @@ class UnsyncFetch(Abclog):
                 return res
         except RetryError:
             cls.logger.error(f"Retry failed for: {info}")
+            return
 
     @classmethod
     @unsync

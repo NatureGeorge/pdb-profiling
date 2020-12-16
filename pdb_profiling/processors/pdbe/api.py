@@ -7,7 +7,6 @@
 from numpy import array, nan, count_nonzero
 import pandas as pd
 from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Callable, Tuple
-from json import JSONDecodeError
 import orjson as json
 from pathlib import Path
 from aiofiles import open as aiofiles_open
@@ -21,6 +20,7 @@ from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import WithoutExpectedKeyError
+from tenacity import retry, wait_random, stop_after_attempt, retry_if_exception_type
 
 BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
 
@@ -557,10 +557,29 @@ class PDBArchive(Abclog):
     root = PDB_ARCHIVE_URL_EBI
     api_set = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
                 for j in ('mmCIF', 'pdb', 'XML'))
+    file_dict = {
+        'mmCIF': '.cif.gz',
+        'pdb': '.ent.gz',
+        'XML': '.xml.gz'
+    }
+
+    @staticmethod
+    def wrap_id(pdb_id, suffix):
+        if suffix.endswith('pdb/'):
+            return f"pdb{pdb_id}"
+        else:
+            return pdb_id
+    
+    @classmethod
+    def get_file_suffix(cls, api_suffix):
+        for key, value in cls.file_dict.items():
+            if key in api_suffix:
+                return value
+        raise AssertionError(f"Unexpected Case for api_suffix: {api_suffix}, {cls.file_dict}")
 
     @classmethod
     def task_unit(cls, pdb: str, suffix: str, file_suffix: str, folder: Path):
-        args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{pdb}{file_suffix}')
+        args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/{cls.wrap_id(pdb, suffix)}{cls.get_file_suffix(suffix)}')
         return 'get', args, folder/f'{pdb}{file_suffix}'
 
     @classmethod
@@ -569,7 +588,7 @@ class PDBArchive(Abclog):
             yield cls.task_unit(pdb, suffix, file_suffix, folder)
 
     @classmethod
-    def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: str = '.cif.gz', concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
+    def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: Optional[str] = None, concur_req: int = 20, rate: float = 1.5, ret_res:bool=True, **kwargs):
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, file_suffix, folder),
             concur_req=concur_req,
@@ -579,7 +598,9 @@ class PDBArchive(Abclog):
         return res
     
     @classmethod
-    def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: str = '.cif.gz', rate: float = 1.5):
+    def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: Optional[str] = None, rate: float = 1.5):
+        if file_suffix is None:
+            file_suffix = cls.get_file_suffix(suffix)
         return UnsyncFetch.single_task(
             task=cls.task_unit(pdb, suffix, file_suffix, folder),
             semaphore=semaphore,

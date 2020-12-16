@@ -81,3 +81,13 @@ def test_rcsb_data_api():
     df2 = ob.ms_source_ass_oper_df(**ob.pipe_assg_data_collection().result()).result()
     assert df1.shape == df2.shape
     assert (df1.merge(df2).shape) == df1.shape
+
+def test_get_sequence():
+    from pdb_profiling.processors import PDB
+    ob = PDB('4u2v')
+    ob.get_sequence(entity_id=1).result()
+    ob.get_sequence(mode='raw_seq', entity_id=1).result()
+    ob.get_sequence(mode='raw_pdb_seq', entity_id=1).result()
+    ob.get_sequence(mode='mod_x_seq', entity_id=1).result()
+    ob.get_sequence(struct_asym_id='A').result()
+    ob.get_sequence(chain_id='A').result()

@@ -29,5 +29,13 @@ class PossibleObsoletedUniProtWarning(UserWarning):
     pass
 
 
-class PossibleObsoletedPDBWarning(UserWarning):
+class PossibleObsoletedPDBEntryWarning(UserWarning):
+    pass
+
+
+class SkipAssemblyWarning(UserWarning):
+    pass
+
+
+class PeptideLinkingWarning(UserWarning):
     pass

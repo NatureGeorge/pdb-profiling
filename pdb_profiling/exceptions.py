@@ -15,3 +15,19 @@ class PossibleConnectionError(Exception):
 
 class PossibleObsoletedUniProtError(Exception):
     pass
+
+
+class PossibleObsoletedPDBEntryError(Exception):
+    pass
+
+
+class InvalidFileContentError(Exception):
+    pass
+
+
+class RemoteServerError(Exception):
+    pass
+
+
+class WithoutExpectedContentError(Exception):
+    pass

@@ -22,7 +22,6 @@ import orjson as json
 import logging
 from io import StringIO
 from textdistance import overlap, sorensen
-from scipy.stats import wasserstein_distance
 from collections import Counter, OrderedDict
 
 
@@ -881,6 +880,7 @@ def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=Non
 
 
 def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
+    from scipy.stats import wasserstein_distance
     select_index = []
 
     def unit(cur_index):
@@ -913,6 +913,33 @@ def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
     return select_index
 
 
+def select_ho_max_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
+    select_range_set = OrderedDict()
+
+    def unit(cur_index):
+        if cur_index in skip_index:
+            return
+        cur_range1, cur_range2 = ranges1[cur_index], ranges2[cur_index]
+
+        c1_1 = frozenset((1, i) for i in expand_interval(cur_range1))
+        c1_2 = frozenset((2, i) for i in expand_interval(cur_range2))
+        if len(c1_1) == 0 or len(c1_2) == 0:
+            return
+        c1 = c1_1 | c1_2
+        for c2s in select_range_set.values():
+            for c2 in c2s:
+                score = sorensen.similarity(c1, c2)
+                if score > cutoff:
+                    return
+        select_range_set[cur_index] = (
+                frozenset((1, i) for i in expand_interval(cur_range1)) | frozenset((2, i) for i in expand_interval(cur_range2)),
+                frozenset((2, i) for i in expand_interval(cur_range1)) | frozenset((1, i) for i in expand_interval(cur_range2)))
+
+    for index in indexes:
+        unit(index)
+    return list(select_range_set.keys())
+
+
 def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
     select_index = []
 
@@ -923,8 +950,8 @@ def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, ski
         cur_e1, cur_e2 = Entry_1[cur_index], Entry_2[cur_index]
         (cur_e1, cur_range1), (cur_e2, cur_range2) = sorted(((cur_e1, cur_range1), (cur_e2, cur_range2)), key=lambda x: x[0])
 
-        c1_1 = frozenset(f"1_{i}" for i in expand_interval(cur_range1))
-        c1_2 = frozenset(f"2_{i}" for i in expand_interval(cur_range2))
+        c1_1 = frozenset((1, i) for i in expand_interval(cur_range1))
+        c1_2 = frozenset((2, i) for i in expand_interval(cur_range2))
         if len(c1_1) == 0 or len(c1_2) == 0:
             return
         c1 = c1_1 | c1_2
@@ -932,7 +959,7 @@ def select_he_range(Entry_1, Entry_2, ranges1, ranges2, indexes, cutoff=0.2, ski
             selected_range1, selected_range2 = ranges1[selected], ranges2[selected]
             selected_e1, selected_e2 = Entry_1[selected], Entry_2[selected]
             (selected_e1, selected_range1), (selected_e2, selected_range2) = sorted(((selected_e1, selected_range1), (selected_e2, selected_range2)), key=lambda x: x[0])
-            c2 = frozenset(f"1_{i}" for i in expand_interval(selected_range1)) | frozenset(f"2_{i}" for i in expand_interval(selected_range2))
+            c2 = frozenset((1, i) for i in expand_interval(selected_range1)) | frozenset((2, i) for i in expand_interval(selected_range2))
             score = sorensen.similarity(c1, c2)
             if score > cutoff:
                 return
