@@ -4,7 +4,13 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-10-26 01:00:42 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+import warnings
 
+def custom_warn_format(msg, cat, filename, lineno, file=None, line=None):
+    return f'{cat.__name__}: {msg} (from {filename}:{lineno})'
+
+
+warnings.formatwarning = custom_warn_format
 
 class MultiWrittenWarning(UserWarning):
     pass
