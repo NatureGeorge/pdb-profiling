@@ -12,7 +12,7 @@ import aiofiles
 from unsync import unsync, Unfuture
 from tenacity import retry, wait_random, stop_after_attempt, RetryError, retry_if_exception_type
 import logging
-from tqdm import tqdm
+from rich.progress import track
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
 from pdb_profiling.log import Abclog
 import re
@@ -70,14 +70,14 @@ class UnsyncFetch(Abclog):
                         # Asynchronous iterator implementation of readany()
                         async for chunk in resp.content.iter_any():
                             await fileOb.write(chunk)
-                    cls.logger.debug(f"File has been saved in: {path}")
+                    cls.logger.debug(f"File has been saved in: '{path}'")
                     try:
                         await ValidateBase.validate(path)
                     except InvalidFileContentError as e:
                         # await aiofiles.os.remove(path)
                         os.remove(path)
                         cls.logger.error(
-                            f"InvalidFileContentError for {path}, will retry")
+                            f"InvalidFileContentError for '{path}', will retry")
                         raise e
                     return path
                 elif resp.status in (300, 403, 404, 405):
@@ -141,7 +141,7 @@ class UnsyncFetch(Abclog):
     @classmethod
     @unsync
     async def unsync_tasks(cls, tasks):
-        return [await fob for fob in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
+        return [await fob for fob in track(asyncio.as_completed(tasks), total=len(tasks))]
 
     @classmethod
     def single_task(cls, task, semaphore, to_do_func: Optional[Callable] = None, rate: float = 1.5) -> Unfuture:

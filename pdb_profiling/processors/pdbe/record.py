@@ -42,7 +42,10 @@ from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
-from pdb_profiling.warnings import *
+from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning, 
+                                    ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
+                                    PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
+                                    PeptideLinkingWarning, MultiWrittenWarning)
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
@@ -578,21 +581,20 @@ class PDB(Base):
             'json-list').rename(columns={"in_chains": "struct_asym_id_in_assembly"}).reset_index(drop=True)
         return eec_df
 
+    @staticmethod
+    def to_assembly_id(pdb_id, assemblys):
+        for assembly_id in assemblys:
+            yield f"{pdb_id}/{assembly_id}"
+
     @unsync
-    async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:Optional[int]=None, discard_multimer_chains_cutoff_for_au:Optional[int]=None):
+    async def set_focus_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:Optional[int]=None, discard_multimer_chains_cutoff_for_au:Optional[int]=None, omit_peptide_length:int=0):
         '''
-        NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
-        NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
-        NOTE Discard multimer contains more then 16 chains (except water | bound | carbohydrate_polymer)
+        EXAMPLE Discard multimer contains more then 16 chains (except water | bound | carbohydrate polymer)
         '''
-        
-        def to_assembly_id(pdb_id, assemblys):
-            for assembly_id in assemblys:
-                yield f"{pdb_id}/{assembly_id}"
-        
         ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
         mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
-        mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate_polymer'))]
+        mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate polymer'))]
+        mol_df = mol_df[~(mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)')) & mol_df.length.le(omit_peptide_length))]
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull() & ass_eec_df.entity_id.isin(mol_df.entity_id)]
         check_chain_num = ass_eec_df.groupby('assembly_id').in_chains.apply(lambda x: sum(i.count(',')+1 for i in x))
         if discard_multimer_chains_cutoff is not None:
@@ -605,9 +607,22 @@ class PDB(Base):
             assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
         else:
             assemblys = sorted(assemblys)
+        if not hasattr(self, 'assembly'):
+            await self.set_assembly()
+        self.focus_assembly: Dict[int, PDBAssemble] = {ass_id: ass_ob for ass_id, ass_ob in self.assembly.items() if ass_id in assemblys}
+
+    @unsync
+    async def set_assembly(self):
+        '''
+        NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
+        NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
+        '''        
+        ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
+        ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
+        assemblys = set(ass_eec_df.assembly_id) | {0}
         self.assembly: Dict[int, PDBAssemble] = dict(zip(
             assemblys, 
-            (PDBAssemble(ass_id, self) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
+            (PDBAssemble(ass_id, self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
@@ -1183,15 +1198,16 @@ class PDB(Base):
             else:
                 return ret
 
-    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, discard_multimer_chains_cutoff_for_au=None, **kwargs):
+    @unsync
+    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=26, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=0, **kwargs):
         if chain_pairs is not None:
             chain_pairs = chain_pairs[self.pdb_id]
-        await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
+        await self.set_focus_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
         res = []
-        for assembly in self.assembly.values():
+        for assembly in self.focus_assembly.values():
             try:
                 await getattr(assembly, func)(**kwargs)
-            except AssertionError:
+            except PossibleInvalidAssemblyError:
                 warn(f"skip {repr(assembly)}", SkipAssemblyWarning)
                 continue
             if len(assembly.interface) == 0:
@@ -1212,7 +1228,7 @@ class PDB(Base):
                 cur_chain_pairs = chain_pairs
             for interface in assembly.interface.values():
                 if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
-                    res.append(await interface.get_interface_res_dict())
+                    res.append(interface)
         return res
 
     @staticmethod
@@ -1425,7 +1441,8 @@ class PDBAssemble(PDB):
     @unsync
     async def set_assemble_eec_as_df(self):
         eec_as_df = await self.pdb_ob.profile_id()
-        assert self.assembly_id in eec_as_df.assembly_id, f"{repr(self)}: Invalid assembly_id!"
+        if self.assembly_id not in eec_as_df.assembly_id:
+            raise PossibleInvalidAssemblyError(f"{repr(self)}: Invalid assembly_id!")
         self.assemble_eec_as_df = eec_as_df[eec_as_df.assembly_id.eq(self.assembly_id)]
     
     @unsync
@@ -1594,7 +1611,7 @@ class PDBInterface(PDBAssemble):
             if interfacedetail_df is None:
                 raise WithoutExpectedContentError('')
         except (WithoutExpectedKeyError, WithoutExpectedContentError) as e:
-            warn(f"cannot get interfacedetail data from PISA: {self.get_id()}, {e.__class__.__name__}", PISAErrorWarning)
+            warn(f"cannot get interfacedetail data from PISA: {repr(self)}, {e.__class__.__name__}", PISAErrorWarning)
             return
         except Exception as e:
             raise AssertionError(e)
@@ -2709,9 +2726,14 @@ class SIFTS(PDB):
         ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_dict', chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)
         if run_as_completed:
             res = await ob.run(tqdm=progress_bar)
+            ob.tasks = [i.get_interface_res_dict() for interfaces in res for i in interfaces]
+            res = await ob.run(tqdm=progress_bar)
         else:
             res = [await i for i in ob.tasks]
-        interact_df = DataFrame(j for i in res for j in i if j is not None)
+            ob.tasks = [i.get_interface_res_dict() for interfaces in res for i in interfaces]
+            res = [await i for i in ob.tasks]
+        # interact_df = DataFrame(j for i in res for j in i if j is not None)
+        interact_df = DataFrame(j for j in res if j is not None)
         if len(interact_df) == 0:
             return
         await self.sqlite_api.async_insert(self.sqlite_api.PISAInterfaceDict, interact_df.to_dict('records'))

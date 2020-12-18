@@ -31,3 +31,7 @@ class RemoteServerError(Exception):
 
 class WithoutExpectedContentError(Exception):
     pass
+
+
+class PossibleInvalidAssemblyError(Exception):
+    pass

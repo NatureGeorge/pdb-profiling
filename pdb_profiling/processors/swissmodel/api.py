@@ -113,7 +113,7 @@ class SMR(Abclog):
             try:
                 data = json.loads(await inFile.read())
             except Exception as e:
-                cls.logger.error(f"Error in {path}")
+                cls.logger.error(f"Error in '{path}'")
                 raise e
         res = Dict2Tabular.pyexcel_io(cls.yieldSMR(data))
         if res is not None:
@@ -128,7 +128,7 @@ class SMR(Abclog):
                     return None
             else:
                 await pipe_out(df=res, path=new_path, format='tsv', mode='w')
-            cls.logger.debug(f'Decoded file in {new_path}')
+            cls.logger.debug(f"Decoded file in '{new_path}'")
             return new_path
         else:
             cls.logger.warning(f"Without Expected Data (swissmodel/repository/uniprot/): {data}")
