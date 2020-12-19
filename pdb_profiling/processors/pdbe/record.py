@@ -1313,7 +1313,8 @@ class PDBAssemble(PDB):
 
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+[_0-9]*):-?[0-9]+\??")  # e.g. [FMN]B:149 [C2E]A:301 [ACE]H:-8?
-    rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
+    # rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
+    interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?")  # [4CA]BB:170+AB
 
     @property
     def assemble_summary(self) -> Dict:
@@ -1332,8 +1333,8 @@ class PDBAssemble(PDB):
         NOTE: reference: <https://www.ebi.ac.uk/training/online/course/pdbepisa-identifying-and-interpreting-likely-biolo/1555-special-code-doing-nothing-structure>
         '''
         self.interface_filters = {
-            'structure_2.symmetry_id': ('eq', '1_555'),
-            'css': ('ge', 0)}
+            'symmetry_operator': ('eq', '1_555')
+        }  # 'structure_2.symmetry_id': ('eq', '1_555'),'css': ('ge', 0)
 
     def set_id(self, pdb_ass_id: str):
         self.pdb_ass_id = pdb_ass_id.lower()
@@ -1346,6 +1347,7 @@ class PDBAssemble(PDB):
     def get_id(self):
         return self.pdb_ass_id
 
+    '''
     @classmethod
     def transform(cls, x):
         res = cls.rare_pat.search(x)
@@ -1356,7 +1358,20 @@ class PDBAssemble(PDB):
             return chain
         else:
             return chain+chr(63+num)
+    '''
 
+    @classmethod
+    async def to_asiscomponent_interfaces_df(cls, path: Unfuture):
+        interfacelist_df = await path.then(cls.to_dataframe)
+        if interfacelist_df is None:
+            return None
+        interfacelist_df.rename(columns={"interface_number": "interface_id"}, inplace=True)
+        interfacelist_df[['struct_asym_id_in_assembly_1', 'struct_asym_id_in_assembly_2']
+                        ] = interfacelist_df.interface_structures.apply(
+                            lambda x: cls.interface_structures_pat.fullmatch(x).group(2,5)).apply(Series)
+        return interfacelist_df
+
+    '''
     @classmethod
     async def to_interfacelist_df(cls, path: Unfuture):
         interfacelist_df = await path.then(cls.to_dataframe)
@@ -1383,6 +1398,7 @@ class PDBAssemble(PDB):
             interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df.apply(
                 lambda x: cls.struct_range_pattern.match(x['structure_2.range']).group(1) if x['structure_2.original_range'] != '{-}' else x['structure_2.range'], axis=1)
         return interfacelist_df
+    '''
 
     @unsync
     async def set_interface(self, obligated_class_chains: Optional[Iterable[str]] = None, allow_same_class_interaction:bool=True):
@@ -1395,14 +1411,16 @@ class PDBAssemble(PDB):
 
         try:
             interfacelist_df = await self.fetch_from_pdbe_api(
-                'api/pisa/interfacelist/', 
-                PDBAssemble.to_interfacelist_df,
-                mask_id=f'{self.pdb_id}/0' if use_au else None)
+                'api/pisa/asiscomponent/', 
+                PDBAssemble.to_asiscomponent_interfaces_df,
+                mask_id=f'{self.pdb_id}/0/interfaces' if use_au else f'{self.get_id()}/interfaces')
         except WithoutExpectedKeyError:
             try:
                 interfacelist_df = await self.fetch_from_pdbe_api(
-                    'api/pisa/interfacelist/', 
-                    PDBAssemble.to_interfacelist_df)
+                    'api/pisa/asiscomponent/', 
+                    PDBAssemble.to_asiscomponent_interfaces_df,
+                    mask_id=f'{self.get_id()}/interfaces')
+                use_au = False
             except WithoutExpectedKeyError:
                 warn(f"cannot get interfacelist data from PISA: {self.get_id()}", PISAErrorWarning)
                 self.interface = dict()
@@ -1411,7 +1429,8 @@ class PDBAssemble(PDB):
         if interfacelist_df is None:
             self.interface = dict()
             return
-        
+        else:
+            interfacelist_df['assembly_id'] = self.assembly_id
         if use_au:
             a_chains = self.pdb_ob.subset_assembly[self.assembly_id]
             interfacelist_df = interfacelist_df[
@@ -1700,10 +1719,10 @@ class PDBInterface(PDBAssemble):
         if hasattr(self, 'interface_res_df'):
             return self.interface_res_df
         else:
-            try:
-                await self.set_interface_res(True)
+            await self.set_interface_res(True)
+            if hasattr(self, 'interface_res_df'):
                 return self.interface_res_df
-            except AttributeError:
+            else:
                 return
     
     @unsync
@@ -1711,10 +1730,10 @@ class PDBInterface(PDBAssemble):
         if hasattr(self, 'interface_res_dict'):
             return self.interface_res_dict
         else:
-            try:
-                await self.set_interface_res(**kwargs)
+            await self.set_interface_res(**kwargs)
+            if hasattr(self, 'interface_res_dict'):
                 return self.interface_res_dict
-            except AttributeError:
+            else:
                 return
 
 
@@ -2730,8 +2749,11 @@ class SIFTS(PDB):
             res = await ob.run(tqdm=progress_bar)
         else:
             res = [await i for i in ob.tasks]
-            ob.tasks = [i.get_interface_res_dict() for interfaces in res for i in interfaces]
-            res = [await i for i in ob.tasks]
+            inteface_lyst = [i for interfaces in res for i in interfaces]
+            res = []
+            for index in range(0, len(inteface_lyst), 100):
+                ob.tasks = [i.get_interface_res_dict() for i in inteface_lyst[index:index+100]]
+                res.extend([await i for i in ob.tasks])
         # interact_df = DataFrame(j for i in res for j in i if j is not None)
         interact_df = DataFrame(j for j in res if j is not None)
         if len(interact_df) == 0:

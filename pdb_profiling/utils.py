@@ -978,4 +978,5 @@ def dumpsParams(params: Dict) -> str:
 async def a_concat(pathes, sep='\t', sort=False, ignore_index=True, columns=None):
     if isinstance(pathes, (Unfuture, Coroutine)):
         pathes = await pathes
-    return concat([await a_read_csv((await path) if isinstance(Unfuture, Coroutine) else path, sep=sep, columns=columns) for path in pathes], sort=sort, ignore_index=ignore_index)
+    res = [await a_read_csv((await path) if isinstance(Unfuture, Coroutine) else path, sep=sep, columns=columns) for path in pathes]
+    return concat((i for i in res if i is not None), sort=sort, ignore_index=ignore_index)

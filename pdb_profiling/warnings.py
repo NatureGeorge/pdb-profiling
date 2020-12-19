@@ -61,3 +61,7 @@ class SkipAssemblyWarning(UserWarning):
 
 class PeptideLinkingWarning(UserWarning):
     pass
+
+
+class PossibleObsoletedUniProtIsoformWarning(UserWarning):
+    pass

@@ -22,7 +22,8 @@ class ValidateBase(object):
         dispatch = {
             '.json': cls.json_load,
             '.cif': cls.cif_load,
-            '.fasta': cls.fasta_load
+            '.fasta': cls.fasta_load,
+            '.tsv': cls.tsv_load
         }
         if isinstance(path, (Coroutine, Unfuture)):
             path = await path
@@ -53,3 +54,9 @@ class ValidateBase(object):
         async with aiofiles_open(path, 'rt') as handle:
             data = await handle.read()
         assert bool(cls.fasta_pat.fullmatch(data))
+    
+    @classmethod
+    async def tsv_load(cls, path):
+        async with aiofiles_open(path, 'rt') as handle:
+            data = await handle.read()
+        assert data != ''

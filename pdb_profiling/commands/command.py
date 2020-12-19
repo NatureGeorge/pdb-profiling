@@ -34,8 +34,8 @@ def format_info(name: str, template: str = "[green]Initializing %s"):
 @click.option('--dropall/--no-dropall', help="whether to use existing custom DB", default=False, is_flag=True)
 @click.pass_context
 def Interface(ctx, folder, dropall):
-    console.log(format_info(f"Folder: {folder if folder not in ('./', '.') else 'current path'}"))
     folder = Path(folder)
+    console.log(format_info(f"Folder: {folder.absolute()}"))
     ctx.ensure_object(dict)
     ctx.obj['folder'] = folder
     default_config(folder)

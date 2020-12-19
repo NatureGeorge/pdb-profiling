@@ -351,6 +351,15 @@ class PDBeDecoder(object):
                     f'Unexpected data structure for inputted data: {data}')
 
     @staticmethod
+    @dispatch_on_set('api/pisa/asiscomponent/')
+    def yield_pisa_asiscomponent(data: Dict):
+        for pdb in data:
+            if data[pdb]['status'] != 'Ok':
+                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
+            records = data[pdb]['assembly_detail']['engaged_interfaces_list']['engaged_interfaces_array']
+            yield records, ('pdb_id',), (pdb,)
+
+    @staticmethod
     @dispatch_on_set('api/pisa/interfacelist/')
     def yieldPISAInterfaceList(data: Dict):
         for pdb in data:

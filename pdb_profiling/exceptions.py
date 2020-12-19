@@ -35,3 +35,7 @@ class WithoutExpectedContentError(Exception):
 
 class PossibleInvalidAssemblyError(Exception):
     pass
+
+
+class PossibleObsoletedUniProtIsoformError(Exception):
+    pass

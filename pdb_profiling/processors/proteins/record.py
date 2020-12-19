@@ -9,6 +9,7 @@ from pdb_profiling.processors.eutils.api import EutilsAPI
 from pdb_profiling.processors.proteins.api import ProteinsAPI
 from pdb_profiling.processors.proteins import ProteinsDB
 from pdb_profiling.log import Abclog
+from pdb_profiling.warnings import PossibleObsoletedUniProtWarning
 from pdb_profiling.utils import init_folder_from_suffix, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run
 from re import compile as re_compile
 from pathlib import Path
@@ -17,6 +18,7 @@ from unsync import unsync
 from asyncio import as_completed
 from pandas import DataFrame, concat
 from collections import OrderedDict
+from warnings import warn
 
 
 class Identifier(Abclog):
@@ -103,9 +105,9 @@ class Identifier(Abclog):
 
         cls.sqlite_api.sync_insert(
             cls.sqlite_api.INFO, [info_data])
-
-        cls.sqlite_api.sync_insert(
-            cls.sqlite_api.FEATURES, features_df.to_dict('records'))
+        if features_df is not None:
+            cls.sqlite_api.sync_insert(
+                cls.sqlite_api.FEATURES, features_df.to_dict('records'))
 
         if (dbReferences_df is not None) and (len(dbReferences_df) > 0):
             cls.sqlite_api.sync_insert(
@@ -150,6 +152,9 @@ class Identifier(Abclog):
         exists = (await self.sqlite_api.INFO.objects.filter(accession=self.identifier).exists()) if exists is None else exists
         if not exists:
             res = await self.fetch_from_ProteinsAPI_with_unp()
+            if res is None:
+                warn(repr(self), PossibleObsoletedUniProtWarning)
+                return
             res = dict(zip(default_tables, res))
             return res[table_name]
         else:

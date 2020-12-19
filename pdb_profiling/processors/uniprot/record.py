@@ -98,11 +98,15 @@ class UniProts(object):
     def get_alt_interval_base(alt_id_lyst, alt_seq_dict):
         info = []
         for altID in alt_id_lyst:
-            index = alt_seq_dict["ftId"].index(altID)
+            try:
+                index = alt_seq_dict["ftId"].index(altID)
+            except ValueError:
+                return []
             info.append((
                 (alt_seq_dict["begin"][index], alt_seq_dict["end"][index]), 
                 (alt_seq_dict["before_len"][index], alt_seq_dict["after_len"][index]),
                 alt_seq_dict["after"][index]))
+        assert len(info) > 0
         return sorted(info, key=lambda x: x[0][0])
     '''
     @classmethod
