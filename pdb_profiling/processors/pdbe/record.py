@@ -1313,7 +1313,7 @@ class PDBAssemble(PDB):
 
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+[_0-9]*):-?[0-9]+\??")  # e.g. [FMN]B:149 [C2E]A:301 [ACE]H:-8?
-    # rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
+    rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
     interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?")  # [4CA]BB:170+AB
 
     @property
@@ -1347,7 +1347,6 @@ class PDBAssemble(PDB):
     def get_id(self):
         return self.pdb_ass_id
 
-    '''
     @classmethod
     def transform(cls, x):
         res = cls.rare_pat.search(x)
@@ -1358,7 +1357,6 @@ class PDBAssemble(PDB):
             return chain
         else:
             return chain+chr(63+num)
-    '''
 
     @classmethod
     async def to_asiscomponent_interfaces_df(cls, path: Unfuture):
@@ -1371,7 +1369,6 @@ class PDBAssemble(PDB):
                             lambda x: cls.interface_structures_pat.fullmatch(x).group(2,5)).apply(Series)
         return interfacelist_df
 
-    '''
     @classmethod
     async def to_interfacelist_df(cls, path: Unfuture):
         interfacelist_df = await path.then(cls.to_dataframe)
@@ -1398,7 +1395,28 @@ class PDBAssemble(PDB):
             interfacelist_df['struct_asym_id_in_assembly_2'] = interfacelist_df.apply(
                 lambda x: cls.struct_range_pattern.match(x['structure_2.range']).group(1) if x['structure_2.original_range'] != '{-}' else x['structure_2.range'], axis=1)
         return interfacelist_df
-    '''
+
+    @unsync
+    async def get_interfacelist_df(self, api_suffix, func):
+        use_au = self.assembly_id in self.pdb_ob.subset_assembly
+        if api_suffix == 'api/pisa/asiscomponent/':
+            temp1 = '{}/0/interfaces'
+            temp2 = '{}/interfaces'
+        elif api_suffix == 'api/pisa/interfacelist/':
+            temp1 = '{}/0'
+            temp2 = '{}'
+        else:
+            raise ValueError(f"Invalid suffix: {api_suffix}")
+        try:
+            interfacelist_df = await self.fetch_from_pdbe_api(api_suffix, func, mask_id=temp1.format(self.pdb_id) if use_au else temp2.format(self.get_id()))
+        except WithoutExpectedKeyError:
+            try:
+                interfacelist_df = await self.fetch_from_pdbe_api(api_suffix, func, mask_id=temp2.format(self.get_id()))
+                use_au = False
+            except WithoutExpectedKeyError:
+                warn(f"cannot get interfacelist data from PISA ({api_suffix}): {self.get_id()}", PISAErrorWarning)
+                return None, use_au
+        return interfacelist_df, use_au
 
     @unsync
     async def set_interface(self, obligated_class_chains: Optional[Iterable[str]] = None, allow_same_class_interaction:bool=True):
@@ -1406,25 +1424,14 @@ class PDBAssemble(PDB):
         def to_interface_id(pdb_assembly_id, focus_interface_ids):
             for interface_id in focus_interface_ids:
                 yield f"{pdb_assembly_id}/{interface_id}"
-
-        use_au = self.assembly_id in self.pdb_ob.subset_assembly
-
-        try:
-            interfacelist_df = await self.fetch_from_pdbe_api(
-                'api/pisa/asiscomponent/', 
-                PDBAssemble.to_asiscomponent_interfaces_df,
-                mask_id=f'{self.pdb_id}/0/interfaces' if use_au else f'{self.get_id()}/interfaces')
-        except WithoutExpectedKeyError:
-            try:
-                interfacelist_df = await self.fetch_from_pdbe_api(
-                    'api/pisa/asiscomponent/', 
-                    PDBAssemble.to_asiscomponent_interfaces_df,
-                    mask_id=f'{self.get_id()}/interfaces')
-                use_au = False
-            except WithoutExpectedKeyError:
-                warn(f"cannot get interfacelist data from PISA: {self.get_id()}", PISAErrorWarning)
-                self.interface = dict()
-                return
+        
+        interfacelist_df, use_au = await self.get_interfacelist_df(
+            'api/pisa/asiscomponent/', PDBAssemble.to_asiscomponent_interfaces_df)
+        if interfacelist_df is None:
+            interfacelist_df, use_au = await self.get_interfacelist_df(
+                'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
+            self.interface_filters['structure_2.symmetry_id'] = ('eq', '1_555')
+            del self.interface_filters['symmetry_operator']
         
         if interfacelist_df is None:
             self.interface = dict()

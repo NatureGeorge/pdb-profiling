@@ -354,8 +354,8 @@ class PDBeDecoder(object):
     @dispatch_on_set('api/pisa/asiscomponent/')
     def yield_pisa_asiscomponent(data: Dict):
         for pdb in data:
-            if data[pdb]['status'] != 'Ok':
-                raise WithoutExpectedKeyError(f"Without Expected interface_detail: {data}")
+            if data[pdb]['status'] != 'Ok' or 'assembly_detail' not in data[pdb]:
+                raise WithoutExpectedKeyError(f"Without Expected interfacelist info: {data}")
             records = data[pdb]['assembly_detail']['engaged_interfaces_list']['engaged_interfaces_array']
             yield records, ('pdb_id',), (pdb,)
 
