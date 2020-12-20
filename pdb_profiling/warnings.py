@@ -65,3 +65,15 @@ class PeptideLinkingWarning(UserWarning):
 
 class PossibleObsoletedUniProtIsoformWarning(UserWarning):
     pass
+
+
+class ZeroSizeWarning(UserWarning):
+    pass
+
+
+class FileExistsWarning(UserWarning):
+    pass
+
+
+class InvalidFileContentWarning(UserWarning):
+    pass

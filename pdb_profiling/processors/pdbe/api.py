@@ -19,8 +19,12 @@ from pdb_profiling.utils import related_dataframe, flatten_dict, pipe_out, dumps
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
-from pdb_profiling.exceptions import WithoutExpectedKeyError
-from tenacity import retry, wait_random, stop_after_attempt, retry_if_exception_type
+from pdb_profiling.exceptions import WithoutExpectedKeyError, InvalidFileContentError
+from pdb_profiling.ensure import EnsureBase
+from tenacity import retry, wait_random, stop_after_attempt, retry_if_exception_type, RetryError
+
+ensure = EnsureBase()
+msc_rt_kw = dict(wait=wait_random(max=1), stop=stop_after_attempt(3), retry=retry_if_exception_type(InvalidFileContentError))
 
 BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
 
@@ -85,8 +89,6 @@ class ProcessPDBe(Abclog):
         'structure_2.range': str
     }
 
-    use_existing: bool = False
-
     @staticmethod
     def yieldTasks(pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 25, task_id: int = 0) -> Generator:
         file_prefix = suffix.replace('/', '%')
@@ -129,44 +131,49 @@ class ProcessPDBe(Abclog):
 
     @classmethod
     @unsync
-    async def process(cls, path: Union[str, Path, Unfuture]):
+    @ensure.make_sure_complete(**msc_rt_kw)
+    async def json2tsv(cls, suffix:str, ori_path: Union[str, Path], path: Union[str, Path]):
         cls.logger.debug('Start to decode')
-        if not isinstance(path, (str, Path)):
-            path = await path  # .result()
-        if path is None:
-            return path
-        path = Path(path)
-        suffix = path.name.replace('%', '/').split('+')[0]
-        new_path = Path(str(path).replace('.json', '.tsv'))
-        if new_path.exists() and cls.use_existing and (new_path.stat().st_size > 0):
-            return new_path
-        async with aiofiles_open(path) as inFile:
+        async with aiofiles_open(ori_path) as handle:
             try:
-                data = json.loads(await inFile.read())
+                data = json.loads(await handle.read())
             except Exception as e:
-                cls.logger.error(f"Error in '{path}'")
+                cls.logger.error(f"Error in '{ori_path}'")
                 raise e
-        if new_path.exists() and cls.use_existing and (new_path.stat().st_size > 0):
-            return new_path
         res = Dict2Tabular.pyexcel_io(traverseSuffixes(suffix, data))
         if res is not None:
             if isinstance(res, Generator):
                 count = 0
                 for r in res:
                     if r is not None:
-                        await pipe_out(df=r, path=new_path, format='tsv', mode='a' if count else 'w')
+                        await pipe_out(df=r, path=path, format='tsv', mode='a' if count else 'w')
                         count += 1
                 if not count:
-                    cls.logger.debug(
-                        f"Without Expected Data ({suffix}): {data}")
+                    cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
                     return None
             else:
-                await pipe_out(df=res, path=new_path, format='tsv', mode='w')
-            cls.logger.debug(f"Decoded file in '{new_path}'")
-            return new_path
+                await pipe_out(df=res, path=path, format='tsv', mode='w')
+            cls.logger.debug(f"Decoded file in '{path}'")
+            return path
         else:
             cls.logger.debug(f"Without Expected Data ({suffix}): {data}")
             return None
+
+    @classmethod
+    @unsync
+    async def process(cls, path: Union[str, Path, Unfuture]):
+        if not isinstance(path, (str, Path)):
+            path = await path
+        if path is None:
+            return
+        path = Path(path)
+        suffix = path.name.replace('%', '/').split('+')[0]
+        new_path = Path(str(path).replace('.json', '.tsv'))
+        try:
+            return await cls.json2tsv(suffix=suffix, ori_path=path, path=new_path)
+        except RetryError:
+            cls.logger.error(f"Retry failed for: {path.name} -> {new_path.name}")
+            raise
 
 
 class PDBeDecoder(object):
@@ -356,7 +363,10 @@ class PDBeDecoder(object):
         for pdb in data:
             if data[pdb]['status'] != 'Ok' or 'assembly_detail' not in data[pdb]:
                 raise WithoutExpectedKeyError(f"Without Expected interfacelist info: {data}")
-            records = data[pdb]['assembly_detail']['engaged_interfaces_list']['engaged_interfaces_array']
+            try:
+                records = data[pdb]['assembly_detail']['engaged_interfaces_list']['engaged_interfaces_array']
+            except KeyError:
+                raise WithoutExpectedKeyError(f"Without Expected interfacelist info: {data}")
             yield records, ('pdb_id',), (pdb,)
 
     @staticmethod

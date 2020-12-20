@@ -11,6 +11,7 @@ from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
+from aiofiles.os import remove as aiofiles_os_remove
 from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
@@ -46,12 +47,13 @@ from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning,
                                     ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
                                     PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
                                     PeptideLinkingWarning, MultiWrittenWarning)
+from pdb_profiling.ensure import unsync_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
 from sklearn.neighbors import NearestNeighbors
 from random import choice
-from tenacity import retry, wait_random, stop_after_attempt
+from tenacity import retry, wait_random, stop_after_attempt, RetryError
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -923,7 +925,8 @@ class PDB(Base):
     async def profile_asym_id_in_assembly_unit(self, parent, assembly_id, replace):
         header = f'{self.pdb_id}-assembly-{assembly_id}'
         target_file = parent/f'{header}-pdbe_chain_remapping.cif'
-        if (not target_file.exists()) or replace:
+        exists, _ = await unsync_file_exists_stat(target_file)
+        if (not exists) or replace:
             await cif_gz_stream.writer(
                 cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
                 target_file,
@@ -939,7 +942,7 @@ class PDB(Base):
                 cur_df = DataFrame(mmcif_dict)
         except (KeyError, ValueError, PossibleConnectionError) as e:
             warn(f"{target_file}, {e.__class__.__name__}, need retry", WithoutCifKeyWarning)
-            target_file.unlink()
+            await aiofiles_os_remove(target_file)
             raise e
         '''
         mmcif_dict = await cif_gz_stream.full_io(
@@ -1636,7 +1639,7 @@ class PDBInterface(PDBAssemble):
             interfacedetail_df = await self.fetch_from_pdbe_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
             if interfacedetail_df is None:
                 raise WithoutExpectedContentError('')
-        except (WithoutExpectedKeyError, WithoutExpectedContentError) as e:
+        except (WithoutExpectedKeyError, WithoutExpectedContentError, RetryError) as e:
             warn(f"cannot get interfacedetail data from PISA: {repr(self)}, {e.__class__.__name__}", PISAErrorWarning)
             return
         except Exception as e:

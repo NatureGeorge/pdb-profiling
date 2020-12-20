@@ -9,18 +9,18 @@ __version__ = '0.2.6'
 
 def default_config(folder='./'):
     from pdb_profiling.log import Abclog
-    from pdb_profiling.fetcher.webfetch import UnsyncFetch
+    # from pdb_profiling.fetcher import webfetch
     from pdb_profiling.processors.pdbe.record import Base, PDB
-    from pdb_profiling.processors.pdbe.api import ProcessPDBe
+    # from pdb_profiling.processors.pdbe import api as pdbe_api
     from pdb_profiling.processors.proteins.record import Identifier
     from pdb_profiling.processors.uniprot.api import UniProtFASTA, UniProtAPI
     from pdb_profiling.processors.uniprot.record import UniProts
     from pdb_profiling.processors.i3d.api import Interactome3D
     from pdb_profiling.processors.swissmodel.api import SMR
     # Use Existing Handled PDBe API Results (e.g. tsv format results)
-    ProcessPDBe.use_existing = True
+    # pdbe_api.ensure.use_existing = True  # default
     # Use Existing API Results (e.g. json format results downloaded from web)
-    UnsyncFetch.use_existing = True
+    # webfetch.ensure.use_existing = True  # default
     # Init Abclog Logger
     Abclog.init_logger(logName='PDB-Profiling')
     # Set WebFetcher's Semaphore
