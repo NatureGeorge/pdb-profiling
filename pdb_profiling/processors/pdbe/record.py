@@ -152,11 +152,12 @@ class Base(object):
     
     def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
-        task = self.tasks.get((repr(self), api_suffix, then_func, json, mask_id), None)
+        identifier = self.get_id() if mask_id is None else mask_id
+        task = self.tasks.get((self.__class__.__name__, api_suffix, then_func, json, identifier), None)
         if task is not None:
             return task
 
-        args = dict(pdb=self.get_id() if mask_id is None else mask_id,
+        args = dict(pdb=identifier,
                     suffix=api_suffix,
                     method='get',
                     folder=self.get_folder()/api_suffix,

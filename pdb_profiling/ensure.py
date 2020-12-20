@@ -5,7 +5,7 @@
 # @Last Modified: 2020-12-20 07:56:14 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Dict
-from datetime import datetime
+from uuid import uuid4
 import asyncio
 from unsync import unsync
 from tenacity import retry
@@ -20,15 +20,13 @@ from pdb_profiling.validate import ValidateBase
 
 class EnsureBase(object):
 
-    TIME_FORMAT = "%Y%m%d-%H%M%S-%f"
-
     def __init__(self, use_existing: bool = True):
         self.use_existing = use_existing
 
-    @classmethod
-    def create_tmp_path_from_kw(cls, kwargs: Dict):
+    @staticmethod
+    def create_tmp_path_from_kw(kwargs: Dict):
         path = kwargs['path']
-        temp_path = str(path)+f'.{datetime.now().strftime(cls.TIME_FORMAT)}.tmp'
+        temp_path = str(path)+f'.{uuid4().hex}.tmp'  # still possible to meet collision in high freq
         kwargs['path'] = temp_path
         return kwargs
 
@@ -51,27 +49,26 @@ class EnsureBase(object):
                         await ValidateBase.validate(raw_path)
                         return raw_path
                     except InvalidFileContentError as e:
-                        warn(
-                            f"InvalidFileContentError for '{raw_path}', will retry", InvalidFileContentWarning)
+                        warn(f"InvalidFileContentError for '{raw_path}', will retry", InvalidFileContentWarning)
                         await aiofiles.os.remove(raw_path)
                         raise e
                 if asyncio.iscoroutinefunction(func) or isinstance(func, unsync):
                     path = await func(*args, **self.create_tmp_path_from_kw(kwargs))
                 else:
                     path = func(*args, **self.create_tmp_path_from_kw(kwargs))
+                if path is None:
+                    return
                 try:
                     await ValidateBase.validate(path, suffix=Path(raw_path).suffix)
                 except InvalidFileContentError as e:
-                    warn(
-                        f"InvalidFileContentError for '{path}', will retry", InvalidFileContentWarning)
+                    warn(f"InvalidFileContentError for '{path}', will retry", InvalidFileContentWarning)
                     await aiofiles.os.remove(path)
                     raise e
                 try:
                     await aiofiles.os.rename(path, raw_path)
                 except FileExistsError:
-                    warn(f"would override {str(raw_path)}", FileExistsWarning)
-                    await aiofiles.os.remove(raw_path)
-                    await aiofiles.os.rename(path, raw_path)
+                    await aiofiles.os.remove(path)
+                    warn(f"remove {str(path)}", FileExistsWarning)
                 return raw_path
             return wrapper
         return decorator
