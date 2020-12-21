@@ -30,7 +30,7 @@ setup(
         'textdistance>=4.1.5',
         'databases>=0.3.2',
         # 'neo4j>=4.0.1',
-        'tqdm>=4.43.0',
+        'rich>=9.5.0',
         'orm>=0.1.5',
         'scikit-learn>=0.22',
         'python-slugify>=4.0.0',

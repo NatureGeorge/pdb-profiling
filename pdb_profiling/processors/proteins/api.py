@@ -12,9 +12,11 @@ from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.utils import dumpsParams, range_len
 from pdb_profiling.processors.uniprot.record import UniProts
+from pdb_profiling.warnings import PossibleObsoletedUniProtIsoformWarning
 from urllib.parse import quote
 from slugify import slugify
 from unsync import unsync
+from warnings import warn
 
 
 BASE_URL = 'https://www.ebi.ac.uk/proteins/api/'
@@ -130,7 +132,7 @@ class ProteinsAPI(Abclog):
                                 Causion from UniProt-KB: 'Three distinct genes (AMY1A, AMY1B and AMY1C), located in a gene cluster on 1p21, encode proteins sharing the same peptidic sequence.'
             '''
             # raise AssertionError("With Unexpected length!")
-        elif len(data) == 0:
+        elif (len(data) == 0) or (data[0] is None):
             return
         data = data[0]
         dbReferences_lyst = []
@@ -152,9 +154,12 @@ class ProteinsAPI(Abclog):
             other_dbReferences_df['isoform'] = ''
         else:
             other_dbReferences_df['isoform'].fillna('', inplace=True)
-        features_df = DataFrame(data['features']); features_df['accession'] = data['accession']
-        if 'molecule' not in features_df.columns:
-            features_df['molecule'] = ''
+        if 'features' in data.keys():
+            features_df = DataFrame(data['features']); features_df['accession'] = data['accession']
+            if 'molecule' not in features_df.columns:
+                features_df['molecule'] = ''
+        else:
+            features_df = None
         iso_df, int_df = None, None
         if 'comments' in data.keys():
             for comment in data['comments']:
@@ -176,6 +181,12 @@ class ProteinsAPI(Abclog):
                         assert all(alt_seq_df.ftId.ne('')), f"{alt_seq_df[alt_seq_df.ftId.eq('')]}"
                         alt_seq_dict = alt_seq_df[["ftId", "before_len", "after_len", "after", "begin", "end"]].to_dict('list')
                         iso_alt_info = iso_df.VAR_SEQ.apply(lambda x: UniProts.get_alt_interval_base(x, alt_seq_dict) if not isinstance(x, float) else x)
+                        outdated = iso_df[iso_alt_info.apply(lambda x: len(x) if not isinstance(x, float) else x).eq(0)]
+                        if len(outdated) > 0:
+                            outdated_isos = outdated.isoform.tolist()
+                            warn(str(outdated_isos), PossibleObsoletedUniProtIsoformWarning)
+                            iso_df = iso_df.drop(index=outdated.index).reset_index(drop=True)
+                            iso_alt_info = iso_alt_info.drop(index=outdated.index).reset_index(drop=True)
                         iso_df[["iso_range", "length", "sequence"]] = iso_alt_info.apply(lambda x: UniProts.get_affected_interval(x, ac_len, ac_seq)).apply(Series)
                     else:
                         iso_df['iso_range'] = nan

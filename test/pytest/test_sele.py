@@ -1,5 +1,5 @@
 from pdb_profiling import default_config
-from tqdm import tqdm
+from rich.progress import track
 
 default_config()
 
@@ -11,9 +11,10 @@ def test_single_select():
     from pdb_profiling.processors import SIFTS
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359')
-    demo.pipe_select_mo().result()
-    demo.pipe_select_ho(run_as_completed=True, progress_bar=tqdm).result()
-    demo.pipe_select_he(run_as_completed=True, progress_bar=tqdm).result()
+    df1 = demo.pipe_select_mo().result()
+    demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
+    demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
+    demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
 
 def test_identifiers():
     from pdb_profiling.processors import Identifiers
@@ -30,7 +31,7 @@ def test_uniprots_alt():
     from pdb_profiling.utils import a_concat
     UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972')).result()
     
-    demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092')
+    demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
 
 def test_command():
@@ -51,7 +52,7 @@ def test_other_api():
     PDB('4zai').fetch_from_PDBArchive('obsolete/mmCIF/', PDB.cif2residue_listing).result()
     pv_path = PDB.get_folder()/'pdb-versioned/entries'
     pv_path.mkdir(parents=True, exist_ok=True)
-    PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore()).result()
+    PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore(), file_suffix='.cif.gz').result()
     bm_df = pdb_ob.get_bound_molecules().result()
     [pdb_ob.get_bound_molecule_interaction(bm_id).result() for bm_id in bm_df.bm_id.unique()[:2]]
 

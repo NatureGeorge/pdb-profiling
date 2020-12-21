@@ -7,8 +7,9 @@
 import logging
 from typing import Optional, Union
 from pathlib import Path
+from rich.logging import RichHandler
 
-LOG_FORMAT = "%(asctime)s %(name)s %(levelname)s %(message)s"
+LOG_FORMAT = "%(name)s %(message)s" #  "%(asctime)s %(name)s %(levelname)s %(message)s"
 
 # logging.basicConfig(format=LOG_FORMAT)
 
@@ -25,7 +26,7 @@ class Abclog(object):
                 logName = cls.__name__
             cls.logger = logging.getLogger(logName)
             cls.logger.setLevel(log_level)
-            cls.streamHandler = logging.StreamHandler()
+            cls.streamHandler = RichHandler()  # logging.StreamHandler()
             cls.streamHandler.setLevel(stream_log_level)
             cls.formatter = logging.Formatter(LOG_FORMAT)
             cls.streamHandler.setFormatter(cls.formatter)
@@ -48,11 +49,3 @@ class Abclog(object):
             return cls.logger
         except Exception:
             cls.logger.exception("Invalid file path for logging file ! Please specifiy path=...")
-
-
-class SimpleLog(object):
-    
-    @classmethod
-    def init_logger(cls):
-        cls.logger = logging.getLogger(cls.__name__)
-        cls.logger.setLevel(logging.DEBUG)

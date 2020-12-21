@@ -11,6 +11,7 @@ from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
+from aiofiles.os import remove as aiofiles_os_remove
 from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
@@ -42,13 +43,17 @@ from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
-from pdb_profiling.warnings import *
+from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning, 
+                                    ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
+                                    PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
+                                    PeptideLinkingWarning, MultiWrittenWarning)
+from pdb_profiling.ensure import unsync_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
 from sklearn.neighbors import NearestNeighbors
 from random import choice
-from tenacity import retry, wait_random, stop_after_attempt
+from tenacity import retry, wait_random, stop_after_attempt, RetryError
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -116,6 +121,7 @@ class Base(object):
     def get_web_semaphore(cls):
         return cls.web_semaphore
 
+    '''
     @classmethod
     @unsync
     async def set_db_semaphore(cls, db_semaphore_value):
@@ -124,6 +130,7 @@ class Base(object):
     @classmethod
     def get_db_semaphore(cls):
         return cls.db_semaphore
+    '''
 
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
@@ -145,11 +152,12 @@ class Base(object):
     
     def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
-        task = self.tasks.get((repr(self), api_suffix, then_func, json, mask_id), None)
+        identifier = self.get_id() if mask_id is None else mask_id
+        task = self.tasks.get((self.__class__.__name__, api_suffix, then_func, json, identifier), None)
         if task is not None:
             return task
 
-        args = dict(pdb=self.get_id() if mask_id is None else mask_id,
+        args = dict(pdb=identifier,
                     suffix=api_suffix,
                     method='get',
                     folder=self.get_folder()/api_suffix,
@@ -576,21 +584,20 @@ class PDB(Base):
             'json-list').rename(columns={"in_chains": "struct_asym_id_in_assembly"}).reset_index(drop=True)
         return eec_df
 
+    @staticmethod
+    def to_assembly_id(pdb_id, assemblys):
+        for assembly_id in assemblys:
+            yield f"{pdb_id}/{assembly_id}"
+
     @unsync
-    async def set_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:Optional[int]=None, discard_multimer_chains_cutoff_for_au:Optional[int]=None):
+    async def set_focus_assembly(self, focus_assembly_ids:Optional[Iterable[int]]=None, discard_multimer_chains_cutoff:Optional[int]=None, discard_multimer_chains_cutoff_for_au:Optional[int]=None, omit_peptide_length:int=0):
         '''
-        NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
-        NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
-        NOTE Discard multimer contains more then 16 chains (except water | bound | carbohydrate_polymer)
+        EXAMPLE Discard multimer contains more then 16 chains (except water | bound | carbohydrate polymer)
         '''
-        
-        def to_assembly_id(pdb_id, assemblys):
-            for assembly_id in assemblys:
-                yield f"{pdb_id}/{assembly_id}"
-        
         ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
         mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
-        mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate_polymer'))]
+        mol_df = mol_df[~mol_df.molecule_type.isin(('water', 'bound', 'carbohydrate polymer'))]
+        mol_df = mol_df[~(mol_df.molecule_type.isin(('polypeptide(L)', 'polypeptide(D)')) & mol_df.length.le(omit_peptide_length))]
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull() & ass_eec_df.entity_id.isin(mol_df.entity_id)]
         check_chain_num = ass_eec_df.groupby('assembly_id').in_chains.apply(lambda x: sum(i.count(',')+1 for i in x))
         if discard_multimer_chains_cutoff is not None:
@@ -603,9 +610,22 @@ class PDB(Base):
             assemblys = sorted(assemblys & set(int(i) for i in focus_assembly_ids))
         else:
             assemblys = sorted(assemblys)
+        if not hasattr(self, 'assembly'):
+            await self.set_assembly()
+        self.focus_assembly: Dict[int, PDBAssemble] = {ass_id: ass_ob for ass_id, ass_ob in self.assembly.items() if ass_id in assemblys}
+
+    @unsync
+    async def set_assembly(self):
+        '''
+        NOTE even for NMR structures (e.g 1oo9), there exists assembly 1 for that entry
+        NOTE Discard `details` is NaN -> not author_defined_assembly OR software_defined_assembly
+        '''        
+        ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
+        ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
+        assemblys = set(ass_eec_df.assembly_id) | {0}
         self.assembly: Dict[int, PDBAssemble] = dict(zip(
             assemblys, 
-            (PDBAssemble(ass_id, self) for ass_id in to_assembly_id(self.pdb_id, assemblys))))
+            (PDBAssemble(ass_id, self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
@@ -906,7 +926,8 @@ class PDB(Base):
     async def profile_asym_id_in_assembly_unit(self, parent, assembly_id, replace):
         header = f'{self.pdb_id}-assembly-{assembly_id}'
         target_file = parent/f'{header}-pdbe_chain_remapping.cif'
-        if (not target_file.exists()) or replace:
+        exists, _ = await unsync_file_exists_stat(target_file)
+        if (not exists) or replace:
             await cif_gz_stream.writer(
                 cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
                 target_file,
@@ -922,7 +943,7 @@ class PDB(Base):
                 cur_df = DataFrame(mmcif_dict)
         except (KeyError, ValueError, PossibleConnectionError) as e:
             warn(f"{target_file}, {e.__class__.__name__}, need retry", WithoutCifKeyWarning)
-            target_file.unlink()
+            await aiofiles_os_remove(target_file)
             raise e
         '''
         mmcif_dict = await cif_gz_stream.full_io(
@@ -1181,15 +1202,16 @@ class PDB(Base):
             else:
                 return ret
 
-    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=16, discard_multimer_chains_cutoff_for_au=None, **kwargs):
+    @unsync
+    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=26, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=0, **kwargs):
         if chain_pairs is not None:
             chain_pairs = chain_pairs[self.pdb_id]
-        await self.set_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
+        await self.set_focus_assembly(focus_assembly_ids=focus_assembly_ids, discard_multimer_chains_cutoff=discard_multimer_chains_cutoff, discard_multimer_chains_cutoff_for_au=discard_multimer_chains_cutoff_for_au)
         res = []
-        for assembly in self.assembly.values():
+        for assembly in self.focus_assembly.values():
             try:
                 await getattr(assembly, func)(**kwargs)
-            except AssertionError:
+            except PossibleInvalidAssemblyError:
                 warn(f"skip {repr(assembly)}", SkipAssemblyWarning)
                 continue
             if len(assembly.interface) == 0:
@@ -1210,7 +1232,7 @@ class PDB(Base):
                 cur_chain_pairs = chain_pairs
             for interface in assembly.interface.values():
                 if (cur_chain_pairs is None) or (interface.info['chains'] in cur_chain_pairs):
-                    res.append(await interface.get_interface_res_dict())
+                    res.append(interface)
         return res
 
     @staticmethod
@@ -1296,6 +1318,7 @@ class PDBAssemble(PDB):
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+[_0-9]*):-?[0-9]+\??")  # e.g. [FMN]B:149 [C2E]A:301 [ACE]H:-8?
     rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
+    interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?")  # [4CA]BB:170+AB [ZN]D:154A+[CU]C:154
 
     @property
     def assemble_summary(self) -> Dict:
@@ -1314,8 +1337,8 @@ class PDBAssemble(PDB):
         NOTE: reference: <https://www.ebi.ac.uk/training/online/course/pdbepisa-identifying-and-interpreting-likely-biolo/1555-special-code-doing-nothing-structure>
         '''
         self.interface_filters = {
-            'structure_2.symmetry_id': ('eq', '1_555'),
-            'css': ('ge', 0)}
+            'symmetry_operator': ('isin', ('1_555', '1555'))  # 1555 for api%pisa%asiscomponent%+6e4h%0%interfaces
+        }  # 'structure_2.symmetry_id': ('eq', '1_555'),'css': ('ge', 0)
 
     def set_id(self, pdb_ass_id: str):
         self.pdb_ass_id = pdb_ass_id.lower()
@@ -1338,6 +1361,22 @@ class PDBAssemble(PDB):
             return chain
         else:
             return chain+chr(63+num)
+
+    @classmethod
+    async def to_asiscomponent_interfaces_df(cls, path: Unfuture):
+        interfacelist_df = await path.then(cls.to_dataframe)
+        if interfacelist_df is None:
+            return None
+        interfacelist_df.rename(columns={"interface_number": "interface_id"}, inplace=True)
+        try:
+            interfacelist_df[['struct_asym_id_in_assembly_1', 'struct_asym_id_in_assembly_2']
+                        ] = interfacelist_df.interface_structures.apply(
+                            lambda x: cls.interface_structures_pat.fullmatch(x).group(2,5)).apply(Series)
+        except AttributeError:
+            check = interfacelist_df.interface_structures.apply(lambda x: bool(cls.interface_structures_pat.fullmatch(x)))
+            warn(str(interfacelist_df[check.eq(False)]))
+            raise
+        return interfacelist_df
 
     @classmethod
     async def to_interfacelist_df(cls, path: Unfuture):
@@ -1367,33 +1406,47 @@ class PDBAssemble(PDB):
         return interfacelist_df
 
     @unsync
+    async def get_interfacelist_df(self, api_suffix, func):
+        use_au = self.assembly_id in self.pdb_ob.subset_assembly
+        if api_suffix == 'api/pisa/asiscomponent/':
+            temp1 = '{}/0/interfaces'
+            temp2 = '{}/interfaces'
+        elif api_suffix == 'api/pisa/interfacelist/':
+            temp1 = '{}/0'
+            temp2 = '{}'
+        else:
+            raise ValueError(f"Invalid suffix: {api_suffix}")
+        try:
+            interfacelist_df = await self.fetch_from_pdbe_api(api_suffix, func, mask_id=temp1.format(self.pdb_id) if use_au else temp2.format(self.get_id()))
+        except WithoutExpectedKeyError:
+            try:
+                interfacelist_df = await self.fetch_from_pdbe_api(api_suffix, func, mask_id=temp2.format(self.get_id()))
+                use_au = False
+            except WithoutExpectedKeyError:
+                warn(f"cannot get interfacelist data from PISA ({api_suffix}): {self.get_id()}", PISAErrorWarning)
+                return None, use_au
+        return interfacelist_df, use_au
+
+    @unsync
     async def set_interface(self, obligated_class_chains: Optional[Iterable[str]] = None, allow_same_class_interaction:bool=True):
 
         def to_interface_id(pdb_assembly_id, focus_interface_ids):
             for interface_id in focus_interface_ids:
                 yield f"{pdb_assembly_id}/{interface_id}"
-
-        use_au = self.assembly_id in self.pdb_ob.subset_assembly
-
-        try:
-            interfacelist_df = await self.fetch_from_pdbe_api(
-                'api/pisa/interfacelist/', 
-                PDBAssemble.to_interfacelist_df,
-                mask_id=f'{self.pdb_id}/0' if use_au else None)
-        except WithoutExpectedKeyError:
-            try:
-                interfacelist_df = await self.fetch_from_pdbe_api(
-                    'api/pisa/interfacelist/', 
-                    PDBAssemble.to_interfacelist_df)
-            except WithoutExpectedKeyError:
-                warn(f"cannot get interfacelist data from PISA: {self.get_id()}", PISAErrorWarning)
-                self.interface = dict()
-                return
+        
+        interfacelist_df, use_au = await self.get_interfacelist_df(
+            'api/pisa/asiscomponent/', PDBAssemble.to_asiscomponent_interfaces_df)
+        if interfacelist_df is None:
+            interfacelist_df, use_au = await self.get_interfacelist_df(
+                'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
+            self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555'))
+            del self.interface_filters['symmetry_operator']
         
         if interfacelist_df is None:
             self.interface = dict()
             return
-        
+        else:
+            interfacelist_df['assembly_id'] = self.assembly_id
         if use_au:
             a_chains = self.pdb_ob.subset_assembly[self.assembly_id]
             interfacelist_df = interfacelist_df[
@@ -1423,7 +1476,8 @@ class PDBAssemble(PDB):
     @unsync
     async def set_assemble_eec_as_df(self):
         eec_as_df = await self.pdb_ob.profile_id()
-        assert self.assembly_id in eec_as_df.assembly_id, f"{repr(self)}: Invalid assembly_id!"
+        if self.assembly_id not in eec_as_df.assembly_id:
+            raise PossibleInvalidAssemblyError(f"{repr(self)}: Invalid assembly_id!")
         self.assemble_eec_as_df = eec_as_df[eec_as_df.assembly_id.eq(self.assembly_id)]
     
     @unsync
@@ -1591,8 +1645,8 @@ class PDBInterface(PDBAssemble):
             interfacedetail_df = await self.fetch_from_pdbe_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
             if interfacedetail_df is None:
                 raise WithoutExpectedContentError('')
-        except (WithoutExpectedKeyError, WithoutExpectedContentError) as e:
-            warn(f"cannot get interfacedetail data from PISA: {self.get_id()}, {e.__class__.__name__}", PISAErrorWarning)
+        except (WithoutExpectedKeyError, WithoutExpectedContentError, RetryError) as e:
+            warn(f"cannot get interfacedetail data from PISA: {repr(self)}, {e.__class__.__name__}", PISAErrorWarning)
             return
         except Exception as e:
             raise AssertionError(e)
@@ -1681,10 +1735,10 @@ class PDBInterface(PDBAssemble):
         if hasattr(self, 'interface_res_df'):
             return self.interface_res_df
         else:
-            try:
-                await self.set_interface_res(True)
+            await self.set_interface_res(True)
+            if hasattr(self, 'interface_res_df'):
                 return self.interface_res_df
-            except AttributeError:
+            else:
                 return
     
     @unsync
@@ -1692,10 +1746,10 @@ class PDBInterface(PDBAssemble):
         if hasattr(self, 'interface_res_dict'):
             return self.interface_res_dict
         else:
-            try:
-                await self.set_interface_res(**kwargs)
+            await self.set_interface_res(**kwargs)
+            if hasattr(self, 'interface_res_dict'):
                 return self.interface_res_dict
-            except AttributeError:
+            else:
                 return
 
 
@@ -2707,9 +2761,17 @@ class SIFTS(PDB):
         ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_dict', chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)
         if run_as_completed:
             res = await ob.run(tqdm=progress_bar)
+            ob.tasks = [i.get_interface_res_dict() for interfaces in res for i in interfaces]
+            res = await ob.run(tqdm=progress_bar)
         else:
             res = [await i for i in ob.tasks]
-        interact_df = DataFrame(j for i in res for j in i if j is not None)
+            inteface_lyst = [i for interfaces in res for i in interfaces]
+            res = []
+            for index in range(0, len(inteface_lyst), 100):
+                ob.tasks = [i.get_interface_res_dict() for i in inteface_lyst[index:index+100]]
+                res.extend([await i for i in ob.tasks])
+        # interact_df = DataFrame(j for i in res for j in i if j is not None)
+        interact_df = DataFrame(j for j in res if j is not None)
         if len(interact_df) == 0:
             return
         await self.sqlite_api.async_insert(self.sqlite_api.PISAInterfaceDict, interact_df.to_dict('records'))

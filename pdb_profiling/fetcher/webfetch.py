@@ -4,21 +4,23 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-02-09 08:50:23 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-import os
 from time import perf_counter
 import asyncio
 import aiohttp
-import aiofiles
+from aiofiles import open as aiofiles_open
 from unsync import unsync, Unfuture
 from tenacity import retry, wait_random, stop_after_attempt, RetryError, retry_if_exception_type
-import logging
-from tqdm import tqdm
+from rich.progress import track
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
 from pdb_profiling.log import Abclog
-import re
-from pdb_profiling.utils import init_semaphore, unsync_wrap
+from pdb_profiling.utils import init_semaphore
 from pdb_profiling.exceptions import InvalidFileContentError, RemoteServerError
-from pdb_profiling.fetcher.validate import ValidateBase
+from pdb_profiling.ensure import EnsureBase
+
+
+ensure = EnsureBase()
+msc_rt_kw = dict(wait=wait_random(max=10), stop=stop_after_attempt(5), retry=retry_if_exception_type(InvalidFileContentError))
+rt_kw = dict(wait=wait_random(max=20), stop=stop_after_attempt(6))
 
 
 class UnsyncFetch(Abclog):
@@ -32,7 +34,7 @@ class UnsyncFetch(Abclog):
     * Since the methods in this class would not load the entire file in memory,
       the response data could be a large file
     * Parameters of `tenacity.retry` is built-in
-    
+
     following packages provide me with a lot of insights and inspiration
 
     Reference 
@@ -54,55 +56,52 @@ class UnsyncFetch(Abclog):
         * https://tenacity.readthedocs.io/en/latest/
     '''
 
-    use_existing: bool = False
-
     @classmethod
-    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5), 
-           retry=retry_if_exception_type(InvalidFileContentError) | retry_if_exception_type(RemoteServerError) | retry_if_exception_type(aiohttp.client_exceptions.ServerDisconnectedError))
-    async def http_download(cls, method: str, info: Dict, path: str):
-        if cls.use_existing is True and os.path.exists(path) and (os.stat(path).st_size > 0):
-            return path
+    @retry(**rt_kw)
+    async def http_download(cls, semaphore, method: str, info: Dict, path: str, rate: float):
+        '''
+        possible exceptions:
+            RemoteServerError, 
+            aiohttp.client_exceptions.ServerDisconnectedError, 
+            aiohttp.client_exceptions.ClientConnectorError, 
+            aiohttp.client_exceptions.ClientPayloadError
+        '''
         cls.logger.debug(f"Start to download file: {info['url']}")
-        async with aiohttp.ClientSession() as session:
-            async_func = getattr(session, method)
-            async with async_func(**info) as resp:
-                if resp.status == 200:
-                    async with aiofiles.open(path, 'wb') as fileOb:
-                        # Asynchronous iterator implementation of readany()
-                        async for chunk in resp.content.iter_any():
-                            await fileOb.write(chunk)
-                    cls.logger.debug(f"File has been saved in: {path}")
-                    try:
-                        await ValidateBase.validate(path)
-                    except InvalidFileContentError as e:
-                        # await aiofiles.os.remove(path)
-                        os.remove(path)
-                        cls.logger.error(f"InvalidFileContentError for {path}, will retry")
-                        raise e
-                    return path
-                elif resp.status in (300, 403, 404, 405):
-                    cls.logger.debug(f"300|403|404|405 for: {info}")
-                    return None
-                else:
-                    mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
-                    cls.logger.error(f"{info} -> {mes}")
-                    raise RemoteServerError(mes)
+        async with semaphore:
+            async with aiohttp.ClientSession() as session:  # headers={"Connection": "close"}
+                async_func = getattr(session, method)
+                async with async_func(**info) as resp:
+                    if resp.status == 200:
+                        async with aiofiles_open(path, 'wb') as fileOb:
+                            # Asynchronous iterator implementation of readany()
+                            async for chunk in resp.content.iter_any():
+                                await fileOb.write(chunk)
+                        cls.logger.debug(f"File has been saved in: '{path}'")
+                        await asyncio.sleep(rate)
+                        return path
+                    elif resp.status in (300, 403, 404, 405):
+                        cls.logger.debug(f"300|403|404|405 for: {info}")
+                        return None
+                    else:
+                        mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
+                        cls.logger.error(f"{info} -> {mes}")
+                        raise RemoteServerError(mes)
 
     @classmethod
-    @retry(wait=wait_random(max=20), stop=stop_after_attempt(5))
-    async def ftp_download(cls, method: str, info: Dict, path: str):
+    @retry(**rt_kw)
+    async def ftp_download(cls, semaphore, method: str, info: Dict, path: str, rate: float):
         from furl import furl
         from aioftp import ClientSession as aioftp_ClientSession
         url = furl(info['url'])
         fileName = url.path.segments[-1]
-        filePath = os.path.join(path, fileName)
-        if cls.use_existing is True and os.path.exists(filePath) and (os.stat(filePath).st_size > 0):
-            return filePath
+        filePath = path / fileName
         cls.logger.debug(f"Start to download file: {url}")  # info
-        async with aioftp_ClientSession(url.host) as session:
-            await session.change_directory('/'.join(url.path.segments[:-1]))
-            await session.download(fileName, path) # , write_info=True
+        async with semaphore:
+            async with aioftp_ClientSession(url.host) as session:
+                await session.change_directory('/'.join(url.path.segments[:-1]))
+                await session.download(fileName, path)  # , write_info=True
         cls.logger.debug(f"File has been saved in: {filePath}")
+        await asyncio.sleep(rate)
         return filePath
 
     @classmethod
@@ -113,58 +112,50 @@ class UnsyncFetch(Abclog):
         elif method == 'ftp':
             return cls.ftp_download
         else:
-            raise ValueError(f'Invalid method: {method}, valid method should be get, post or ftp')
+            raise ValueError(
+                f'Invalid method: {method}, valid method should be get, post or ftp')
 
     @classmethod
     @unsync
-    async def save_file(cls, path: str, data: bytes):
-        '''Deprecated'''
-        async with aiofiles.open(path, 'wb') as fileOb:
-            await fileOb.write(data)
-
-    @classmethod
-    @unsync
+    @ensure.make_sure_complete(**msc_rt_kw)
     async def fetch_file(cls, semaphore, method: str, info: Dict, path: str, rate: float):
         download_func = cls.download_func_dispatch(method)
         try:
-            async with semaphore:
-                res = await download_func(method, info, path)
-                if res is not None:
-                    await asyncio.sleep(rate)
-                return res
+            return await download_func(semaphore=semaphore, method=method, info=info, path=path, rate=rate)
         except RetryError:
             cls.logger.error(f"Retry failed for: {info}")
             return
+        except Exception:
+            cls.logger.error(f"Unexpected Exception for: {info}")
+            raise
 
     @classmethod
     @unsync
     async def unsync_tasks(cls, tasks):
-        return [await fob for fob in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
+        return [await fob for fob in track(asyncio.as_completed(tasks), total=len(tasks))]
 
     @classmethod
     def single_task(cls, task, semaphore, to_do_func: Optional[Callable] = None, rate: float = 1.5) -> Unfuture:
         method, info, path = task
-        if cls.use_existing is True and os.path.exists(path) and os.path.isfile(path) and (os.stat(path).st_size > 0):
-            task = unsync_wrap(path)
-        else:
-            task = cls.fetch_file(semaphore, method, info, path, rate)
+        task = cls.fetch_file(semaphore=semaphore, method=method, info=info, path=path, rate=rate)
         if to_do_func is not None:
             task = task.then(to_do_func)
         return task
 
     @classmethod
     def multi_tasks(cls, tasks: Union[Iterable, Iterator],
-              to_do_func: Optional[Callable] = None,
-              concur_req: int = 4, rate: float = 1.5,
-              ret_res: bool = True,
-              semaphore = None
-              ):
+                    to_do_func: Optional[Callable] = None,
+                    concur_req: int = 4, rate: float = 1.5,
+                    ret_res: bool = True,
+                    semaphore=None
+                    ):
 
         if semaphore is None:
             # asyncio.Semaphore(concur_req)
             semaphore = init_semaphore(concur_req).result()
         else:
-            cls.logger.debug(f'{cls.multi_tasks.__qualname__}: pass {repr(semaphore)}')
+            cls.logger.debug(
+                f'{cls.multi_tasks.__qualname__}: pass {repr(semaphore)}')
         if to_do_func is None:
             tasks = [cls.fetch_file(semaphore, method, info, path, rate)
                      for method, info, path in tasks]
@@ -175,18 +166,21 @@ class UnsyncFetch(Abclog):
             t0 = perf_counter()
             res = cls.unsync_tasks(tasks).result()
             elapsed = perf_counter() - t0
-            cls.logger.info('{} chunks downloaded in {:.2f}s'.format(len(res), elapsed))
+            cls.logger.info(
+                '{} chunks downloaded in {:.2f}s'.format(len(res), elapsed))
             return res
         else:
             return tasks
-        
 
+    '''
     @classmethod
     def main(cls, workdir: str, data: Union[Iterable, Iterator], concur_req: int = 4, rate: float = 1.5, logName: str = 'UnsyncFetch'):
-        cls.set_logging_fileHandler(os.path.join(workdir, f'{logName}.log'), logName=cls.__name__)
+        cls.set_logging_fileHandler(os.path.join(
+            workdir, f'{logName}.log'), logName=cls.__name__)
         t0 = perf_counter()
         # res = asyncio.run(cls.multi_tasks(data, concur_req=concur_req, rate=rate))
         res = cls.multi_tasks(data, concur_req=concur_req, rate=rate).result()
         elapsed = perf_counter() - t0
         cls.logger.info(f'downloaded in {elapsed}s')
         return res
+    '''

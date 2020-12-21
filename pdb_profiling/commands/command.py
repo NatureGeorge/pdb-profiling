@@ -13,13 +13,20 @@ from pandas import read_csv, concat, DataFrame
 from importlib import util as imp_util
 from pathlib import Path
 from math import ceil
-from tqdm.auto import tqdm
+from rich.progress import Progress, BarColumn, TimeRemainingColumn
+from rich.console import Console
 from time import sleep
 from random import uniform
 
 
-def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
-    return click.style(template % name, fg=fg)
+console = Console()
+
+
+progress_bar_args = ("[progress.percentage]{task.percentage:>3.1f}%", BarColumn(), "[magenta]{task.completed} of {task.total}", "[", TimeRemainingColumn(), "{task.elapsed:>3.2f}s", "]")
+
+
+def format_info(name: str, template: str = "[green]Initializing %s"):
+    return template % name
 
 
 @click.group(chain=True, invoke_without_command=False)
@@ -28,12 +35,11 @@ def colorClick(name: str, template: str = "Initializing %s", fg: str = "green"):
 @click.pass_context
 def Interface(ctx, folder, dropall):
     folder = Path(folder)
-    click.echo(colorClick(f"Folder: {folder}"))
+    console.log(format_info(f"Folder: {folder.absolute()}"))
     ctx.ensure_object(dict)
     ctx.obj['folder'] = folder
     default_config(folder)
-    ctx.obj['custom_db'] = CustomDB(
-        "sqlite:///%s" % (folder/'local_db'/'custom.db'), dropall)
+    ctx.obj['custom_db'] = CustomDB("sqlite:///%s" % (folder/'local_db'/'custom.db'), dropall)
 
 
 @Interface.command("insert-mutation")
@@ -50,25 +56,26 @@ def insert_sites(ctx, input, sep, usecols, readchunk, nrows, skiprows, functionf
     def do_nothing(dfrm):
         return dfrm.to_dict('records')
 
-    click.echo(colorClick("DB Mutation Insertion"))
+    console.log(format_info("DB Mutation Insertion"))
     usecols = usecols.split(',')
     if functionfile is not None:
         spec = imp_util.spec_from_file_location("CustomFunc", functionfile)
         CustomFunc = imp_util.module_from_spec(spec)
         spec.loader.exec_module(CustomFunc)
         deal = getattr(CustomFunc, functionname)
-        click.echo(f"Success: load func: {functionname} from {functionfile}")
+        console.log(f"Success: load func: {functionname} from {functionfile}")
     else:
         deal = do_nothing
     df = read_csv(input, sep=sep, usecols=usecols, chunksize=readchunk,
                   nrows=nrows, skiprows=skiprows)
     sqlite_api = ctx.obj['custom_db']
     start = 0
-    for index, dfrm in enumerate(df):
-        end = readchunk*(index+1)
-        click.echo(f"Try to insert: {start}-{end}")
-        start = end+1
-        sqlite_api.sync_insert(sqlite_api.Mutation, deal(dfrm))
+    with console.status("[bold green]Trying to insert..."):
+        for index, dfrm in enumerate(df):
+            end = readchunk*(index+1)
+            console.log(f"{start}-{end}")
+            start = end+1
+            sqlite_api.sync_insert(sqlite_api.Mutation, deal(dfrm))
 
 
 @Interface.command("id-mapping")
@@ -83,7 +90,7 @@ def id_mapping(ctx, input, column, sep, chunksize):
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
             query="SELECT COUNT(DISTINCT ftId) FROM Mutation WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)"))[0]
-        click.echo(f"Total {total} to query")
+        console.log(f"Total {total} to query")
         query = f"""
                 SELECT DISTINCT ftId FROM Mutation
                 WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)
@@ -93,8 +100,8 @@ def id_mapping(ctx, input, column, sep, chunksize):
             res = unsync_run(sqlite_api.database.fetch_all(query=query))
             if len(res) == 0:
                 break
-            res = Identifiers(i[0] for i in res).fetch(
-                'map2unp').run(tqdm).result()
+            with Progress(*progress_bar_args) as p:
+                res = Identifiers(i[0] for i in res).fetch('map2unp').run(p.track).result()
             values = [dict(zip(cols, i)) for i in res]
             if values:
                 sqlite_api.sync_insert(sqlite_api.IDMapping, values)
@@ -105,10 +112,10 @@ def id_mapping(ctx, input, column, sep, chunksize):
         else:
             ids = read_csv(input, sep=sep, usecols=[column])[column].unique()
         total = len(ids)
-        click.echo(f"Total {total} to query")
+        console.log(f"Total {total} to query")
         for i in range(0, total, chunksize):
-            res = Identifiers(ids[i:i+chunksize]).fetch(
-                'map2unp').run(tqdm).result()
+            with Progress(*progress_bar_args) as p:
+                res = Identifiers(ids[i:i+chunksize]).fetch('map2unp').run(p.track).result()
             values = [dict(zip(cols, i)) for i in res]
             if values:
                 sqlite_api.sync_insert(sqlite_api.IDMapping, values)
@@ -144,7 +151,7 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
             query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0]
-        click.echo(f"Total {total} to query")
+        console.log(f"Total {total} to query")
         for i in range(ceil(total/chunksize)):
             res = unsync_run(sqlite_api.database.fetch_all(
                 query=f"""
@@ -152,13 +159,14 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
                 WHERE isoform != 'NaN'
                 LIMIT {chunksize} OFFSET {omit+chunksize*i}
                 """))
-            res = SIFTSs(map(get_unp_id, res)).fetch(func, skip_pdbs=skip_pdbs, **kwargs).run(tqdm).result()
+            with Progress(*progress_bar_args) as p:
+                res = SIFTSs(map(get_unp_id, res)).fetch(func, skip_pdbs=skip_pdbs, **kwargs).run(p.track).result()
             for dfrm in res:
                 if dfrm is None:
                     continue
                 dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
                             header=not output_path.exists(), mode='a+')
-            click.echo(f'Done: {len(res)+chunksize*i}')
+            console.log(f'Done: {len(res)+chunksize*i}')
             if len(res) < chunksize:
                 break
             sleep(uniform(1, 10))
@@ -168,9 +176,10 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         else:
             ids = read_csv(input, sep=sep, usecols=[column], skiprows=omit if omit > 0 else None)[column].unique()
         total = len(ids)
-        click.echo(f"Total {total} to query")
+        console.log(f"Total {total} to query")
         for i in range(0, total, chunksize):
-            res = SIFTSs(ids[i:i+chunksize]).fetch(func, skip_pdbs=skip_pdbs, **kwargs).run(tqdm).result()
+            with Progress(*progress_bar_args) as p:
+                res = SIFTSs(ids[i:i+chunksize]).fetch(func, skip_pdbs=skip_pdbs, **kwargs).run(p.track).result()
             for dfrm in res:
                 if dfrm is None:
                     continue
@@ -178,7 +187,7 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
                     dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False, header=not output_path.exists(), mode='a+')
                 else:
                     pass
-            click.echo(f'Done: {i+len(res)}')
+            console.log(f'Done: {i+len(res)}')
             if len(res) < chunksize:
                 break
             sleep(uniform(1, 10))
@@ -210,7 +219,8 @@ def residue_mapping(input, chunksize, output):
                     row.new_pdb_range,
                     conflict_pdb_index=row.conflict_pdb_index,
                     struct_asym_id=row.struct_asym_id) for _, row in df.iterrows()]
-        res = ob.run(tqdm).result()
+        with Progress(*progress_bar_args) as p:
+            res = ob.run(p.track).result()
         res_mapping_df = concat(res, sort=False, ignore_index=True)
         res_mapping_df[sorted(res_mapping_df.columns)].to_csv(output, sep='\t', mode='a+', index=False, header=not output.exists())
         sleep(uniform(0, 1))
