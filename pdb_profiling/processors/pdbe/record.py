@@ -1318,7 +1318,7 @@ class PDBAssemble(PDB):
     id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+[_0-9]*):-?[0-9]+\??")  # e.g. [FMN]B:149 [C2E]A:301 [ACE]H:-8?
     rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
-    interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+\??)?")  # [4CA]BB:170+AB
+    interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?")  # [4CA]BB:170+AB [ZN]D:154A+[CU]C:154
 
     @property
     def assemble_summary(self) -> Dict:
@@ -1337,7 +1337,7 @@ class PDBAssemble(PDB):
         NOTE: reference: <https://www.ebi.ac.uk/training/online/course/pdbepisa-identifying-and-interpreting-likely-biolo/1555-special-code-doing-nothing-structure>
         '''
         self.interface_filters = {
-            'symmetry_operator': ('eq', '1_555')
+            'symmetry_operator': ('isin', ('1_555', '1555'))  # 1555 for api%pisa%asiscomponent%+6e4h%0%interfaces
         }  # 'structure_2.symmetry_id': ('eq', '1_555'),'css': ('ge', 0)
 
     def set_id(self, pdb_ass_id: str):
@@ -1368,9 +1368,14 @@ class PDBAssemble(PDB):
         if interfacelist_df is None:
             return None
         interfacelist_df.rename(columns={"interface_number": "interface_id"}, inplace=True)
-        interfacelist_df[['struct_asym_id_in_assembly_1', 'struct_asym_id_in_assembly_2']
+        try:
+            interfacelist_df[['struct_asym_id_in_assembly_1', 'struct_asym_id_in_assembly_2']
                         ] = interfacelist_df.interface_structures.apply(
                             lambda x: cls.interface_structures_pat.fullmatch(x).group(2,5)).apply(Series)
+        except AttributeError:
+            check = interfacelist_df.interface_structures.apply(lambda x: bool(cls.interface_structures_pat.fullmatch(x)))
+            warn(str(interfacelist_df[check.eq(False)]))
+            raise
         return interfacelist_df
 
     @classmethod
@@ -1434,7 +1439,7 @@ class PDBAssemble(PDB):
         if interfacelist_df is None:
             interfacelist_df, use_au = await self.get_interfacelist_df(
                 'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
-            self.interface_filters['structure_2.symmetry_id'] = ('eq', '1_555')
+            self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555'))
             del self.interface_filters['symmetry_operator']
         
         if interfacelist_df is None:

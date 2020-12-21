@@ -49,11 +49,3 @@ class Abclog(object):
             return cls.logger
         except Exception:
             cls.logger.exception("Invalid file path for logging file ! Please specifiy path=...")
-
-
-class SimpleLog(object):
-    
-    @classmethod
-    def init_logger(cls):
-        cls.logger = logging.getLogger(cls.__name__)
-        cls.logger.setLevel(logging.DEBUG)

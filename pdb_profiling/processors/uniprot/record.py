@@ -17,7 +17,7 @@ from pdb_profiling.processors.uniprot.api import UniProtAPI
 
 class UniProts(object):
     
-    pattern_sep = re_compile(r"([A-z0-9]+):VAR_SEQ\s([0-9\.]+);\s+")
+    pattern_sep = re_compile(r"([A-z0-9]+):VAR_SEQ\s<?([0-9\.]+);\s+")
     pattern_iso_Value = re_compile(r'/([^=]+)="([^;]+)"')
     pattern_inIso = re_compile(r"([A-z\s\->]+)\s\(in\s([^\)]+)\)")
     pattern_iso_keyValue = re_compile(r"([^=]+)=([^;]+);\s+")
@@ -156,7 +156,12 @@ class UniProts(object):
                 altSeq_li.append(result[i+2] + '; /Entry="%s"; /AltRange="%s"; ' % tuple(result[i:i+2]))
         altSeq_df = DataFrame(dict(i.groups() for i in cls.pattern_iso_Value.finditer(content)) for content in altSeq_li)
         altSeq_df.rename(columns={"id": "ftId"}, inplace=True)
-        altSeq_df[["AltInfo", "description"]] = altSeq_df.note.apply(lambda x: cls.pattern_inIso.search(x).groups()).apply(Series) 
+        try:
+            altSeq_df[["AltInfo", "description"]] = altSeq_df.note.apply(lambda x: cls.pattern_inIso.search(x).groups()).apply(Series) 
+        except AttributeError:
+            from warnings import warn
+            warn(str(dfrm))
+            raise
         altSeq_df[['begin', 'end']] = altSeq_df.AltRange.apply(cls.split_dot_range).apply(Series)
         altSeq_df[["before", "after"]] = altSeq_df.AltInfo.apply(lambda x: cls.pattern_inDel.search(x).groups() if x != "Missing" else (nan, '')).apply(Series)
         altSeq_df['before_len'] = altSeq_df.apply(lambda x: len(x['before']) if isinstance(x['before'], str) else len(range(x['begin'], x['end']))+1, axis=1)
