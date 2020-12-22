@@ -131,7 +131,7 @@ def id_mapping(ctx, input, column, sep, chunksize):
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
 @click.option('--entry_filter', type=str, default='(release_date < "20201020") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
 @click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20")
-@click.option('--skip_pdbs', type=str, default='6wrg,5jm5,6vnn,2i6l,4zai,5jn1,6bj0,6yth,4fc3,7acu,6lsd,6llc,6xoz,6xp0,6xp1,6xp2,6xp3,6xp4,6xp5,6xp6,6xp7,6xp8,6xpa,6zqz,6t5h,6xwd,6xxc')
+@click.option('--skip_pdbs', type=str, default='1fc2,6wrg,5jm5,6vnn,2i6l,4zai,5jn1,6bj0,6yth,4fc3,7acu,6lsd,6llc,6xoz,6xp0,6xp1,6xp2,6xp3,6xp4,6xp5,6xp6,6xp7,6xp8,6xpa,6zqz,6t5h,6xwd,6xxc')
 @click.option('--omit', type=int, default=0)
 @click.option('--output', type=str, default='')
 @click.pass_context
@@ -197,7 +197,7 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
 ('5jm5', '6vnn', '2i6l', '4zai', '5jn1', '6bj0', '6yth', '6wrg') + 
 ('4fc3', '7acu', '6lsd', '6llc', '6xoz', '6xp0', '6xp1', '6xp2', '6xp3', 
  '6xp4', '6xp5', '6xp6', '6xp7', '6xp8', '6xpa', '6zqz', '6t5h', '6xwd', 
- '6xxc')
+ '6xxc', '1fc2')
 '''
 
 

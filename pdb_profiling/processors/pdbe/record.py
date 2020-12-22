@@ -35,7 +35,8 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  interval2set, expand_interval,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader, dumpsParams, outside_range)
+                                 a_seq_reader, dumpsParams, outside_range,
+                                 lyst22intervel, get_str_dict_len)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, RCSBDataAPI, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -2016,7 +2017,7 @@ class SIFTS(PDB):
 
     @classmethod
     @unsync
-    async def add_residue_conflict(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine], on_pdb: bool = True):
+    async def add_residue_conflict(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine]):
         '''
         TODO: optimization
         '''
@@ -2039,8 +2040,51 @@ class SIFTS(PDB):
             x['pdb_id'], x['entity_id'], x[pdb_range_col], x['Entry'], x['UniProt'], x[unp_range_col]), axis=1)
         f_dfrm['conflict_pdb_index'], f_dfrm['raw_pdb_index'], f_dfrm['conflict_pdb_range'], f_dfrm['conflict_unp_range'], f_dfrm['unp_len'] = zip(*[await i for i in tasks])
         dfrm_ed = merge(dfrm, f_dfrm)
-        assert dfrm_ed.shape[0] == dfrm.shape[0], f"\n{dfrm_ed.shape}\n{dfrm.shape}"
+        assert dfrm_ed.shape[0] == dfrm.shape[0], f"\n{dfrm_ed.shape}\n{dfrm.shape}\n{f_dfrm.shape}"
         return dfrm_ed
+
+    @staticmethod
+    @unsync
+    async def rsmfga_unit(UniProt, pdb_id, entity_id, start, end):
+        '''rsmfga: short for renew_sifts_mapping_from_graph_api'''
+        df = await SIFTS(pdb_id).fetch_residue_mapping(entity_id=entity_id, start=start, end=end)
+        df = df[df.UniProt.eq(UniProt)]
+        return lyst22intervel(df.unp_residue_number, df.residue_number)
+
+    @classmethod
+    @unsync
+    async def renew_sifts_mapping_from_graph_api(cls, UniProt, pdb_id, entity_id, pdb_range, unp_range, range_diff):
+        if isinstance(pdb_range, str):
+            pdb_range = json.loads(pdb_range)
+        if isinstance(unp_range, str):
+            unp_range = json.loads(unp_range)
+        new_unp_range, new_pdb_range = [], []
+        for diff, urange, prange in zip(range_diff, unp_range, pdb_range):
+            if diff == 0:
+                new_unp_range.append(urange)
+                new_pdb_range.append(prange)
+            else:
+                newurange, newprange = await cls.rsmfga_unit(UniProt, pdb_id, entity_id, *prange)
+                new_unp_range.extend(newurange)
+                new_pdb_range.extend(newprange)
+        return json.dumps(new_unp_range).decode('utf-8'), json.dumps(new_pdb_range).decode('utf-8')
+
+    @classmethod
+    @unsync
+    async def double_check_conflict_and_range(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        focus_part = dfrm[
+            dfrm.sifts_range_tag.isin(('Deletion', 'Insertion_Undivided', 'InDel_2', 'InDel_3')) &
+            (dfrm.conflict_pdb_index.apply(get_str_dict_len)/dfrm.new_pdb_range.apply(range_len)).ge(0.1)]
+        if len(focus_part) == 0:
+            return dfrm
+        tasks = tuple(map(cls.renew_sifts_mapping_from_graph_api, focus_part.UniProt, focus_part.pdb_id, focus_part.entity_id, focus_part.pdb_range, focus_part.unp_range, focus_part.range_diff))
+        dfrm.loc[focus_part.index, ['new_unp_range', 'new_pdb_range']] = [await task for task in tasks]
+        res = await cls.add_residue_conflict(dfrm.loc[focus_part.index].drop(columns=['conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']))
+        res.index = focus_part.index
+        dfrm.loc[focus_part.index] = res
+        return dfrm
 
     @unsync
     async def fetch_new_residue_mapping(self, entity_id, start, end):
@@ -2133,24 +2177,11 @@ class SIFTS(PDB):
     def sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, **kwargs):
         def get_optimal_range(abs_diff, seg_to_add, seg_to_ori, lstart, lend, rstart, rend, on_left):
             gap_seg = '-' * abs_diff
-            res = tuple(sum(blosum62.get((l, r), blosum62.get((r, l), 0)
-                                        ) for l, r in zip(seg_to_add[:i] + gap_seg + seg_to_add[i:], seg_to_ori)
-                            ) for i in range(len(seg_to_add)+1))
+            res = tuple(sum(blosum62.get((l, r), blosum62.get((r, l), 0)) for l, r in zip(seg_to_add[:i] + gap_seg + seg_to_add[i:], seg_to_ori)) for i in range(len(seg_to_add)+1))
             max_val = max(res)
             index = res.index(max_val)
             assert index >= 0 # ???
             # assert max_val not in res[index+1:]
-            '''
-            if max_val in res[index+1:]:
-                import matplotlib.pyplot as plt
-                plt.figure(figsize=(10,8))
-                plt.ylim(max_val-100, max_val+30)
-                plt.xlim(index-50, index+50)
-                plt.scatter(tuple(range(len(res))),res, label=f"{kwargs}")
-                plt.plot(tuple(range(len(res))), res)
-                plt.legend()
-                plt.show()
-            '''
             yield (lstart, lstart+index), (rstart, rstart+index)
             '''
             NOTE:
@@ -2211,7 +2242,8 @@ class SIFTS(PDB):
             sifts_df = await self.reformat(init_task
                 ).then(self.dealWithInDel
                 ).then(self.fix_range
-                ).then(self.add_residue_conflict)
+                ).then(self.add_residue_conflict
+                ).then(self.double_check_conflict_and_range)
         except PossibleObsoletedUniProtError as e:
             warn(f'{repr(self)}, {e}', PossibleObsoletedUniProtWarning)
             return None
