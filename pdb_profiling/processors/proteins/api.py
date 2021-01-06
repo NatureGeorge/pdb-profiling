@@ -137,6 +137,8 @@ class ProteinsAPI(Abclog):
         data = data[0]
         dbReferences_lyst = []
         common_cols = ('type', 'isoform')
+        if 'dbReferences' not in data.keys():
+            data['dbReferences'] = []
         for i in data['dbReferences']:
             if i['type'] == 'RefSeq':
                 dbReferences_lyst.append({

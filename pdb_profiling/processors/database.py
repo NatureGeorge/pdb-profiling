@@ -55,6 +55,11 @@ class SqliteDB(Abclog):
     '''
 
     @unsync
+    async def async_insert_chunk(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE", insert_sleep_range=(10, 30), chunksize=10000):
+        for i in range(0, len(values), chunksize):
+            await self.async_insert(table=table, values=values[i:i+chunksize], prefix_with=prefix_with, insert_sleep_range=insert_sleep_range)
+
+    @unsync
     async def async_insert(self, table, values: Iterable[Dict], prefix_with: str = "OR IGNORE", insert_sleep_range=(10,30)):
         while True:
             try:

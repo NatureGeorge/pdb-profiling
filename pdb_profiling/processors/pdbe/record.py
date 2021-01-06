@@ -36,10 +36,12 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, outside_range,
-                                 lyst22intervel, get_str_dict_len)
-from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, RCSBDataAPI, FUNCS as API_SET
+                                 lyst22interval, get_str_dict_len)
+from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
+from pdb_profiling.processors.rcsb import RCSBDB
+from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI
 from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import blosum62, miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
@@ -48,7 +50,7 @@ from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning,
                                     ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
                                     PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
                                     PeptideLinkingWarning, MultiWrittenWarning)
-from pdb_profiling.ensure import unsync_file_exists_stat
+from pdb_profiling.ensure import aio_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
@@ -139,7 +141,7 @@ class Base(object):
         assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
         cls.folder = folder
         tuple(init_folder_from_suffixes(cls.folder, API_SET))
-        tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql'}))
+        tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search'}))
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -168,10 +170,10 @@ class Base(object):
         task = ProcessPDBe.single_retrieve(**args)
         if then_func is not None:
             task = task.then(then_func)
-        self.register_task((repr(self), api_suffix, then_func, json, mask_id), task)
+        self.register_task((self.__class__.__name__, api_suffix, then_func, json, identifier), task)
         return task
     
-    def fetch_from_rcsb_data_api(self, api_suffix: str, query=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None):
+    def fetch_from_rcsb_api(self, api_suffix: str, query=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None):
         task = self.tasks.get((repr(self), api_suffix, query, then_func, json, mask_id), None)
         if task is not None:
             return task
@@ -184,8 +186,11 @@ class Base(object):
         elif api_suffix == 'graphql':
             args = dict(query=query, folder=self.get_folder()/'data_rcsb/graphql', semaphore=self.rcsb_semaphore)
             task_func = RCSBDataAPI.graphql_retrieve
+        elif api_suffix == 'search':
+            args = dict(query=query, folder=self.get_folder()/'data_rcsb/search', semaphore=self.rcsb_semaphore)
+            task_func = RCSBSearchAPI.single_retrieve
         else:
-            raise AssertionError(f"Invlaid API SUFFIX! Valid set:\n{RCSBDataAPI.api_set} or graphql")
+            raise AssertionError(f"Invlaid API SUFFIX! Valid set:\n{RCSBDataAPI.api_set} or graphql or search")
         if json:
             args['to_do_func'] = None
         task = task_func(**args)
@@ -213,8 +218,26 @@ class Base(object):
         kwargs['na_values'] = list(frozenset(kwargs.get('na_values', default_na_values)) | default_na_values)
         if len(kwargs['na_values']) > 3:
             assert ' ' in kwargs['na_values']
-        df = await a_read_csv(path, sep="\t", converters=ProcessPDBe.converters, keep_default_na=False, **kwargs)
+        if 'converters' in kwargs.keys():
+            converters = {**ProcessPDBe.converters, **kwargs['converters']}
+            del kwargs['converters']
+        else:
+            converters = ProcessPDBe.converters
+        df = await a_read_csv(path, sep="\t", converters=converters, keep_default_na=False, **kwargs)
         return df
+    
+    @staticmethod
+    @unsync
+    async def result_set_to_dataframe(data):
+        if isinstance(data, (Unfuture, Coroutine)):
+            data = await data
+        if data is None:
+            return
+        elif isinstance(data, Dict):
+            pass
+        else:
+            data = await a_load_json(data)
+        return DataFrame(data['result_set'])
 
 
 class PDB(Base):
@@ -240,8 +263,8 @@ class PDB(Base):
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
         super().set_folder(folder)
-        cls.sqlite_api = PDBeDB(
-            "sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
+        cls.sqlite_api = PDBeDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
+        cls.rcsb_sqlite_api = RCSBDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"RCSBDB.db"))
         cls.assembly_cif_folder = cls.folder/'pdbe_assembly_cif'
         cls.assembly_cif_folder.mkdir(parents=True, exist_ok=True)
         tuple(init_folder_from_suffixes(cls.folder/'model-server', PDBeModelServer.api_set))
@@ -927,7 +950,7 @@ class PDB(Base):
     async def profile_asym_id_in_assembly_unit(self, parent, assembly_id, replace):
         header = f'{self.pdb_id}-assembly-{assembly_id}'
         target_file = parent/f'{header}-pdbe_chain_remapping.cif'
-        exists, _ = await unsync_file_exists_stat(target_file)
+        exists, _ = await aio_file_exists_stat(target_file)
         if (not exists) or replace:
             await cif_gz_stream.writer(
                 cif_gz_stream.reader(f'http://www.ebi.ac.uk/pdbe/static/entry/download/{header}.cif.gz'),
@@ -981,7 +1004,7 @@ class PDB(Base):
     async def rd_source_ass_oper_df(self):
         upper_id = self.pdb_id.upper()
         try:
-            assembly_ids = (await self.fetch_from_rcsb_data_api('graphql', 
+            assembly_ids = (await self.fetch_from_rcsb_api('graphql', 
                 query='{entry(entry_id:"%s"){rcsb_entry_container_identifiers{assembly_ids}}}' % upper_id, 
                 then_func=a_load_json,
                 json=True))['data']['entry']['rcsb_entry_container_identifiers']['assembly_ids']
@@ -1005,7 +1028,7 @@ class PDB(Base):
                     entry_id
                     assembly_id}}}
             ''' % json.dumps([f'{upper_id}-{assembly_id}' for assembly_id in assembly_ids]).decode('utf-8')
-        return await self.fetch_from_rcsb_data_api('graphql', query=query).then(self.to_assg_oper_df)
+        return await self.fetch_from_rcsb_api('graphql', query=query).then(self.to_assg_oper_df)
 
     @unsync
     async def ms_source_ass_oper_df(self, struct_asym_id, residue_number):
@@ -1311,6 +1334,76 @@ class PDB(Base):
         mol_df = (await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe))[molecules_col]
         return bind_res_df.merge(res_df.merge(mol_df))  # except waters
 
+    @unsync
+    async def rcsb_cluster_membership(self, entity_id, identity_cutoff:int=100):
+        assert identity_cutoff in (100, 95, 90, 70, 50, 30)
+        res = await self.rcsb_sqlite_api.rcsb_cluster_membership.objects.filter(pdb_id=self.pdb_id, entity_id=entity_id, identity=identity_cutoff).all()
+        if res:
+            assert len(res) == 1, f"{repr(self)} {(entity_id, identity_cutoff)}: Unexpected number of cluster hits!"
+            return DataFrame(await self.rcsb_sqlite_api.rcsb_cluster_membership.objects.filter(cluster_id=res[0].cluster_id, identity=res[0].identity).all())
+        query = '''
+        {
+            polymer_entity(entry_id: "%s", entity_id:"%s") {
+                rcsb_cluster_membership {
+                    cluster_id
+                    identity
+                }
+            }
+        }
+        ''' % (self.pdb_id.upper(), entity_id)
+        res = await self.fetch_from_rcsb_api('graphql', query=query, json=True, then_func=a_load_json)
+        if res is None:
+            return
+        search_template = '''
+        {
+            "query": {
+                "type": "group",
+                "logical_operator": "and",
+                "nodes": [
+                    {
+                        "type": "terminal",
+                        "service": "text",
+                        "parameters": {
+                            "attribute": "rcsb_cluster_membership.cluster_id",
+                            "operator": "equals",
+                            "value": %s
+                        }
+                    },
+                    {
+                        "type": "terminal",
+                        "service": "text",
+                        "parameters": {
+                            "attribute": "rcsb_cluster_membership.identity",
+                            "operator": "equals",
+                            "value": %s
+                        }
+                    }
+                ]
+            },
+            "request_options": {
+                "return_all_hits": true
+            },
+            "return_type": "polymer_entity"
+        }
+        '''
+        dfs = []
+        for i in res['data']['polymer_entity']['rcsb_cluster_membership']:
+            if i['identity'] != identity_cutoff:
+                continue
+            cur = await self.fetch_from_rcsb_api('search', query=search_template % (i['cluster_id'], i['identity']), then_func=Base.result_set_to_dataframe)
+            cur['cluster_id'] = i['cluster_id']
+            cur['identity'] = i['identity']
+            dfs.append(cur.drop(columns=['services']))
+        if not dfs:
+            return
+        df = concat(dfs, ignore_index=True, sort=False)
+        df[['pdb_id', 'entity_id']] = df.identifier.str.split('_').apply(Series)
+        df.rename(columns={'identifier': 'rcsb_id'}, inplace=True)
+        df.pdb_id = df.pdb_id.str.lower()
+        df.entity_id = df.entity_id.astype(int)
+        await self.rcsb_sqlite_api.async_insert(self.rcsb_sqlite_api.rcsb_cluster_membership, df.to_dict('records'))
+        return df
+
 
 class PDBAssemble(PDB):
 
@@ -1442,11 +1535,14 @@ class PDBAssemble(PDB):
                 'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
             self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555'))
             del self.interface_filters['symmetry_operator']
+        else:
+            interfacelist_df = interfacelist_df.rename(columns={'complex_formation_score': 'css'})
         
         if interfacelist_df is None:
             self.interface = dict()
             return
         else:
+            interfacelist_df = interfacelist_df.copy()
             interfacelist_df['assembly_id'] = self.assembly_id
         if use_au:
             a_chains = self.pdb_ob.subset_assembly[self.assembly_id]
@@ -1469,7 +1565,7 @@ class PDBAssemble(PDB):
             focus_interface_df.struct_asym_id_in_assembly_2)
 
         self.interface: Dict[int, PDBInterface] = dict(zip(
-            focus_interface_ids, (PDBInterface(if_id, self, use_au).store(chains=frozenset(chains)) for if_id, chains in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains))))
+            focus_interface_ids, (PDBInterface(if_id, self, use_au).store(chains=frozenset(chains), css=css) for if_id, chains, css in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains, focus_interface_df.css))))
 
     def get_interface(self, interface_id):
         return self.interface[interface_id]
@@ -1646,12 +1742,14 @@ class PDBInterface(PDBAssemble):
             interfacedetail_df = await self.fetch_from_pdbe_api('api/pisa/interfacedetail/', PDBInterface.to_interfacedetail_df, mask_id=f'{self.pdb_id}/0/{self.interface_id}' if self.use_au else None)
             if interfacedetail_df is None:
                 raise WithoutExpectedContentError('')
+            else:
+                interfacedetail_df = interfacedetail_df.copy()
         except (WithoutExpectedKeyError, WithoutExpectedContentError, RetryError) as e:
             warn(f"cannot get interfacedetail data from PISA: {repr(self)}, {e.__class__.__name__}", PISAErrorWarning)
             return
         except Exception as e:
             raise AssertionError(e)
-        interfacedetail_df.assembly_id = self.assembly_id
+        interfacedetail_df['assembly_id'] = self.assembly_id
         struct_sele_set = set(interfacedetail_df.head(1)[['s1_selection', 's2_selection']].to_records(index=False)[0])
         if len(struct_sele_set) != 2:
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
@@ -1679,7 +1777,12 @@ class PDBInterface(PDBAssemble):
             example = interfacedetail_df[check_merge & check_mc].head(3)
             if example.shape[0]:
                 warn(f"Unexpected Data in Residue DataFrame: \n{example[['pdb_id', 'assembly_id', 'interface_id', 'struct_asym_id_in_assembly', 'residue_name','author_residue_number']].to_dict('index')}", PISAErrorWarning)
-            interfacedetail_df = interfacedetail_df.drop(index=interfacedetail_df[check_merge].index)
+            to_drop = interfacedetail_df[check_merge].index
+            if len(interfacedetail_df) == len(to_drop):
+                # ['assembly_id', 'pdb_id', 'struct_asym_id_in_assembly']
+                # ['author_insertion_code', 'author_residue_number', 'chain_id', 'entity_id', 'pdb_id', 'residue_name', 'struct_asym_id']
+                raise ValueError(f"{repr(self)}: Unexpected null in Residue DataFrame\n{interfacedetail_df.head().T}")
+            interfacedetail_df = interfacedetail_df.drop(index=to_drop)
         
         focus_cols = ['pdb_id', 'entity_id', 'chain_id', 'struct_asym_id', 
                       'struct_asym_id_in_assembly', 'asym_id_rank', 'model_id',
@@ -1726,6 +1829,8 @@ class PDBInterface(PDBAssemble):
         for key in common_keys:
             record_dict[key] = records[0][key]
         record_dict['use_au'] = self.use_au
+        if hasattr(self, 'info'):
+            record_dict['css'] =  self.info['css']
         self.interface_res_dict = record_dict
         self.register_task((repr(self), 'PISAInterfaceDict'), record_dict)
         # self.sqlite_api.sync_insert(self.sqlite_api.PISAInterfaceDict, [record_dict])
@@ -1833,6 +1938,17 @@ class SIFTS(PDB):
 
     @staticmethod
     @unsync
+    def check_identity(dfrm: Union[DataFrame, Unfuture]):
+        if isinstance(dfrm, Unfuture):
+            dfrm = dfrm.result()
+        check = dfrm.groupby(['UniProt','pdb_id','struct_asym_id']).identity.unique().apply(len).gt(1)
+        res = check[check==True].to_frame().reset_index().rename(columns={'identity': 'multi_identity'})
+        df = dfrm.merge(res, how='left')
+        df.multi_identity = df.multi_identity.fillna(False)
+        return df
+
+    @staticmethod
+    @unsync
     def reformat(dfrm: Union[DataFrame, Unfuture]) -> DataFrame:
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
@@ -1900,8 +2016,7 @@ class SIFTS(PDB):
 
         focus_index = dfrm[dfrm.group_info.gt(1)].index
         if sort_by_unp and (len(focus_index) > 0):
-            focus_df = dfrm.loc[focus_index].apply(lambda x: sort_2_range(
-                x['unp_range'], x['pdb_range']), axis=1, result_type='expand')
+            focus_df = dfrm.loc[focus_index].apply(lambda x: sort_2_range(x['unp_range'], x['pdb_range']), axis=1).apply(Series)
             focus_df.index = focus_index
             focus_df.columns = ['unp_range', 'pdb_range']
             dfrm.loc[focus_index, ['unp_range', 'pdb_range']] = focus_df
@@ -2047,9 +2162,10 @@ class SIFTS(PDB):
     @unsync
     async def rsmfga_unit(UniProt, pdb_id, entity_id, start, end):
         '''rsmfga: short for renew_sifts_mapping_from_graph_api'''
-        df = await SIFTS(pdb_id).fetch_residue_mapping(entity_id=entity_id, start=start, end=end)
-        df = df[df.UniProt.eq(UniProt)]
-        return lyst22intervel(df.unp_residue_number, df.residue_number)
+        df = await SIFTS(pdb_id).fetch_residue_mapping(entity_id=entity_id, start=start, end=end, UniProt=UniProt)
+        if df is None:
+            raise AttributeError(f"{(UniProt, pdb_id, entity_id, start, end)}")
+        return lyst22interval(df.unp_residue_number, df.residue_number)
 
     @classmethod
     @unsync
@@ -2069,6 +2185,30 @@ class SIFTS(PDB):
                 new_pdb_range.extend(newprange)
         return json.dumps(new_unp_range).decode('utf-8'), json.dumps(new_pdb_range).decode('utf-8')
 
+    @staticmethod
+    @unsync
+    async def deal_with_identical_entity_seq(dfrm):
+        if isinstance(dfrm, (Coroutine, Unfuture)):
+            dfrm = await dfrm
+        already = set()
+        cluster_dfs = []
+        # dfrm = dfrm.copy()
+        # dfrm['pdb_sequence'] = ''
+        dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
+        for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
+            # dfrm.loc[dfrm[dfrm.pdb_sequence.eq('') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq')
+            if (pdb_id, entity_id) in already:
+                continue
+            cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
+            already |= set(zip(cur_cluster_df.pdb_id, cur_cluster_df.entity_id))
+            cluster_dfs.append(cur_cluster_df)
+
+        cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
+        assert not any(cluster_df.duplicated())
+        dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
+        assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
+        return dfrm
+
     @classmethod
     @unsync
     async def double_check_conflict_and_range(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
@@ -2087,17 +2227,27 @@ class SIFTS(PDB):
         return dfrm
 
     @unsync
-    async def fetch_new_residue_mapping(self, entity_id, start, end):
-        df = await self.fetch_from_pdbe_api(
-            'graph-api/residue_mapping/', 
-            Base.to_dataframe, 
-            mask_id=f'{self.pdb_id}/{entity_id}/{start}/{end}')
-        if df is not None:
-            await self.sqlite_api.async_insert(self.sqlite_api.ResidueMapping, df.to_dict('records'))
-        return df
+    async def fetch_new_residue_mapping(self, entity_id, start, end, chunksize=50):
+        tasks = []
+        for index in range(0, end-start+1, chunksize):
+            cur_start = start+index
+            cur_end = cur_start+chunksize-1
+            if cur_end > end:
+                cur_end = end
+            task = self.fetch_from_pdbe_api(
+                'graph-api/residue_mapping/', 
+                Base.to_dataframe, 
+                mask_id=f'{self.pdb_id}/{entity_id}/{cur_start}/{cur_end}')
+            tasks.append(task)
+        dfs = [await i for i in tasks]
+        dfs = [i for i in dfs if i is not None]
+        if dfs:
+            df = concat(dfs, sort=False, ignore_index=True)
+            await self.sqlite_api.async_insert_chunk(self.sqlite_api.ResidueMapping, df.to_dict('records'))
+            return df
 
     @unsync
-    async def fetch_residue_mapping(self, entity_id:int, start:int, end:int, columns:str='UniProt,residue_number,unp_residue_number', usecols:bool=True, UniProt:Optional[str]=None):
+    async def fetch_residue_mapping(self, entity_id:int, start:int, end:int, columns:str='UniProt,residue_number,unp_residue_number', UniProt:Optional[str]=None):
         unp = "" if UniProt is None else f"UniProt == '{UniProt}' AND"
         query=f"""
             SELECT DISTINCT {columns} FROM ResidueMapping
@@ -2119,13 +2269,13 @@ class SIFTS(PDB):
             for s, e in new_range:
                 new_df = await self.fetch_new_residue_mapping(entity_id, s, e)
                 new_df = new_df[new_df.UniProt.eq(UniProt)] if ((new_df is not None) and (UniProt is not None)) else new_df
-                dfs.append(new_df)
+                dfs.append(new_df[columns])
             return concat(dfs, ignore_index=True)
         else:
             df = await self.fetch_new_residue_mapping(entity_id, start, end)
             if df is not None:
                 df = df[df.UniProt.eq(UniProt)] if UniProt is not None else df
-                return df[columns] if usecols else df
+                return df[columns]
             else:
                 return
     

@@ -21,6 +21,7 @@ from itertools import chain
 import orjson as json
 import logging
 from io import StringIO
+from operator import itemgetter
 from textdistance import overlap, sorensen
 from collections import Counter, OrderedDict
 
@@ -75,9 +76,10 @@ def to_interval(lyst: Union[Iterable, Iterator]) -> List:
             return tuple((min(li), max(li)) for li in interval_lyst)
 
 
-def lyst22intervel(x, y):
+def lyst22interval(x, y):
     # x, y = sorted(x), sorted(y)
-    x, y = zip(*sorted(zip(x, y), key=lambda cur: cur[0]))
+    data = frozenset({i for i in zip(x,y)})
+    x, y = zip(*sorted(data, key=itemgetter(0)))
     start_x, start_y = x[0], y[0]
     index_x, index_y = x[0]-1, y[0]-1
     interval_x, interval_y = [], []

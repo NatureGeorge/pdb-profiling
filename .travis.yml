@@ -7,7 +7,7 @@ python:
 
 # command to install dependencies
 install:
-  - pip install pdb-profiling==0.2.6rc1
+  - pip install pdb-profiling==0.2.6
   - pip install coveralls
 
 # command to run tests

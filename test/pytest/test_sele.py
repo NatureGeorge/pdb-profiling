@@ -67,14 +67,14 @@ def test_rcsb_data_api():
     from pdb_profiling.utils import a_load_json
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
-    assembly_ids = ob.fetch_from_rcsb_data_api(
+    assembly_ids = ob.fetch_from_rcsb_api(
         'graphql',
         query='{entry(entry_id:"%s"){rcsb_entry_container_identifiers{assembly_ids}}}' % pdb_id,
         then_func=a_load_json,
         json=True).result()['data']['entry']['rcsb_entry_container_identifiers']['assembly_ids']
 
     for assembly_id in assembly_ids:
-        data = PDBAssemble(f'{pdb_id}/{assembly_id}').fetch_from_rcsb_data_api('assembly/', then_func=a_load_json, json=True).result()
+        data = PDBAssemble(f'{pdb_id}/{assembly_id}').fetch_from_rcsb_api('assembly/', then_func=a_load_json, json=True).result()
         data['pdbx_struct_assembly_gen']
         data['pdbx_struct_oper_list']
 
@@ -82,6 +82,23 @@ def test_rcsb_data_api():
     df2 = ob.ms_source_ass_oper_df(**ob.pipe_assg_data_collection().result()).result()
     assert df1.shape == df2.shape
     assert (df1.merge(df2).shape) == df1.shape
+
+def test_rcsb_cluster_membership():
+    from pdb_profiling.processors import PDB
+    PDB('2d4q').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
+    PDB('2e2x').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
+
+def test_other_SIFTS_func():
+    from pdb_profiling.processors import SIFTS
+    try:
+        SIFTS('P21359').fetch_from_pdbe_api('api/mappings/all_isoforms/'
+            ).then(SIFTS.to_dataframe
+            ).then(SIFTS.check_pdb_status
+            ).then(SIFTS.check_identity
+            ).then(SIFTS.reformat
+            ).then(SIFTS.deal_with_identical_entity_seq).result()
+    except Exception:
+        pass
 
 def test_get_sequence():
     from pdb_profiling.processors import PDB

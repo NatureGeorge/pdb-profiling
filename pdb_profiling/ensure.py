@@ -32,7 +32,7 @@ class EnsureBase(object):
 
     def make_sure_complete(self, *retry_args, **retry_kwargs):
         """
-        Decorator to wrap a function | coroutinefunction | unfuture object 
+        Decorator to wrap a function | coroutinefunction | unsync object 
         to ensure the output file has been completed
         """
         def decorator(func):
@@ -41,7 +41,7 @@ class EnsureBase(object):
                 raw_path = kwargs['path']
                 if raw_path is None:
                     return
-                exists, stat_result = await unsync_file_exists_stat(raw_path)
+                exists, stat_result = await aio_file_exists_stat(raw_path)
                 if self.use_existing and exists:
                     if not (stat_result.st_size > 0):
                         warn(str(raw_path), ZeroSizeWarning)
@@ -74,8 +74,7 @@ class EnsureBase(object):
         return decorator
 
 
-@unsync
-async def unsync_file_exists_stat(path):
+async def aio_file_exists_stat(path):
     try:
         stat_result = await aiofiles.os.stat(path)
     except (OSError, ValueError):
