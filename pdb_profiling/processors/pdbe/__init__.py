@@ -5,7 +5,6 @@
 # @Last Modified: 2020-10-10 10:37:46 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 import orm
-from unsync import unsync
 from re import compile as re_compile
 from pdb_profiling.processors.database import SqliteDB
 
@@ -148,6 +147,7 @@ class PDBeDB(SqliteDB):
             assembly_id = orm.Integer(primary_key=True)
             interface_id = orm.Integer(primary_key=True)
             use_au = orm.Boolean()
+            css = orm.Float()
 
         self.ResidueMapping = ResidueMapping
         self.StatsProteinEntitySeq = StatsProteinEntitySeq

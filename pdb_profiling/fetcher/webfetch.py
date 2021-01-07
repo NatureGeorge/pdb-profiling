@@ -79,8 +79,8 @@ class UnsyncFetch(Abclog):
                         cls.logger.debug(f"File has been saved in: '{path}'")
                         await asyncio.sleep(rate)
                         return path
-                    elif resp.status in (300, 403, 404, 405):
-                        cls.logger.debug(f"300|403|404|405 for: {info}")
+                    elif resp.status in (204, 300, 400, 403, 404, 405, 406):
+                        cls.logger.debug(f"204|300|400|403|404|405|406 for: {info}")
                         return None
                     else:
                         mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
