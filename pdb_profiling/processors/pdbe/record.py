@@ -5,6 +5,7 @@
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
+from inspect import isawaitable
 from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
@@ -49,7 +50,7 @@ from pdb_profiling.processors.i3d.api import Interactome3D
 from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning, 
                                     ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
                                     PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
-                                    PeptideLinkingWarning, MultiWrittenWarning)
+                                    PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning)
 from pdb_profiling.ensure import aio_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
@@ -137,6 +138,11 @@ class Base(object):
 
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
+        """Set your folder path
+
+        Args:
+            folder (Union[Path, str]): the path to set
+        """        
         folder = Path(folder)
         assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
         cls.folder = folder
@@ -154,6 +160,17 @@ class Base(object):
             raise ValueError(f"Please set folder via {cls.__name__}.set_folder(folder: Union[Path, str])")
     
     def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None) -> Unfuture:
+        """fetch data from PDBe API
+
+        Args:
+            api_suffix (str): the suffix of the API that you want to retrieve info.
+            then_func (Optional[Callable[[Unfuture], Unfuture]], optional): function arg that pass to Unfuture.then(). Defaults to None.
+            json (bool, optional): whether the data is treated and returned as JSON. Defaults to False.
+            mask_id (str, optional): Defaults to None.
+
+        Returns:
+            Unfuture: Unfuture object
+        """        
         assert api_suffix in API_SET, f"Invlaid API SUFFIX! Valid set:\n{API_SET}"
         identifier = self.get_id() if mask_id is None else mask_id
         task = self.tasks.get((self.__class__.__name__, api_suffix, then_func, json, identifier), None)
@@ -229,7 +246,7 @@ class Base(object):
     @staticmethod
     @unsync
     async def result_set_to_dataframe(data):
-        if isinstance(data, (Unfuture, Coroutine)):
+        if isawaitable(data):
             data = await data
         if data is None:
             return
@@ -384,7 +401,7 @@ class PDB(Base):
     @classmethod
     @unsync
     async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
-        if isinstance(path, (Unfuture, Coroutine)):
+        if isawaitable(path):
             path = await path
         async with aiofiles_open(path, 'rt') as file_io:
             handle = await file_io.read()
@@ -414,7 +431,7 @@ class PDB(Base):
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        if isinstance(path, (Unfuture, Coroutine)):
+        if isawaitable(path):
             path = await path
         with gzip_open(path, 'rt') as handle:
             mmcif_dict = MMCIF2DictPlus(handle, cols)
@@ -490,7 +507,7 @@ class PDB(Base):
             assert var[1] <= var[0]
             return var[1]
         
-        if isinstance(path, (Unfuture, Coroutine)):
+        if isawaitable(path):
             path = await path
         path = Path(path)
         if path.suffix == '.cif':
@@ -1264,7 +1281,7 @@ class PDB(Base):
     async def expand_multiple_conformers(dfrm: Union[DataFrame, Unfuture, Coroutine]):
         '''for residue_listing dataframe'''
         '''
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         '''
         pass
@@ -1387,6 +1404,15 @@ class PDB(Base):
         }
         '''
         dfs = []
+        try:
+            assert res['data']['polymer_entity']['rcsb_cluster_membership'] is not None
+        except Exception as e:
+            info = f"polymer_entity(entry_id: \"{self.pdb_id}\", entity_id: \"{entity_id}\") -> {res}"
+            if isinstance(e, AssertionError):
+                warn(info, WithoutRCSBClusterMembershipWarning)
+                return
+            else:
+                raise ValueError(info)
         for i in res['data']['polymer_entity']['rcsb_cluster_membership']:
             if i['identity'] != identity_cutoff:
                 continue
@@ -1431,7 +1457,7 @@ class PDBAssemble(PDB):
         NOTE: reference: <https://www.ebi.ac.uk/training/online/course/pdbepisa-identifying-and-interpreting-likely-biolo/1555-special-code-doing-nothing-structure>
         '''
         self.interface_filters = {
-            'symmetry_operator': ('isin', ('1_555', '1555'))  # 1555 for api%pisa%asiscomponent%+6e4h%0%interfaces
+            'symmetry_operator': ('isin', ('1_555', '1555', 1555))  # 1555 for api%pisa%asiscomponent%+6e4h%0%interfaces
         }  # 'structure_2.symmetry_id': ('eq', '1_555'),'css': ('ge', 0)
 
     def set_id(self, pdb_ass_id: str):
@@ -1533,7 +1559,7 @@ class PDBAssemble(PDB):
         if interfacelist_df is None:
             interfacelist_df, use_au = await self.get_interfacelist_df(
                 'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
-            self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555'))
+            self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555', 1555))
             del self.interface_filters['symmetry_operator']
         else:
             interfacelist_df = interfacelist_df.rename(columns={'complex_formation_score': 'css'})
@@ -1860,8 +1886,19 @@ class PDBInterface(PDBAssemble):
 
 
 class SIFTS(PDB):
+    '''
+    TODO
+    
+    1. Better OligoState
+      * RAW (both from wwPDB and self assigned)
+      * FILTERED 
+    2. Define Best Isoform
+    3. UniProt Isoform Interaction
+    4. PDBChain Instance Interaction (Biological Relevance)
+    '''
 
     tasks = LRUCache(maxsize=1024)
+    sa_cache = LRUCache(maxsize=100)
 
     EntityChain = namedtuple('EntityChain', 'pdb_id entity_chain_info entity_count chain_count')
     UniProtEntity = namedtuple('UniProtEntity', 'pdb_id unp_entity_info entity_unp_info entity_with_unp_count min_unp_count')
@@ -1906,7 +1943,7 @@ class SIFTS(PDB):
     @classmethod
     @unsync
     async def complete_chains(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         if cls.complete_chains_run_as_completed:
             res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
@@ -2136,7 +2173,7 @@ class SIFTS(PDB):
         '''
         TODO: optimization
         '''
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
@@ -2188,40 +2225,54 @@ class SIFTS(PDB):
     @staticmethod
     @unsync
     async def deal_with_identical_entity_seq(dfrm):
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         already = set()
         cluster_dfs = []
-        # dfrm = dfrm.copy()
-        # dfrm['pdb_sequence'] = ''
+        dfrm = dfrm.copy()
+        dfrm['pdb_sequence'] = b''
         dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
         for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
-            # dfrm.loc[dfrm[dfrm.pdb_sequence.eq('') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq')
+            dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
             if (pdb_id, entity_id) in already:
                 continue
             cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
-            already |= set(zip(cur_cluster_df.pdb_id, cur_cluster_df.entity_id))
+            try:
+                assert cur_cluster_df is not None
+                already |= set(zip(cur_cluster_df.pdb_id, cur_cluster_df.entity_id))
+            except AssertionError:
+                cur_cluster_df = DataFrame([dict(pdb_id=pdb_id, entity_id=entity_id, cluster_id=-1)])
             cluster_dfs.append(cur_cluster_df)
 
         cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
         assert not any(cluster_df.duplicated())
         dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
         assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
-        return dfrm
+        dfrm['fix_cluster_id'] = dfrm.groupby(['cluster_id', 'pdb_sequence']).ngroup().astype(str) + '_' + dfrm.cluster_id.astype(str)
+        # ignore/overried cases like (P00720,2b7x,B v.s P00720,2b7x,A)
+        return dfrm.drop(columns=['pdb_sequence'])
 
     @classmethod
     @unsync
     async def double_check_conflict_and_range(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         focus_part = dfrm[
             dfrm.sifts_range_tag.isin(('Deletion', 'Insertion_Undivided', 'InDel_2', 'InDel_3')) &
             (dfrm.conflict_pdb_index.apply(get_str_dict_len)/dfrm.new_pdb_range.apply(range_len)).ge(0.1)]
         if len(focus_part) == 0:
             return dfrm
-        tasks = tuple(map(cls.renew_sifts_mapping_from_graph_api, focus_part.UniProt, focus_part.pdb_id, focus_part.entity_id, focus_part.pdb_range, focus_part.unp_range, focus_part.range_diff))
-        dfrm.loc[focus_part.index, ['new_unp_range', 'new_pdb_range']] = [await task for task in tasks]
-        res = await cls.add_residue_conflict(dfrm.loc[focus_part.index].drop(columns=['conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']))
+        focus_part_iden = await cls.deal_with_identical_entity_seq(focus_part)
+        focus_part_iden_dd = focus_part_iden.drop_duplicates(subset=['UniProt', 'fix_cluster_id']).copy()
+        tasks = tuple(map(cls.renew_sifts_mapping_from_graph_api, focus_part_iden_dd.UniProt, focus_part_iden_dd.pdb_id, focus_part_iden_dd.entity_id, focus_part_iden_dd.pdb_range, focus_part_iden_dd.unp_range, focus_part_iden_dd.range_diff))
+        focus_part_iden_dd[['new_unp_range', 'new_pdb_range']] = [await task for task in tasks]
+        focus_part_iden_dd = await cls.add_residue_conflict(focus_part_iden_dd.drop(columns=['conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']))
+        focus_cols = ['UniProt', 'fix_cluster_id', 'new_unp_range', 'new_pdb_range',
+                      'conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']
+        res = focus_part_iden.drop(columns=focus_cols[2:]).merge(focus_part_iden_dd[focus_cols], how='left')
+        assert res.isnull().sum().sum() == 0
+        res = res.drop(columns=['fix_cluster_id', 'cluster_id'])
+        assert res.shape == focus_part.shape, f"{res.shape}, {focus_part.shape}"
         res.index = focus_part.index
         dfrm.loc[focus_part.index] = res
         return dfrm
@@ -2297,7 +2348,7 @@ class SIFTS(PDB):
     @classmethod
     @unsync
     async def fix_range(cls, dfrm: Union[DataFrame, Tuple, Unfuture, Coroutine]):
-        if isinstance(dfrm, (Coroutine, Unfuture)):
+        if isawaitable(dfrm):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
@@ -2325,9 +2376,17 @@ class SIFTS(PDB):
 
     @staticmethod
     def sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, **kwargs):
+        '''
+        TODO: improve code
+        '''
+        def generate_seq_item(seq, gap_index, gap_num):
+            yield from seq[:gap_index]
+            for _ in range(gap_num):
+                yield '-'
+            yield from seq[gap_index:]
+
         def get_optimal_range(abs_diff, seg_to_add, seg_to_ori, lstart, lend, rstart, rend, on_left):
-            gap_seg = '-' * abs_diff
-            res = tuple(sum(blosum62.get((l, r), blosum62.get((r, l), 0)) for l, r in zip(seg_to_add[:i] + gap_seg + seg_to_add[i:], seg_to_ori)) for i in range(len(seg_to_add)+1))
+            res = tuple(sum(blosum62.get((l, r), 0) for l, r in zip(generate_seq_item(seg_to_add, i, abs_diff), seg_to_ori)) for i in range(len(seg_to_add)+1))
             max_val = max(res)
             index = res.index(max_val)
             assert index >= 0 # ???
@@ -2431,7 +2490,7 @@ class SIFTS(PDB):
             pdb_aa = raw_pdb_index.get(i, None)
             if (i not in non_set) and (unp_aa is not None) and (unp_aa != pdb_aa):
                 # NOT Modified & Conflict Residues are fall into here
-                theta = miyata_similarity_matrix.get((unp_aa, pdb_aa), miyata_similarity_matrix.get((pdb_aa, unp_aa), -3.104))
+                theta = miyata_similarity_matrix.get((unp_aa, pdb_aa), -3.104)
             else:
                 # UNK | Modified Residue
                 theta = -3.104
@@ -2724,7 +2783,7 @@ class SIFTS(PDB):
         rename_dict['pdb_id_1'] = 'pdb_id'
         sifts_df_ = sifts_df.add_suffix('_1').rename(columns=rename_dict)
         i3d_df = i3d_df.merge(sifts_df_)
-        sifts_df_ = sifts_df.drop(columns=sifts_df.columns & set(common_cols)).add_suffix('_2').rename(columns={'pdb_id_2': 'pdb_id'})
+        sifts_df_ = sifts_df.drop(columns=sifts_df.columns.intersection(common_cols)).add_suffix('_2').rename(columns={'pdb_id_2': 'pdb_id'})
         i3d_df = i3d_df.merge(sifts_df_)
         swap_index = i3d_df[
             (i3d_df.struct_asym_id_1 > i3d_df.struct_asym_id_2) | 

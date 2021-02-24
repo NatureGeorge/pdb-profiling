@@ -7,6 +7,7 @@
 import os
 import gzip
 import shutil
+from inspect import isawaitable
 from typing import Optional, Union, Dict, Tuple, Iterable, Iterator, List, Coroutine, NamedTuple, Callable, Generator
 from logging import Logger
 from pandas import read_csv, DataFrame, isna, Series, concat
@@ -578,7 +579,7 @@ async def get_seqs_from_parser(res, identifiers:Optional[Iterable[str]]=None):
 
 
 async def a_seq_parser(path: Union[Unfuture, Coroutine, Path, str]):
-    if isinstance(path, (Unfuture, Coroutine)):
+    if isawaitable(path):
         path = await path
     async with aiofiles_open(path, 'rt') as handle:
         header, content = None, ''

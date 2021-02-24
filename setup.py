@@ -25,7 +25,7 @@ setup(
         'tenacity>=6.3.0',
         'orjson>=3.0.2',
         'pyexcel>=0.6.4',
-        'pandas>=1.0.3',
+        'pandas>=1.2.2',
         'numpy>=1.18.1',
         'textdistance>=4.1.5',
         'databases>=0.3.2',

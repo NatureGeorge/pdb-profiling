@@ -129,7 +129,7 @@ def id_mapping(ctx, input, column, sep, chunksize):
 @click.option('--func', type=str, default='pipe_select_mo')
 @click.option('--kwargs', type=str, default='{}')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
-@click.option('--entry_filter', type=str, default='(release_date < "20201020") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
+@click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
 @click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20")
 @click.option('--skip_pdbs', type=str, default='1fc2,6wrg,5jm5,6vnn,2i6l,4zai,5jn1,6bj0,6yth,4fc3,7acu,6lsd,6llc,6xoz,6xp0,6xp1,6xp2,6xp3,6xp4,6xp5,6xp6,6xp7,6xp8,6xpa,6zqz,6t5h,6xwd,6xxc')
 @click.option('--omit', type=int, default=0)
@@ -204,9 +204,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
 @Interface.command("residue-mapping")
 @click.option('--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
-@click.option('--output', type=str)
-def residue_mapping(input, chunksize, output):
-    output = Path(output)
+@click.option('--output', type=str, default=None)
+@click.pass_context
+def residue_mapping(ctx, input, chunksize, output):
     dfs = read_csv(input, sep='\t', keep_default_na=False,
                    na_values=['NULL', 'null'], chunksize=chunksize)
     for df in dfs:
@@ -222,7 +222,12 @@ def residue_mapping(input, chunksize, output):
         with Progress(*progress_bar_args) as p:
             res = ob.run(p.track).result()
         res_mapping_df = concat(res, sort=False, ignore_index=True)
-        res_mapping_df[sorted(res_mapping_df.columns)].to_csv(output, sep='\t', mode='a+', index=False, header=not output.exists())
+        if output is not None:
+            output = Path(output)
+            res_mapping_df[sorted(res_mapping_df.columns)].to_csv(output, sep='\t', mode='a+', index=False, header=not output.exists())
+        else:
+            sqlite_api = ctx.obj['custom_db']
+            sqlite_api.sync_insert(sqlite_api.ResidueMapping, res_mapping_df.to_dict('records'))
         sleep(uniform(0, 1))
 
 

@@ -77,3 +77,7 @@ class FileExistsWarning(UserWarning):
 
 class InvalidFileContentWarning(UserWarning):
     pass
+
+
+class WithoutRCSBClusterMembershipWarning(UserWarning):
+    pass
