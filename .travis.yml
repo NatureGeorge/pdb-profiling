@@ -1,7 +1,14 @@
 language: python
-
-python:
-  - "3.8"
+jobs:
+  include:
+    - os: linux
+      dist: trusty
+      python: 3.8
+      env: TOXENV=py38
+    - os: linux
+      dist: focal
+      python: 3.8
+      env: TOXENV=py38
 
 # command to install dependencies
 install:
