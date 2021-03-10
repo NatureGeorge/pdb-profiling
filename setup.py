@@ -19,15 +19,15 @@ setup(
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
         'sqlalchemy>=1.3.0'
-        'aiosqlite>=0.13.0',
+        'aiosqlite>=0.17.0',
         'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
         'unsync>=1.2.1',
         'tenacity>=6.3.0',
         'orjson>=3.0.2',
         'pyexcel>=0.6.4',
-        'pandas>=1.2.0',
-        'numpy>=1.16.5',
+        'pandas>=1.2.0, <1.2.3',
+        'numpy>=1.19.0',
         'textdistance>=4.1.5',
         'databases>=0.3.2',
         'rich>=9.5.0',
