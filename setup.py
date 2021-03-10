@@ -4,8 +4,8 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2019-12-23 04:27:14 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
-from setuptools import setup, find_packages, find_namespace_packages
-import pdb_profiling
+from setuptools import setup, find_namespace_packages, Extension
+from Cython.Build import cythonize
 
 with open("README.md", "rt") as f:
     readme = f.read()
@@ -13,13 +13,13 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version=pdb_profiling.__version__,
+    version='0.2.7a8',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
         'aiosqlite>=0.13.0',
-        'aiohttp>=3.6.2',
+        'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
         'unsync>=1.2.1',
         'tenacity>=6.3.0',
@@ -37,6 +37,7 @@ setup(
         'cachetools>=4.1.0',
         'click>=7.1.2'
      ],
+    ext_modules=cythonize([Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"])]),
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",
     maintainer="ZeFeng Zhu",

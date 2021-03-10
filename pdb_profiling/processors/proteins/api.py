@@ -10,7 +10,8 @@ from numpy import nan
 from pandas import DataFrame, Series
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
-from pdb_profiling.utils import dumpsParams, range_len
+from pdb_profiling.cython.cyrange import range_len
+from pdb_profiling.utils import dumpsParams
 from pdb_profiling.processors.uniprot.record import UniProts
 from pdb_profiling.warnings import PossibleObsoletedUniProtIsoformWarning
 from urllib.parse import quote

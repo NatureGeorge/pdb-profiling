@@ -23,21 +23,18 @@ from itertools import product, combinations_with_replacement, combinations
 from operator import itemgetter
 from pdb_profiling.processors.pdbe import default_id_tag
 from pdb_profiling.exceptions import *
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
                                  related_dataframe, slice_series, 
-                                 to_interval, MMCIF2DictPlus, 
-                                 a_load_json, SeqRangeReader,
-                                 sort_2_range, range_len,
-                                 overlap_range, flat_dict_in_df,
+                                 MMCIF2DictPlus, a_load_json, SeqRangeReader,
+                                 sort_2_range, flat_dict_in_df,
                                  get_diff_index, get_seq_seg,
-                                 get_gap_list,get_range_diff,
-                                 add_range, subtract_range, select_range,
-                                 interval2set, expand_interval,
+                                 get_gap_list, get_range_diff,
+                                 select_range, expand_interval,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader, dumpsParams, outside_range,
-                                 lyst22interval, get_str_dict_len)
+                                 a_seq_reader, dumpsParams, get_str_dict_len)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -117,8 +114,14 @@ class Base(object):
 
     @classmethod
     @unsync
-    async def set_web_semaphore(cls, web_semaphore_value):
+    async def set_web_semaphore(cls, web_semaphore_value: int):
+        assert web_semaphore_value > 1
         cls.web_semaphore = await init_semaphore(web_semaphore_value)
+    
+    @classmethod
+    @unsync
+    async def set_rcsb_web_semaphore(cls, web_semaphore_value: int):
+        assert web_semaphore_value > 1
         cls.rcsb_semaphore = await init_semaphore(web_semaphore_value)
 
     @classmethod
@@ -1106,7 +1109,7 @@ class PDB(Base):
         if profile_id_df is not None:
             return profile_id_df
         
-        if choice((1, 1, 1, 1, 0)):
+        if choice((1, 1, 0)):
             assg_oper_df = await self.rd_source_ass_oper_df()
         else:
             demo_dict = await self.pipe_assg_data_collection()

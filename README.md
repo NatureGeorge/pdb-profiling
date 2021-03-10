@@ -34,19 +34,29 @@ Install by `pip` command.
 * To avoid some unexpected issues, you should upgrade your `pip` beforehand:
 
 ```bash
-pip install --upgrade pip
+python -m pip install --upgrade pip
 ``` 
 
 ### Official Installation
 
 ```bash
-pip install pdb-profiling
+python -m pip install cython
+python -m pip install pdb-profiling # Done
 ```
 
 If you have already installed an older version of `pdb-profiling`, use the following command to install the latest version:
 
 ```bash
-pip install --upgrade pdb-profiling
+python -m pip install --upgrade pdb-profiling
+```
+
+### Build From Source (optional, for non-windows environment)
+
+```bash
+python -m pip install cython
+git clone https://github.com/NatureGeorge/pdb-profiling.git
+python setup.py build_ext --inplace  # Need GCC or Other Compiler For C
+python setup.py install              # or "sudo python setup.py install" or "python setup.py install --user"
 ```
 
 ## Documentation
@@ -71,6 +81,8 @@ See `examples/...`
 * UniProt API
 * EBI Proteins API
 * Interactome3D API
+* RCSB Data API
+* RCSB Search API
 * ...
 
 > click [here](https://pdb-profiling.netlify.app/docs/5-reference/) for more details
@@ -83,10 +95,7 @@ See `examples/...`
 
 <summary>Click to view</summary>
 
-* `RCSB`
-  * [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
-  * [RCSB PDB Search API](http://search.rcsb.org/)
-    * [Documentation for New and Improved APIs](https://www.rcsb.org/news?year=2020&article=5f65165507302466657ec0e8&feature=true)
+* `RCSB`: [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
 * [MolArt](https://github.com/davidhoksza/MolArt)
 
 </details>

@@ -27,7 +27,7 @@ from textdistance import overlap, sorensen
 from collections import Counter, OrderedDict
 
 
-def to_interval(lyst: Union[Iterable, Iterator]) -> List:
+"""def to_interval(lyst: Union[Iterable, Iterator]) -> List:
     def pass_check(lyst):
         try:
             if (not isinstance(lyst, Generator) and  (len(lyst) == 0)) or isna(lyst):
@@ -96,7 +96,7 @@ def lyst22interval(x, y):
             index_x, index_y = i, j
     interval_x.append((start_x, index_x))
     interval_y.append((start_y, index_y))
-    return interval_x, interval_y
+    return interval_x, interval_y"""
 
 
 @unsync
@@ -697,7 +697,7 @@ standardAA = list(SEQ_DICT.keys())
 standardNu = ['DA', 'DT', 'DC', 'DG', 'DI', 'A', 'U', 'C', 'G', 'I']
 
 
-def range_len(lyst: Union[List, str, float]) -> int:
+"""def range_len(lyst: Union[List, str, float]) -> int:
     if isinstance(lyst, float) or lyst is None:
         return 0
     elif isinstance(lyst, str):
@@ -715,7 +715,7 @@ def interval2set(lyst: Union[Iterable, Iterator, str]):
     range_set = frozenset()
     for left, right in lyst:
         range_set |= frozenset(range(left, right+1))
-    return range_set
+    return range_set"""
 
 
 def expand_interval(lyst: Union[Iterable, Iterator, str]):
@@ -730,7 +730,7 @@ def lyst2range(lyst, add_end=1):
         yield from range(int(start), int(end)+add_end)
 
 
-def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
+"""def subtract_range(pdb_range: Union[str, Iterable], mis_range: Union[str, Iterable]) -> List:
     if isinstance(mis_range, float) or mis_range is None:
         return pdb_range
     elif len(pdb_range) == 0:
@@ -795,7 +795,7 @@ def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable
                 if ini or cov:
                     yield start, end
 
-    return tuple(unit(obs_range, unk_range))
+    return tuple(unit(obs_range, unk_range))"""
 
 
 def get_seq_seg(seq, ranges):
@@ -820,12 +820,12 @@ def red_seq_seg(seq, ranges):
     yield seq[end:]
 
 
-def outside_range(pdb_range: Union[str, Iterable], seqres_len: int):
+"""def outside_range(pdb_range: Union[str, Iterable], seqres_len: int):
     pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
     out_head = pdb_range[0][0] - 1
     out_tail = pdb_range[-1][-1] + 1
     ret = [[1, out_head], [out_tail, seqres_len]]
-    return [i for i in ret if i[0]<=i[1]]
+    return [i for i in ret if i[0]<=i[1]]"""
 
 
 def outside_range_len(pdb_range: Union[str, Iterable], seqres_len: int, omit: int = 5) -> int:

@@ -15,7 +15,7 @@ class RCSBDataAPI(Abclog):
     root = 'https://data.rcsb.org/'
     rest_api_root = f'{root}rest/v1/core/'
     graphql_root = f'{root}graphql'
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
     api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/'
                          'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/'))
 
@@ -34,7 +34,7 @@ class RCSBDataAPI(Abclog):
 
 class RCSBSearchAPI(Abclog):
     root = 'https://search.rcsb.org/rcsbsearch/v1/query'
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
 
     @classmethod
     def single_retrieve(cls, query, folder, semaphore, to_do_func=None, rate: float = 1.5):

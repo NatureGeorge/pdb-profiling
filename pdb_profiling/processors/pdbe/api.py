@@ -70,6 +70,8 @@ def traverseSuffixes(query: Any, *args):
 
 class ProcessPDBe(Abclog):
 
+    headers = {'Connection': 'close', 'Content-Type': 'application/json'}
+
     converters = {
         'pdb_id': str,
         'chain_id': str,
@@ -89,20 +91,20 @@ class ProcessPDBe(Abclog):
         'structure_2.range': str
     }
 
-    @staticmethod
-    def yieldTasks(pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 25, task_id: int = 0) -> Generator:
+    @classmethod
+    def yieldTasks(cls, pdbs: Union[Iterable, Iterator], suffix: str, method: str, folder: Union[str, Path], chunksize: int = 25, task_id: int = 0) -> Generator:
         file_prefix = suffix.replace('/', '%')
         method = method.lower()
         if method == 'post':
             url = f'{BASE_URL}{suffix}'
             for i in range(0, len(pdbs), chunksize):
-                params = {'url': url, 'data': ','.join(pdbs[i:i+chunksize])}
+                params = {'headers': cls.headers, 'url': url, 'data': ','.join(pdbs[i:i+chunksize])}
                 yield method, params, folder/f'{file_prefix}+{task_id}+{i}.json'
         elif method == 'get':
             for pdb in pdbs:
                 # pdb = pdb.lower()
                 identifier = pdb.replace('/', '%')
-                yield method, {'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
+                yield method, {'headers': cls.headers, 'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
         else:
             raise ValueError(
                 f'Invalid method: {method}, method should either be "get" or "post"')
@@ -526,7 +528,7 @@ class PDBeModelServer(Abclog):
     '''
 
     root = f'{BASE_URL}model-server/v1/'
-    headers = {'accept': 'text/plain', 'Content-Type': 'application/json'}
+    headers = {'Connection': 'close', 'accept': 'text/plain', 'Content-Type': 'application/json'}
     api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
                          'residueSurroundings', 'symmetryMates', 'query-many'))
 
@@ -559,7 +561,7 @@ class PDBeModelServer(Abclog):
 class PDBeCoordinateServer(Abclog):
 
     roots = (f'{BASE_URL}coordinates/', 'https://cs.litemol.org/')
-    headers = {'accept': 'text/plain'}
+    headers = {'Connection': 'close', 'accept': 'text/plain'}
     api_set = frozenset(('ambientResidues', 'assembly', 'backbone', 'cartoon', 'chains'
                          'entities', 'full', 'het', 'ligandInteraction', 'residueRange',
                          'residues', 'sidechain', 'symmetryMates', 'trace', 'water'))
