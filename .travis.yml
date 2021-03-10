@@ -6,14 +6,14 @@ python:
 
 # command to install dependencies
 install:
-  - pip install --upgrade pip
-  - pip install cython
-  - pip install coveralls
+  - pip3 install --upgrade pip
+  - pip3 install cython
+  - pip3 install coveralls
 
 # command to run tests
 script:
-  - python setup.py build_ext --inplace
-  - python setup.py install
+  - python3 setup.py build_ext --inplace
+  - python3 setup.py install
   - coverage run --source=pdb_profiling -m pytest ./test/pytest/
 
 after_success:
