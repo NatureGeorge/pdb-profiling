@@ -13,7 +13,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.2.7a8',
+    version='0.2.7a9',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
@@ -63,4 +63,9 @@ twine upload --repository-url https://test.pypi.org/legacy/ dist/*
 twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
 
 > https://packaging.python.org/tutorials/packaging-projects/
+
+python setup.py build_ext --inplace
+auditwheel repair pdb_profiling-0.2.7a9-cp38-cp38-linux_x86_64.whl
+
+> https://pypi.org/project/auditwheel/
 """

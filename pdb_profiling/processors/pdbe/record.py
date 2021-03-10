@@ -6,6 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
+from functools import reduce, partial
 from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
@@ -23,7 +24,7 @@ from itertools import product, combinations_with_replacement, combinations
 from operator import itemgetter
 from pdb_profiling.processors.pdbe import default_id_tag
 from pdb_profiling.exceptions import *
-from pdb_profiling.cython.cyrange import to_interval, lyst22interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range, trim_range
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
                                  related_dataframe, slice_series, 
@@ -2637,6 +2638,14 @@ class SIFTS(PDB):
             full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
             assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
         
+        full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([trim_range(iobs_range, ipdb_range, iunp_range) for iobs_range, ipdb_range, iunp_range in zip(full_df.OBS_INDEX, full_df.new_pdb_range, full_df.new_unp_range)])
+        grouped_len = full_df.groupby('UniProt').new_unp_range.apply(partial(reduce, add_range)).apply(range_len)
+        grouped_len.name = 'c_unp_len'
+        grouped_len = grouped_len.to_frame().reset_index()
+        # assert frozenset(grouped_len.columns) == frozenset({'UniProt', 'c_unp_len'}), str(grouped_len.columns)
+        full_df = full_df.merge(grouped_len, how='left')
+        assert full_df.c_unp_len.isnull().sum() == 0, f"{full_df[full_df.c_unp_len.isnull].UniProt}"
+
         cols = ['pdb_id', 'struct_asym_id', 'new_pdb_range', 'new_unp_range', 'conflict_pdb_range', 'conflict_pdb_index',
                 'raw_pdb_index', 'SEQRES_COUNT', 'ARTIFACT_INDEX', 'OBS_INDEX', 'NON_INDEX', 'OBS_RATIO_ARRAY']
         # tasks = full_df[cols].agg(self.bs_score_base, axis=1).tolist()
@@ -2659,7 +2668,7 @@ class SIFTS(PDB):
         s_df['RAW_BS'] = s_df.apply(raw_score, axis=1) / full_df.unp_len
         s_df['RAW_BS_IG3'] = s_df.drop(columns=['s3', 'RAW_BS']).apply(raw_score_ig3, axis=1) / full_df.unp_len
         ret = concat([full_df, bs_score_df], axis=1)
-        ret.bs_score = ret.bs_score/ret.unp_len
+        ret.bs_score = ret.bs_score/ret.c_unp_len
         return ret, s_df
 
     @unsync

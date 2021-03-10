@@ -81,8 +81,7 @@ def lyst22interval(object x, object y):
 cpdef int range_len(object lyst):
     if isinstance(lyst, float) or lyst is None:
         return 0
-    elif isinstance(lyst, str):
-        lyst = json.loads(lyst)
+    lyst = convert_range(lyst)
     cdef:
         int length = 0
         int left, right
@@ -93,8 +92,7 @@ cpdef int range_len(object lyst):
 
 
 cpdef frozenset interval2set(object lyst):
-    if isinstance(lyst, str):
-        lyst = json.loads(lyst)
+    lyst = convert_range(lyst)
     cdef:
         frozenset range_set = frozenset()
         int left, right
@@ -143,15 +141,15 @@ def add_range(object left, object right):
         raise e
 
 
-def overlap_range(object obs_range, object unk_range):
+cpdef list overlap_range(object obs_range, object unk_range):
     if isinstance(unk_range, float) or unk_range is None:
-        return tuple()
+        return []
     cdef:
         int start1, start2, end1, end2, start, end
         bint sl, sr, el, er, s_in, e_in, ini, cov
         list ret = []
-    obs_range = json.loads(obs_range) if isinstance(obs_range, str) else obs_range
-    unk_range = json.loads(unk_range) if isinstance(unk_range, str) else unk_range
+    obs_range = convert_range(obs_range)
+    unk_range = convert_range(unk_range)
     
     for start1, end1 in obs_range:
         for start2, end2 in unk_range:
@@ -171,7 +169,7 @@ def overlap_range(object obs_range, object unk_range):
 
 
 cpdef tuple outside_range(object pdb_range, int seqres_len):
-    pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
+    pdb_range = convert_range(pdb_range)
     cdef:
         int out_head = pdb_range[0][0] - 1
         int out_tail = pdb_range[-1][-1] + 1
@@ -188,4 +186,71 @@ cpdef tuple outside_range(object pdb_range, int seqres_len):
         ret = tuple()
     return ret
 
+
+cpdef object convert_range(object input_range):
+    cdef object ret
+    if isinstance(input_range, str):
+        ret = json.loads(input_range)
+    else:
+        ret = input_range
+    return ret
+
+
+cpdef bint isin_range(object input_range, int value):
+    input_range = convert_range(input_range)
+    cdef size_t size = len(input_range)
+    cdef size_t i
+    cdef int x, y
+    for i in range(size):
+        x, y = input_range[i]
+        if value >= x and value <= y:
+            return True
+    return False
+
+
+cpdef int convert_index(object lrange, object rrange, int site):
+    # convert from rrange to lrange
+    cdef int lstart, rstart, lend, rend
+    for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+        if (site >= rstart) and (site <= rend):
+            return site + lstart - rstart
+        else:
+            continue
+    return -1
+
+
+cdef tuple new_tp_range(int start, int end):
+    cdef:
+        tuple r = (start, end)
+        tuple ret = (r,)
+    return ret
+
+
+
+cpdef tuple trim_range(object obs_range, object pdb_range, object unp_range):
+    obs_range = convert_range(obs_range)
+    pdb_range = convert_range(pdb_range)
+    unp_range = convert_range(unp_range)
+    cdef:
+        int pdb_head = pdb_range[0][0]
+        int pdb_tail = pdb_range[-1][-1]
+        bint pdb_head_obs = isin_range(obs_range, pdb_head)
+        bint pdb_tail_obs = isin_range(obs_range, pdb_tail)
+        list candidate_new_range, pdb_new_range, unp_new_range
+        int pdb_obs_head, pdb_obs_tail, unp_obs_head, unp_obs_tail
+        tuple tp_pdb_range, tp_unp_range
+
+    if (not pdb_head_obs) or (not pdb_tail_obs):
+        candidate_new_range = overlap_range(obs_range, pdb_range)
+        pdb_obs_head = candidate_new_range[0][0]
+        pdb_obs_tail = candidate_new_range[-1][-1]
+        unp_obs_head = convert_index(unp_range, pdb_range, pdb_obs_head)
+        unp_obs_tail = convert_index(unp_range, pdb_range, pdb_obs_tail)
+        tp_pdb_range = new_tp_range(pdb_obs_head, pdb_obs_tail)
+        pdb_new_range = overlap_range(pdb_range, tp_pdb_range)
+        tp_unp_range = new_tp_range(unp_obs_head, unp_obs_tail)
+        unp_new_range = overlap_range(unp_range, tp_unp_range)
+        return (pdb_new_range, unp_new_range)
+    else:
+        return (pdb_range, unp_range)
 
