@@ -12,12 +12,13 @@ install:
   - pip install toml
   - pip install pytest-cython
   - pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
-  - pip install pdb-profiling==0.2.7a9
-  - python setup.py build_ext --inplace
 
 # command to run tests
 script:
-  - coverage run --source=pdb_profiling -m pytest ./test/pytest/ --doctest-cython
+  - python setup.py build_ext --inplace
+  - python setup.py install
+  - pytest ./test/pytest/ --doctest-cython
+#  - coverage run --source=pdb_profiling -m pytest ./test/pytest/ --doctest-cython
 
-after_success:
-  - coveralls
+#after_success:
+#  - coveralls
