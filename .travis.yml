@@ -8,7 +8,8 @@ python:
 install:
   - pip install --upgrade pip
   - pip install coveralls
-  - pip install cython
+  - pip install toml
+  - pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
   - pip install pdb-profiling==0.2.7a9
 
 # command to run tests
