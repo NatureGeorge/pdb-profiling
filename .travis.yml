@@ -6,18 +6,18 @@ python:
 
 # command to install dependencies
 install:
-  - pip install --upgrade pip
+  - python3 -m pip install --upgrade pip
 #  - pip install --upgrade pytest
 #  - pip install coveralls
-  - pip install toml
+  - python3 -m pip install toml
 #  - pip install pytest-cython
-  - pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
-  - python setup.py build_ext --inplace
-  - python setup.py install
+  - python3 -m pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
+  - python3 setup.py build_ext --inplace
+  - python3 setup.py install
 
 # command to run tests
 script:
-  - python -c 'from pdb_profiling import default_config;default_config();from pdb_profiling.cython.cyrange import to_interval;'
+  - python3 -c 'from pdb_profiling import default_config;default_config();from pdb_profiling.cython.cyrange import to_interval;'
 #  - pytest ./test/pytest/ --doctest-cython
 #  - coverage run --source=pdb_profiling -m pytest ./test/pytest/ --doctest-cython
 
