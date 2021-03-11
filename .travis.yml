@@ -14,6 +14,7 @@ install:
 
 # command to run tests
 script:
+  - python setup.py build_ext --inplace
   - coverage run --source=pdb_profiling -m pytest ./test/pytest/
 
 after_success:
