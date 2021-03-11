@@ -18,6 +18,7 @@ setup(
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
+        'sqlalchemy>=1.3.5'
         'aiosqlite>=0.13.0',
         'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
@@ -30,7 +31,7 @@ setup(
         'textdistance>=4.2.0',
         'databases>=0.3.2',
         'rich>=9.5.0',
-        'orm>=0.1.5',
+        'orm==0.1.5',
         'scikit-learn>=0.23.2',
         'python-slugify>=4.0.0',
         'cachetools>=4.1.0',
