@@ -18,8 +18,6 @@ setup(
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
-        'sqlalchemy>=1.3.5'
-        'aiosqlite>=0.13.0',
         'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
         'unsync>=1.2.1',
