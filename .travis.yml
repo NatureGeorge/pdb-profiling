@@ -7,10 +7,10 @@ python:
 # command to install dependencies
 install:
   - python3 -m pip install --upgrade pip
-#  - pip install --upgrade pytest
-#  - pip install coveralls
+  - python3 -m pip install --upgrade pytest
+  - python3 -m pip install coveralls
   - python3 -m pip install toml
-#  - pip install pytest-cython
+  - python3 -m pip install pytest-cython
   - python3 -m pip install aiosqlite
   - python3 -m pip install sqlalchemy --upgrade
   - python3 -m pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
@@ -19,8 +19,7 @@ install:
 
 # command to run tests
 script:
-  - python3 -c 'from pdb_profiling import default_config;default_config();from pdb_profiling.cython.cyrange import to_interval;'
-#  - pytest ./test/pytest/ --doctest-cython
+  - pytest ./test/pytest/ --doctest-cython
 #  - coverage run --source=pdb_profiling -m pytest ./test/pytest/ --doctest-cython
 
 #after_success:
