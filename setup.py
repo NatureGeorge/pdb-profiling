@@ -31,7 +31,7 @@ setup(
         'textdistance>=4.2.0',
         'databases>=0.3.2',
         'rich>=9.5.0',
-        'orm==0.1.5',
+        'orm>=0.1.5',
         'scikit-learn>=0.23.2',
         'python-slugify>=4.0.0',
         'cachetools>=4.1.0',
