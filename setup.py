@@ -24,7 +24,7 @@ setup(
         'tenacity>=6.3.0',
         'orjson>=3.0.2',
         'pyexcel>=0.6.4',
-        'pandas>=1.2.2',
+        'pandas>=1.1.5',
         'numpy>=1.19.2',
         'textdistance>=4.2.0',
         'databases[sqlite]>=0.3.2',
@@ -49,8 +49,7 @@ setup(
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9"
+        "Programming Language :: Python :: 3.8"
     ],
     )
 

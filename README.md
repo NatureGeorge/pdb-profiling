@@ -1,14 +1,14 @@
 # pdb-profiling
 
-[![DOI](https://zenodo.org/badge/247475852.svg)](https://zenodo.org/badge/latestdoi/247475852)
-[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=flat&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
-[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=flat&logo=python)](https://pypi.org/project/pdb-profiling/)
-[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=flat&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
-[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=flat&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
-[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=flat&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=flat&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
-[![Coverage Status](https://img.shields.io/coveralls/github/NatureGeorge/pdb-profiling?style=flat&logo=coveralls)](https://coveralls.io/github/NatureGeorge/pdb-profiling?branch=master)
+[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.4596476%20-gray.svg?colorB=5A65B3&style=for-the-badge)](https://zenodo.org/badge/latestdoi/247475852)
+[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
+[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge&logo=python)](https://pypi.org/project/pdb-profiling/)
+[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
+[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
+[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
+[![Coverage Status](https://img.shields.io/coveralls/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=coveralls)](https://coveralls.io/github/NatureGeorge/pdb-profiling?branch=master)
 
 ![cover](https://user-images.githubusercontent.com/43134199/95018149-58cfc200-0690-11eb-9e64-760faec5130f.png)
 
