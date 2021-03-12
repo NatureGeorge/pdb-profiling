@@ -10,7 +10,6 @@ install:
   - python3 -m pip install --upgrade pytest
   - python3 -m pip install coveralls
   - python3 -m pip install toml
-  - python3 -m pip install pytest-cython
   - python3 -m pip install aiosqlite==0.13.0
   - python3 -m pip install sqlalchemy==1.3.5
   - python3 -m pip install databases==0.3.2
@@ -21,7 +20,7 @@ install:
 
 # command to run tests
 script:
-  - coverage run --source=pdb_profiling -m pytest ./test/pytest/ --doctest-cython
+  - coverage run --source=pdb_profiling -m pytest ./test/pytest/
 
 after_success:
   - coveralls

@@ -242,15 +242,16 @@ cpdef tuple trim_range(object obs_range, object pdb_range, object unp_range):
 
     if (not pdb_head_obs) or (not pdb_tail_obs):
         candidate_new_range = overlap_range(obs_range, pdb_range)
-        pdb_obs_head = candidate_new_range[0][0]
-        pdb_obs_tail = candidate_new_range[-1][-1]
-        unp_obs_head = convert_index(unp_range, pdb_range, pdb_obs_head)
-        unp_obs_tail = convert_index(unp_range, pdb_range, pdb_obs_tail)
-        tp_pdb_range = new_tp_range(pdb_obs_head, pdb_obs_tail)
-        pdb_new_range = overlap_range(pdb_range, tp_pdb_range)
-        tp_unp_range = new_tp_range(unp_obs_head, unp_obs_tail)
-        unp_new_range = overlap_range(unp_range, tp_unp_range)
-        return (pdb_new_range, unp_new_range)
-    else:
-        return (pdb_range, unp_range)
+        if len(candidate_new_range) > 0:
+            pdb_obs_head = candidate_new_range[0][0]
+            pdb_obs_tail = candidate_new_range[-1][-1]
+            unp_obs_head = convert_index(unp_range, pdb_range, pdb_obs_head)
+            unp_obs_tail = convert_index(unp_range, pdb_range, pdb_obs_tail)
+            tp_pdb_range = new_tp_range(pdb_obs_head, pdb_obs_tail)
+            pdb_new_range = overlap_range(pdb_range, tp_pdb_range)
+            tp_unp_range = new_tp_range(unp_obs_head, unp_obs_tail)
+            unp_new_range = overlap_range(unp_range, tp_unp_range)
+            # assert len(pdb_new_range) == len(unp_new_range), "{}, {}, {}\n{} {}".format(obs_range, pdb_range, unp_range, pdb_new_range, unp_new_range)
+            return (pdb_new_range, unp_new_range)
+    return (pdb_range, unp_range)
 

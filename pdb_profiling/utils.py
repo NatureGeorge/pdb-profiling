@@ -195,7 +195,7 @@ async def a_read_csv(path, read_mode='r',**kwargs):
 
 async def a_load_json(path):
     try:
-        if isinstance(path, (Coroutine, Unfuture)):
+        if isawaitable(path):
             path = await path
         if path is None:
             return None

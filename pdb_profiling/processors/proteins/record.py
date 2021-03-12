@@ -174,8 +174,19 @@ class Identifier(Abclog):
             return dbReferences_df, other_dbReferences_df, iso_df, features_df, int_df
             '''
 
+    @classmethod
     @unsync
-    async def fetch_from_ProteinsAPI(self, reviewed='true', isoform=0):
+    async def fetch_from_proteins_api(cls, suffix, identifier=None, params={}, rate=1.5):
+        return await ProteinsAPI.single_retrieve(
+            suffix=suffix, 
+            params=params, 
+            folder=cls.proteins_api_folder,
+            semaphore=cls.proteins_api_web_semaphore,
+            identifier=identifier,
+            rate=rate)
+
+    @unsync
+    async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0):
         res = await ProteinsAPI.pipe_summary(await ProteinsAPI.single_retrieve(
             'proteins/',
             dict(offset=0, size=-1, reviewed=reviewed, isoform=isoform),
@@ -275,7 +286,7 @@ class Identifier(Abclog):
         except AssertionError:
             res = None
         if res is None:
-            val = await self.fetch_from_ProteinsAPI(**kwargs)
+            val = await self.fetch_proteins_from_ProteinsAPI(**kwargs)
             if val is None:
                 return self.raw_identifier, 'NaN', 'NaN', False
             else:

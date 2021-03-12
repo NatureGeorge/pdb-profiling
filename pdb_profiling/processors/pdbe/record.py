@@ -1918,6 +1918,8 @@ class SIFTS(PDB):
 
     deletion_part_kwargs = dict()
 
+    unp_head = re_compile(r'>sp\|(.+)\|')
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -2141,7 +2143,7 @@ class SIFTS(PDB):
         '''convert from rrange to lrange'''
         def unit(lrange, rrange, site):
             for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
-                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range"
+                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range {} {}".format(lrange, rrange)
                 if (site >= rstart) and (site <= rend):
                     return int(site + lstart - rstart)
                 else:
@@ -2149,6 +2151,7 @@ class SIFTS(PDB):
             return nan_value
         lrange = json.loads(lrange) if isinstance(lrange, str) else lrange
         rrange = json.loads(rrange) if isinstance(rrange, str) else rrange
+        assert len(lrange) == len(rrange), "{} {}".format(lrange, rrange)
         return tuple(unit(lrange, rrange, site) for site in sites)
 
     @classmethod
@@ -2615,6 +2618,13 @@ class SIFTS(PDB):
         deletion_part = await cls.bs_score_deletion_part(pdb_id, struct_asym_id, new_pdb_range, new_unp_range, OBS_INDEX)
         return aligned_part, CN_terminal_part, insertion_part, deletion_part, outside_range_ignore_artifact
 
+    @staticmethod
+    def wrap_trim_range(iobs_range, ipdb_range, iunp_range, irepeated, ireversed):
+        if irepeated or ireversed:
+            return ipdb_range, iunp_range
+        else:
+            return trim_range(iobs_range, ipdb_range, iunp_range)
+
     @unsync
     async def pipe_score_base(self, sifts_df, pec_df):
         weight = self.weight
@@ -2638,7 +2648,9 @@ class SIFTS(PDB):
             full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
             assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
         
-        full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([trim_range(iobs_range, ipdb_range, iunp_range) for iobs_range, ipdb_range, iunp_range in zip(full_df.OBS_INDEX, full_df.new_pdb_range, full_df.new_unp_range)])
+        full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([self.wrap_trim_range(
+            iobs_range, ipdb_range, iunp_range, irepeated, ireversed) for iobs_range, ipdb_range, iunp_range, irepeated, ireversed in zip(
+                full_df.OBS_INDEX, full_df.new_pdb_range, full_df.new_unp_range, full_df.repeated, full_df.reversed)])
         grouped_len = full_df.groupby('UniProt').new_unp_range.apply(partial(reduce, add_range)).apply(range_len)
         grouped_len.name = 'c_unp_len'
         grouped_len = grouped_len.to_frame().reset_index()
@@ -3058,6 +3070,21 @@ class SIFTS(PDB):
             p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
             p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
         return p_df
+    
+    @unsync
+    async def unp_is_canonical(self):
+        if self.level != 'UniProt':
+            return False
+        try:
+            header = (await self.fetch_unp_fasta(self.identifier))[0]
+        except TypeError:
+            warn(self.identifier, PossibleObsoletedUniProtWarning)
+            return None
+        get_id = self.unp_head.match(header).group(1)
+        if '-' in self.identifier:
+            return self.identifier != get_id
+        else:
+            return self.identifier == get_id
 
 
 class Compounds(Base):

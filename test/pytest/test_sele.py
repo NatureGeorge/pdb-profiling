@@ -11,13 +11,14 @@ def test_single_select():
     from pdb_profiling.processors import SIFTS
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359')
+    demo.unp_is_canonical().result()
     df1 = demo.pipe_select_mo().result()
     demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
 
 def test_identifiers():
-    from pdb_profiling.processors import Identifiers
+    from pdb_profiling.processors import Identifiers, Identifier
     demo = Identifiers([
         'ENSP00000491589', 'ENST00000379268',
         'ENSP00000427757', 'ENSP00000266732',
@@ -25,6 +26,7 @@ def test_identifiers():
         'NP_001165602.1', 'ENST00000402254',
         'ENST00000371100'])
     demo.fetch('map2unp').run().result()
+    Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', identifier='P21359-3:550').result()
 
 def test_uniprots_alt():
     from pdb_profiling.processors import UniProts, Identifiers
