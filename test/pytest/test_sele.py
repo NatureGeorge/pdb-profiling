@@ -47,6 +47,8 @@ def test_other_api():
     from pdb_profiling.processors import PDB
     from pdb_profiling.processors.pdbe.api import PDBVersioned
     pdb_ob = PDB('1a01')
+    pdb_ob.status
+    pdb_ob.summary
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/secondary_structure/').result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
