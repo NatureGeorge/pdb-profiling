@@ -34,7 +34,7 @@ class Abclog(object):
         else:
             cls.logger = logger
 
-    @classmethod
+    """@classmethod
     def set_logging_fileHandler(cls, path: Union[str, Path], level: int = logging.DEBUG, logName: Optional[str] = None):
         if not hasattr(cls, 'logger'):
             cls.init_logger(logName)
@@ -48,4 +48,4 @@ class Abclog(object):
             cls.logger.info(f"Logging file in {path}")
             return cls.logger
         except Exception:
-            cls.logger.exception("Invalid file path for logging file ! Please specifiy path=...")
+            cls.logger.exception("Invalid file path for logging file ! Please specifiy path=...")"""

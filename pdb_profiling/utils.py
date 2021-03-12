@@ -882,7 +882,7 @@ def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=Non
     return select_index
 
 
-def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
+"""def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
     from scipy.stats import wasserstein_distance
     select_index = []
 
@@ -913,7 +913,7 @@ def select_ho_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
 
     for index in indexes:
         unit(index)
-    return select_index
+    return select_index"""
 
 
 def select_ho_max_range(ranges1, ranges2, indexes, cutoff=0.2, skip_index=[]):
