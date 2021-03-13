@@ -36,13 +36,6 @@ def test_uniprots_alt():
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
 
-def test_command():
-    from os import system
-    system('pdb_profiling --help')
-    system('pdb_profiling insert-mutation --help')
-    system('pdb_profiling id-mapping --help')
-    system('pdb_profiling sifts-mapping --help')
-
 def test_other_api():
     from pdb_profiling.processors import PDB
     from pdb_profiling.processors.pdbe.api import PDBVersioned
