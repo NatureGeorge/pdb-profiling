@@ -165,7 +165,7 @@ cpdef list overlap_range(object obs_range, object unk_range):
             end = end2 if e_in else end1
             if ini or cov:
                 ret.append((start, end))
-    return ret
+    return sorted(ret, key=itemgetter(0))
 
 
 cpdef tuple outside_range(object pdb_range, int seqres_len):

@@ -2234,14 +2234,14 @@ class SIFTS(PDB):
     async def deal_with_identical_entity_seq(dfrm):
         if isawaitable(dfrm):
             dfrm = await dfrm
-        already = set()
-        cluster_dfs = []
+        #already = set()
+        #cluster_dfs = []
         dfrm = dfrm.copy()
         dfrm['pdb_sequence'] = b''
         dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
         for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
             dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
-            if (pdb_id, entity_id) in already:
+            """if (pdb_id, entity_id) in already:
                 continue
             cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
             try:
@@ -2249,13 +2249,14 @@ class SIFTS(PDB):
                 already |= set(zip(cur_cluster_df.pdb_id, cur_cluster_df.entity_id))
             except AssertionError:
                 cur_cluster_df = DataFrame([dict(pdb_id=pdb_id, entity_id=entity_id, cluster_id=-1)])
-            cluster_dfs.append(cur_cluster_df)
+            cluster_dfs.append(cur_cluster_df)"""
 
-        cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
-        assert not any(cluster_df.duplicated())
-        dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
-        assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
-        dfrm['fix_cluster_id'] = dfrm.groupby(['cluster_id', 'pdb_sequence']).ngroup().astype(str) + '_' + dfrm.cluster_id.astype(str)
+        #cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
+        #assert not any(cluster_df.duplicated())
+        #dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
+        #assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
+        #dfrm['fix_cluster_id'] = dfrm.groupby(['cluster_id', 'pdb_sequence']).ngroup().astype(str) + '_' + dfrm.cluster_id.astype(str)
+        dfrm['fix_cluster_id'] = dfrm.groupby('pdb_sequence').ngroup()
         # ignore/overried cases like (P00720,2b7x,B v.s P00720,2b7x,A)
         return dfrm.drop(columns=['pdb_sequence'])
 
@@ -2278,7 +2279,8 @@ class SIFTS(PDB):
                       'conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']
         res = focus_part_iden.drop(columns=focus_cols[2:]).merge(focus_part_iden_dd[focus_cols], how='left')
         assert res.isnull().sum().sum() == 0
-        res = res.drop(columns=['fix_cluster_id', 'cluster_id'])
+        #res = res.drop(columns=['fix_cluster_id', 'cluster_id'])
+        res = res.drop(columns=['fix_cluster_id'])
         assert res.shape == focus_part.shape, f"{res.shape}, {focus_part.shape}"
         res.index = focus_part.index
         dfrm.loc[focus_part.index] = res
@@ -3074,17 +3076,15 @@ class SIFTS(PDB):
     @unsync
     async def unp_is_canonical(self):
         if self.level != 'UniProt':
-            return False
+            return None
+        if '-' not in self.identifier:
+            return True
         try:
             header = (await self.fetch_unp_fasta(self.identifier))[0]
         except TypeError:
             warn(self.identifier, PossibleObsoletedUniProtWarning)
             return None
-        get_id = self.unp_head.match(header).group(1)
-        if '-' in self.identifier:
-            return self.identifier != get_id
-        else:
-            return self.identifier == get_id
+        return self.identifier != self.unp_head.match(header).group(1)
 
 
 class Compounds(Base):
