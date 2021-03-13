@@ -67,25 +67,30 @@ class UnsyncFetch(Abclog):
             aiohttp.client_exceptions.ClientPayloadError
         '''
         cls.logger.debug(f"Start to download file: {info['url']}")
-        async with semaphore:
-            async with aiohttp.ClientSession() as session:  # headers={"Connection": "close"}
-                async_func = getattr(session, method)
-                async with async_func(**info) as resp:
-                    if resp.status == 200:
-                        async with aiofiles_open(path, 'wb') as fileOb:
-                            # Asynchronous iterator implementation of readany()
-                            async for chunk in resp.content.iter_any():
-                                await fileOb.write(chunk)
-                        cls.logger.debug(f"File has been saved in: '{path}'")
-                        await asyncio.sleep(rate)
-                        return path
-                    elif resp.status in (204, 300, 400, 403, 404, 405, 406):
-                        cls.logger.debug(f"204|300|400|403|404|405|406 for: {info}")
-                        return None
-                    else:
-                        mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
-                        cls.logger.error(f"{info} -> {mes}")
-                        raise RemoteServerError(mes)
+        try:
+            async with semaphore:
+                # connector=aiohttp.TCPConnector(ssl=False)
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    async_func = getattr(session, method)
+                    async with async_func(**info) as resp:
+                        if resp.status == 200:
+                            async with aiofiles_open(path, 'wb') as fileOb:
+                                # Asynchronous iterator implementation of readany()
+                                async for chunk in resp.content.iter_any():
+                                    await fileOb.write(chunk)
+                            cls.logger.debug(f"File has been saved in: '{path}'")
+                            await asyncio.sleep(rate)
+                            return path
+                        elif resp.status in (204, 300, 400, 403, 404, 405, 406):
+                            cls.logger.debug(f"204|300|400|403|404|405|406 for: {info}")
+                            return None
+                        else:
+                            mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
+                            cls.logger.error(f"{info} -> {mes}")
+                            raise RemoteServerError(mes)
+        except Exception as e:
+            cls.logger.error(f"{info} -> {e}")
+            raise e
 
     @classmethod
     @retry(**rt_kw)

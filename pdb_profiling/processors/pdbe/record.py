@@ -6,6 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
+from functools import reduce, partial
 from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
@@ -23,21 +24,18 @@ from itertools import product, combinations_with_replacement, combinations
 from operator import itemgetter
 from pdb_profiling.processors.pdbe import default_id_tag
 from pdb_profiling.exceptions import *
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range, trim_range
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, 
                                  related_dataframe, slice_series, 
-                                 to_interval, MMCIF2DictPlus, 
-                                 a_load_json, SeqRangeReader,
-                                 sort_2_range, range_len,
-                                 overlap_range, flat_dict_in_df,
+                                 MMCIF2DictPlus, a_load_json, SeqRangeReader,
+                                 sort_2_range, flat_dict_in_df,
                                  get_diff_index, get_seq_seg,
-                                 get_gap_list,get_range_diff,
-                                 add_range, subtract_range, select_range,
-                                 interval2set, expand_interval,
+                                 get_gap_list, get_range_diff,
+                                 select_range, expand_interval,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader, dumpsParams, outside_range,
-                                 lyst22interval, get_str_dict_len)
+                                 a_seq_reader, dumpsParams, get_str_dict_len)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtFASTA
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -117,8 +115,14 @@ class Base(object):
 
     @classmethod
     @unsync
-    async def set_web_semaphore(cls, web_semaphore_value):
+    async def set_web_semaphore(cls, web_semaphore_value: int):
+        assert web_semaphore_value > 1
         cls.web_semaphore = await init_semaphore(web_semaphore_value)
+    
+    @classmethod
+    @unsync
+    async def set_rcsb_web_semaphore(cls, web_semaphore_value: int):
+        assert web_semaphore_value > 1
         cls.rcsb_semaphore = await init_semaphore(web_semaphore_value)
 
     @classmethod
@@ -1106,7 +1110,7 @@ class PDB(Base):
         if profile_id_df is not None:
             return profile_id_df
         
-        if choice((1, 1, 1, 1, 0)):
+        if choice((1, 1, 0)):
             assg_oper_df = await self.rd_source_ass_oper_df()
         else:
             demo_dict = await self.pipe_assg_data_collection()
@@ -1914,6 +1918,8 @@ class SIFTS(PDB):
 
     deletion_part_kwargs = dict()
 
+    unp_head = re_compile(r'>sp\|(.+)\|')
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -2137,7 +2143,7 @@ class SIFTS(PDB):
         '''convert from rrange to lrange'''
         def unit(lrange, rrange, site):
             for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
-                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range"
+                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range {} {}".format(lrange, rrange)
                 if (site >= rstart) and (site <= rend):
                     return int(site + lstart - rstart)
                 else:
@@ -2145,6 +2151,7 @@ class SIFTS(PDB):
             return nan_value
         lrange = json.loads(lrange) if isinstance(lrange, str) else lrange
         rrange = json.loads(rrange) if isinstance(rrange, str) else rrange
+        assert len(lrange) == len(rrange), "{} {}".format(lrange, rrange)
         return tuple(unit(lrange, rrange, site) for site in sites)
 
     @classmethod
@@ -2227,14 +2234,14 @@ class SIFTS(PDB):
     async def deal_with_identical_entity_seq(dfrm):
         if isawaitable(dfrm):
             dfrm = await dfrm
-        already = set()
-        cluster_dfs = []
+        #already = set()
+        #cluster_dfs = []
         dfrm = dfrm.copy()
         dfrm['pdb_sequence'] = b''
         dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
         for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
             dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
-            if (pdb_id, entity_id) in already:
+            """if (pdb_id, entity_id) in already:
                 continue
             cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
             try:
@@ -2242,13 +2249,14 @@ class SIFTS(PDB):
                 already |= set(zip(cur_cluster_df.pdb_id, cur_cluster_df.entity_id))
             except AssertionError:
                 cur_cluster_df = DataFrame([dict(pdb_id=pdb_id, entity_id=entity_id, cluster_id=-1)])
-            cluster_dfs.append(cur_cluster_df)
+            cluster_dfs.append(cur_cluster_df)"""
 
-        cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
-        assert not any(cluster_df.duplicated())
-        dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
-        assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
-        dfrm['fix_cluster_id'] = dfrm.groupby(['cluster_id', 'pdb_sequence']).ngroup().astype(str) + '_' + dfrm.cluster_id.astype(str)
+        #cluster_df = concat(cluster_dfs, sort=False, ignore_index=True)
+        #assert not any(cluster_df.duplicated())
+        #dfrm = dfrm.merge(cluster_df[['pdb_id','entity_id','cluster_id']], how='left')
+        #assert not any(dfrm.cluster_id.isnull()), f"{dfrm[dfrm.cluster_id.isnull()]}"
+        #dfrm['fix_cluster_id'] = dfrm.groupby(['cluster_id', 'pdb_sequence']).ngroup().astype(str) + '_' + dfrm.cluster_id.astype(str)
+        dfrm['fix_cluster_id'] = dfrm.groupby('pdb_sequence').ngroup()
         # ignore/overried cases like (P00720,2b7x,B v.s P00720,2b7x,A)
         return dfrm.drop(columns=['pdb_sequence'])
 
@@ -2271,7 +2279,8 @@ class SIFTS(PDB):
                       'conflict_pdb_index', 'raw_pdb_index', 'conflict_pdb_range', 'conflict_unp_range']
         res = focus_part_iden.drop(columns=focus_cols[2:]).merge(focus_part_iden_dd[focus_cols], how='left')
         assert res.isnull().sum().sum() == 0
-        res = res.drop(columns=['fix_cluster_id', 'cluster_id'])
+        #res = res.drop(columns=['fix_cluster_id', 'cluster_id'])
+        res = res.drop(columns=['fix_cluster_id'])
         assert res.shape == focus_part.shape, f"{res.shape}, {focus_part.shape}"
         res.index = focus_part.index
         dfrm.loc[focus_part.index] = res
@@ -2611,6 +2620,13 @@ class SIFTS(PDB):
         deletion_part = await cls.bs_score_deletion_part(pdb_id, struct_asym_id, new_pdb_range, new_unp_range, OBS_INDEX)
         return aligned_part, CN_terminal_part, insertion_part, deletion_part, outside_range_ignore_artifact
 
+    @staticmethod
+    def wrap_trim_range(iobs_range, ipdb_range, iunp_range, irepeated, ireversed):
+        if irepeated or ireversed:
+            return ipdb_range, iunp_range
+        else:
+            return trim_range(iobs_range, ipdb_range, iunp_range)
+
     @unsync
     async def pipe_score_base(self, sifts_df, pec_df):
         weight = self.weight
@@ -2634,6 +2650,16 @@ class SIFTS(PDB):
             full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
             assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
         
+        full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([self.wrap_trim_range(
+            iobs_range, ipdb_range, iunp_range, irepeated, ireversed) for iobs_range, ipdb_range, iunp_range, irepeated, ireversed in zip(
+                full_df.OBS_INDEX, full_df.new_pdb_range, full_df.new_unp_range, full_df.repeated, full_df.reversed)])
+        grouped_len = full_df.groupby('UniProt').new_unp_range.apply(partial(reduce, add_range)).apply(range_len)
+        grouped_len.name = 'c_unp_len'
+        grouped_len = grouped_len.to_frame().reset_index()
+        # assert frozenset(grouped_len.columns) == frozenset({'UniProt', 'c_unp_len'}), str(grouped_len.columns)
+        full_df = full_df.merge(grouped_len, how='left')
+        assert full_df.c_unp_len.isnull().sum() == 0, f"{full_df[full_df.c_unp_len.isnull].UniProt}"
+
         cols = ['pdb_id', 'struct_asym_id', 'new_pdb_range', 'new_unp_range', 'conflict_pdb_range', 'conflict_pdb_index',
                 'raw_pdb_index', 'SEQRES_COUNT', 'ARTIFACT_INDEX', 'OBS_INDEX', 'NON_INDEX', 'OBS_RATIO_ARRAY']
         # tasks = full_df[cols].agg(self.bs_score_base, axis=1).tolist()
@@ -2656,7 +2682,7 @@ class SIFTS(PDB):
         s_df['RAW_BS'] = s_df.apply(raw_score, axis=1) / full_df.unp_len
         s_df['RAW_BS_IG3'] = s_df.drop(columns=['s3', 'RAW_BS']).apply(raw_score_ig3, axis=1) / full_df.unp_len
         ret = concat([full_df, bs_score_df], axis=1)
-        ret.bs_score = ret.bs_score/ret.unp_len
+        ret.bs_score = ret.bs_score/ret.c_unp_len
         return ret, s_df
 
     @unsync
@@ -3046,6 +3072,19 @@ class SIFTS(PDB):
             p_df['in_i3d'] = p_df.organism.apply(lambda x: False if isna(x) else True)
             p_df.drop(columns=['organism', 'interaction_type'], inplace=True)
         return p_df
+    
+    @unsync
+    async def unp_is_canonical(self):
+        if self.level != 'UniProt':
+            return None
+        if '-' not in self.identifier:
+            return True
+        try:
+            header = (await self.fetch_unp_fasta(self.identifier))[0]
+        except TypeError:
+            warn(self.identifier, PossibleObsoletedUniProtWarning)
+            return None
+        return self.identifier != self.unp_head.match(header).group(1)
 
 
 class Compounds(Base):

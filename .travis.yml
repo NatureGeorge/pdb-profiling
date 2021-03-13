@@ -1,14 +1,21 @@
 language: python
 
 python:
-  - "3.6"
   - "3.7"
   - "3.8"
 
 # command to install dependencies
 install:
-  - pip install pdb-profiling==0.2.6
-  - pip install coveralls
+  - python3 -m pip install --upgrade pip
+  - python3 -m pip install --upgrade pytest
+  - python3 -m pip install coveralls
+  - python3 -m pip install toml
+  - python3 -m pip install "aiohttp>=3.7.4,<4.0.0"
+  - python3 -m pip install "orm>=0.1.5,<0.2.0"
+  - python3 -m pip install "sqlalchemy>=1.3.5,<1.4.0"
+  - python3 -m pip install $(python -c 'import toml;c = toml.load("pyproject.toml");print("\n".join(c["build-system"]["requires"]))')
+  - python3 setup.py build_ext --inplace
+  - python3 setup.py install
 
 # command to run tests
 script:

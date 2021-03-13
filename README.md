@@ -1,13 +1,13 @@
 # pdb-profiling
 
-[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=for-the-badge&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
-[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=for-the-badge&logo=python)](https://pypi.org/project/pdb-profiling/)
-[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
-[![Dependencies](https://img.shields.io/librariesio/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=PYPI)](https://github.com/naturegeorge/pdb-profiling/blob/master/setup.py)
-[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=for-the-badge&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge&logo=github)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
-[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=for-the-badge&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
-[![Coverage Status](https://img.shields.io/coveralls/github/NatureGeorge/pdb-profiling?style=for-the-badge&logo=coveralls)](https://coveralls.io/github/NatureGeorge/pdb-profiling?branch=master)
+[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.4596476%20-gray.svg?colorB=5A65B3&style=flat)](https://zenodo.org/badge/latestdoi/247475852)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat&logo=github&colorB=5A65B3)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
+[![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=flat&logo=python&colorB=5A65B3)](https://pypi.org/project/pdb-profiling/)
+[![Version](https://img.shields.io/pypi/v/pdb-profiling?style=flat&logo=PYPI&colorB=5A65B3)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)
+[![PyPIDownloads](https://img.shields.io/pypi/dm/pdb-profiling.svg?style=flat&logo=PYPI)](https://pypi.org/project/pdb-profiling/)
+[![GitHubDownloads](https://img.shields.io/github/downloads/NatureGeorge/pdb-profiling/total?style=flat&logo=github)](https://github.com/NatureGeorge/pdb-profiling/releases/)
+[![Build](https://img.shields.io/travis/naturegeorge/pdb-profiling?style=flat&logo=travis)](https://github.com/naturegeorge/pdb-profiling)
+[![Coverage Status](https://img.shields.io/coveralls/github/NatureGeorge/pdb-profiling?style=flat&logo=coveralls)](https://coveralls.io/github/NatureGeorge/pdb-profiling?branch=master)
 
 ![cover](https://user-images.githubusercontent.com/43134199/95018149-58cfc200-0690-11eb-9e64-760faec5130f.png)
 
@@ -34,19 +34,29 @@ Install by `pip` command.
 * To avoid some unexpected issues, you should upgrade your `pip` beforehand:
 
 ```bash
-pip install --upgrade pip
+python -m pip install --upgrade pip
 ``` 
 
 ### Official Installation
 
 ```bash
-pip install pdb-profiling
+python -m pip install cython
+python -m pip install pdb-profiling # Done
 ```
 
 If you have already installed an older version of `pdb-profiling`, use the following command to install the latest version:
 
 ```bash
-pip install --upgrade pdb-profiling
+python -m pip install --upgrade pdb-profiling
+```
+
+### Build From Source (optional, for non-windows environment)
+
+```bash
+python -m pip install cython
+git clone https://github.com/NatureGeorge/pdb-profiling.git
+python setup.py build_ext --inplace  # Need GCC or Other Compiler For C
+python setup.py install              # or "sudo python setup.py install" or "python setup.py install --user"
 ```
 
 ## Documentation
@@ -71,6 +81,8 @@ See `examples/...`
 * UniProt API
 * EBI Proteins API
 * Interactome3D API
+* RCSB Data API
+* RCSB Search API
 * ...
 
 > click [here](https://pdb-profiling.netlify.app/docs/5-reference/) for more details
@@ -83,10 +95,7 @@ See `examples/...`
 
 <summary>Click to view</summary>
 
-* `RCSB`
-  * [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
-  * [RCSB PDB Search API](http://search.rcsb.org/)
-    * [Documentation for New and Improved APIs](https://www.rcsb.org/news?year=2020&article=5f65165507302466657ec0e8&feature=true)
+* `RCSB`: [Build Customize Tabular Reports of PDB Data](https://www.rcsb.org/news?year=2020&article=5f6529e207302466657ec0e9&feature=true)
 * [MolArt](https://github.com/davidhoksza/MolArt)
 
 </details>

@@ -4,7 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-13 08:54:09 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-__version__ = '0.2.7'
+__version__ = '0.2.8'
 
 
 def default_config(folder='./'):
@@ -24,7 +24,8 @@ def default_config(folder='./'):
     # Init Abclog Logger
     Abclog.init_logger(logName='PDB-Profiling')
     # Set WebFetcher's Semaphore
-    Base.set_web_semaphore(50).result()
+    Base.set_web_semaphore(30).result()
+    Base.set_rcsb_web_semaphore(6).result()
     Identifier.set_web_semaphore(30).result()
     UniProtFASTA.set_web_semaphore(30).result()
     UniProtAPI.set_web_semaphore(30).result()

@@ -11,13 +11,14 @@ def test_single_select():
     from pdb_profiling.processors import SIFTS
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359')
+    demo.unp_is_canonical().result()
     df1 = demo.pipe_select_mo().result()
     demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
 
 def test_identifiers():
-    from pdb_profiling.processors import Identifiers
+    from pdb_profiling.processors import Identifiers, Identifier
     demo = Identifiers([
         'ENSP00000491589', 'ENST00000379268',
         'ENSP00000427757', 'ENSP00000266732',
@@ -25,6 +26,7 @@ def test_identifiers():
         'NP_001165602.1', 'ENST00000402254',
         'ENST00000371100'])
     demo.fetch('map2unp').run().result()
+    Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', identifier='P21359-3:550').result()
 
 def test_uniprots_alt():
     from pdb_profiling.processors import UniProts, Identifiers
@@ -34,17 +36,12 @@ def test_uniprots_alt():
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
 
-def test_command():
-    from os import system
-    system('pdb_profiling --help')
-    system('pdb_profiling insert-mutation --help')
-    system('pdb_profiling id-mapping --help')
-    system('pdb_profiling sifts-mapping --help')
-
 def test_other_api():
     from pdb_profiling.processors import PDB
     from pdb_profiling.processors.pdbe.api import PDBVersioned
     pdb_ob = PDB('1a01')
+    pdb_ob.status
+    pdb_ob.summary
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/secondary_structure/').result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
