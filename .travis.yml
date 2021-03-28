@@ -8,6 +8,7 @@ python:
 install:
   - python3 -m pip install --upgrade pip
   - python3 -m pip install --upgrade pytest
+  - python3 -m pip install --upgrade pytest-timeout
   - python3 -m pip install coveralls
   - python3 -m pip install toml
   - python3 -m pip install "aiohttp>=3.7.4,<4.0.0"

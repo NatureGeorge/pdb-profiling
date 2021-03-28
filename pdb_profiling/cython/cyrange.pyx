@@ -78,6 +78,33 @@ def lyst22interval(object x, object y):
     return interval_x, interval_y
 
 
+def lyst32interval(object x, object y, object z):
+    cdef:
+        int i, j, k, start_x, start_y, start_z, index_x, index_y, index_z, pre_x, pre_y, pre_z
+        list interval_x, interval_y, interval_z
+        frozenset data = frozenset({item for item in zip(x,y,z)})
+    x, y, z = zip(*sorted(data, key=itemgetter(0)))
+    start_x, start_y, start_z = x[0], y[0], z[0]
+    index_x, index_y, index_z = x[0]-1, y[0]-1, z[0]-1
+    interval_x, interval_y, interval_z = [], [], []
+    for i, j, k in zip(x, y, z):
+        pre_x = index_x + 1
+        pre_y = index_y + 1
+        pre_z = index_z + 1
+        if pre_x == i and pre_y == j and pre_z == k:
+            index_x, index_y, index_z = i, j, k
+        else:
+            interval_x.append((start_x, index_x))
+            interval_y.append((start_y, index_y))
+            interval_z.append((start_z, index_z))
+            start_x, start_y, start_z = i, j, k
+            index_x, index_y, index_z = i, j, k
+    interval_x.append((start_x, index_x))
+    interval_y.append((start_y, index_y))
+    interval_z.append((start_z, index_z))
+    return interval_x, interval_y, interval_z
+
+
 cpdef int range_len(object lyst):
     if isinstance(lyst, float) or lyst is None:
         return 0
@@ -115,7 +142,7 @@ def subtract_range(object source_range, object target_range):
 
 
 cdef bint check_range(object i):
-    if isinstance(i, float) or (i is None) or (len(i) == 0) or (i == 'nan'):
+    if isinstance(i, float) or (i is None) or (i == 'nan'):
         return False
     return True
 
@@ -212,6 +239,7 @@ cpdef int convert_index(object lrange, object rrange, int site):
     # convert from rrange to lrange
     cdef int lstart, rstart, lend, rend
     for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+        assert lstart - lend == rstart - rend
         if (site >= rstart) and (site <= rend):
             return site + lstart - rstart
         else:

@@ -12,6 +12,9 @@ from unsync import unsync, Unfuture
 from tenacity import retry, wait_random, stop_after_attempt, RetryError, retry_if_exception_type
 from rich.progress import track
 from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
+from pathlib import Path
+from urllib.parse import urlparse
+from aioftp import Client as aioftp_Client
 from pdb_profiling.log import Abclog
 from pdb_profiling.utils import init_semaphore
 from pdb_profiling.exceptions import InvalidFileContentError, RemoteServerError
@@ -66,7 +69,7 @@ class UnsyncFetch(Abclog):
             aiohttp.client_exceptions.ClientConnectorError, 
             aiohttp.client_exceptions.ClientPayloadError
         '''
-        cls.logger.debug(f"Start to download file: {info['url']}")
+        cls.logger.debug(f"http_download: Start to download file: {info['url']}")
         try:
             async with semaphore:
                 # connector=aiohttp.TCPConnector(ssl=False)
@@ -74,10 +77,10 @@ class UnsyncFetch(Abclog):
                     async_func = getattr(session, method)
                     async with async_func(**info) as resp:
                         if resp.status == 200:
-                            async with aiofiles_open(path, 'wb') as fileOb:
+                            async with aiofiles_open(path, 'wb') as file_out:
                                 # Asynchronous iterator implementation of readany()
                                 async for chunk in resp.content.iter_any():
-                                    await fileOb.write(chunk)
+                                    await file_out.write(chunk)
                             cls.logger.debug(f"File has been saved in: '{path}'")
                             await asyncio.sleep(rate)
                             return path
@@ -94,20 +97,19 @@ class UnsyncFetch(Abclog):
 
     @classmethod
     @retry(**rt_kw)
-    async def ftp_download(cls, semaphore, method: str, info: Dict, path: str, rate: float):
-        from furl import furl
-        from aioftp import ClientSession as aioftp_ClientSession
-        url = furl(info['url'])
-        fileName = url.path.segments[-1]
-        filePath = path / fileName
-        cls.logger.debug(f"Start to download file: {url}")  # info
+    async def ftp_download(cls, semaphore, method: str, info: Dict, path, rate: float):
+        url = urlparse(info['url'])
+        cls.logger.debug("ftp_download: Start to download file: {}".format(info['url']))
         async with semaphore:
-            async with aioftp_ClientSession(url.host) as session:
-                await session.change_directory('/'.join(url.path.segments[:-1]))
-                await session.download(fileName, path)  # , write_info=True
-        cls.logger.debug(f"File has been saved in: {filePath}")
-        await asyncio.sleep(rate)
-        return filePath
+            async with aioftp_Client.context(url.netloc) as client:
+                if await client.exists(url.path):
+                    async with aiofiles_open(path, 'wb') as file_out, client.download_stream(url.path) as stream:
+                        async for block in stream.iter_by_block():
+                            await file_out.write(block)
+                    cls.logger.debug(f"File has been saved in: {path}")
+                    await asyncio.sleep(rate)
+                    return path
+        return None
 
     @classmethod
     def download_func_dispatch(cls, method: str):
@@ -117,7 +119,7 @@ class UnsyncFetch(Abclog):
         elif method == 'ftp':
             return cls.ftp_download
         else:
-            raise ValueError(
+            raise NotImplementedError(
                 f'Invalid method: {method}, valid method should be get, post or ftp')
 
     @classmethod

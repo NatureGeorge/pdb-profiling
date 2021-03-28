@@ -9,7 +9,7 @@ from pdb_profiling.processors.eutils.api import EutilsAPI
 from pdb_profiling.processors.proteins.api import ProteinsAPI
 from pdb_profiling.processors.proteins import ProteinsDB
 from pdb_profiling.log import Abclog
-from pdb_profiling.warnings import PossibleObsoletedUniProtWarning
+from pdb_profiling.warnings import PossibleObsoletedUniProtWarning, SequenceConflictWarning
 from pdb_profiling.utils import init_folder_from_suffix, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run
 from re import compile as re_compile
 from pathlib import Path
@@ -27,9 +27,9 @@ class Identifier(Abclog):
         ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_%s' % suffix),
         ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
         ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
-        ('Ensembl', 'gene'): re_compile(f'(ENSG{suffix}'),
-        ('Ensembl', 'transcript'): re_compile(f'(ENST{suffix}'),
-        ('Ensembl', 'protein'): re_compile(f'(ENSP{suffix}'),
+        ('Ensembl', 'gene'): re_compile(f'(ENS[A-Z]*G{suffix}'),
+        ('Ensembl', 'transcript'): re_compile(f'(ENS[A-Z]*T{suffix}'),
+        ('Ensembl', 'protein'): re_compile(f'(ENS[A-Z]*P{suffix}'),
         ('UniProt', 'isoform'): re_compile(r'^((?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,})[\-]*([0-9]*)$')
         })
 
@@ -203,7 +203,8 @@ class Identifier(Abclog):
     @unsync
     async def get_all_level_identifiers(self):
         try:
-            cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
+            #cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
+            cur_id = self.identifier
             return dict(zip(('protein', 'transcript', 'gene'), await self.sqlite_api.database.fetch_one(
                 query=f"""
                     SELECT protein,transcript,gene FROM dbReferences
@@ -216,7 +217,8 @@ class Identifier(Abclog):
         '''
         return accession, UniProt Isoform, is_canonical
         '''
-        cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
+        # cur_id = self.raw_identifier if self.source == 'RefSeq' else self.identifier
+        cur_id = self.identifier
         res = await self.sqlite_api.database.fetch_one(
             query=f"""
                 SELECT accession,isoform FROM dbReferences
@@ -240,6 +242,18 @@ class Identifier(Abclog):
             if sequenceStatus is None:
                 return self.raw_identifier, accession, accession, True
             else:
+                if self.level == 'protein':
+                    tseq = (await self.fetch_sequence())[1]
+                else:
+                    tseq = (await Identifier((await self.get_all_level_identifiers())['protein']).fetch_sequence())[1]
+                tseqlen = len(tseq)
+                tseq_head = tseq[:50]
+                for isoform, cseqlen, cseq_head in (await self.sqlite_api.database.fetch_all(query=f"SELECT isoform,length(sequence),substr(sequence,1,50) FROM ALTERNATIVE_PRODUCTS WHERE accession == '{accession}' AND sequenceStatus IN ('displayed', 'described')")):
+                    if cseqlen == tseqlen:
+                        if sum(1 for x1, x2 in zip(cseq_head, tseq_head) if x1 == x2) >= 40:
+                            warn(f'Exists sequence conflict between {self.raw_identifier} and {accession}(with isoforms), but still assign the {isoform} since their length of protein-seq are equal. This is a naive assignment and maybe error-prone!', SequenceConflictWarning)
+                            return self.raw_identifier, accession, isoform, True
+                warn(f'Exists sequence conflict (also unequal length) between {self.raw_identifier} and {accession}(with isoforms), assign NaN instead.', SequenceConflictWarning)
                 return self.raw_identifier, accession, 'NaN', True
 
     @unsync
@@ -265,7 +279,7 @@ class Identifier(Abclog):
             elif self.status['is_current'] != '1':
                 self.logger.warning(
                     f'Not exists in current archive: \n{self.status}')
-                return
+                return (self.status.get('id', None), self.status.get('peptide', None))
             if not newest:
                 self.logger.warning(
                     "Can't retrieve older version Ensembl Sequence via Ensembl REST API!")
@@ -291,7 +305,11 @@ class Identifier(Abclog):
                 return self.raw_identifier, 'NaN', 'NaN', False
             else:
                 res = await self.map2unp_from_DB()
-        return res
+        if res is None:
+            warn(f"Unexpected None: {self.raw_identifier}")
+            return self.raw_identifier, 'NaN', 'NaN', False
+        else:
+            return res
 
 
 class Identifiers(tuple):

@@ -16,7 +16,7 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
 ## Features
 
 * `Collection`: Implement various API to collect the well-organized metadata of PDB in real time.
-* `Compatibility`: Provide a unified call for API-interface and return-data-form as well as subsequent data processing.
+* `Integration`: Provide a unified call for API-interface and return-data-form as well as subsequent data processing.
 * `Detection`: Reorganize metadata to evaluate a PDB structure in Entry-Assembly/Model-Entity-Chain-Residue level and integrated with UniProt-KB.
 * `Interaction`: Include UniProt Isoform Interaction in Asymmetric unit plus Biological Assembly level.
 * `Selection`: Define the representative set of PDB structures in Monomeric|Homomeric|Heteromeric states.
@@ -40,8 +40,7 @@ python -m pip install --upgrade pip
 ### Official Installation
 
 ```bash
-python -m pip install cython
-python -m pip install pdb-profiling # Done
+python -m pip install pdb-profiling
 ```
 
 If you have already installed an older version of `pdb-profiling`, use the following command to install the latest version:
@@ -65,12 +64,15 @@ python setup.py install              # or "sudo python setup.py install" or "pyt
 
 ## Examples
 
-See `examples/...`
+### Basic Usage
 
-1. [Introduction](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Introduction.ipynb)
-2. [Batch](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/Batch.ipynb)
-3. [DisplayPDB](https://nbviewer.jupyter.org/github/NatureGeorge/pdb-profiling/blob/master/examples/DisplayPDB.ipynb)
-4. ...
+* [Command Line Example](https://github.com/NatureGeorge/pdb-profiling/discussions/2)
+* [Retrieve Bound Molecule Data From PDBe](https://github.com/NatureGeorge/pdb-profiling/discussions/3)
+* ...
+
+### Large-Scale-Example
+
+* [ExAC](https://github.com/NatureGeorge/pdb-profiling/blob/master/examples/exac_example.md)
 
 ## Resources
 

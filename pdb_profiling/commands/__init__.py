@@ -29,7 +29,7 @@ class CustomDB(SqliteDB):
             isoform = orm.String(max_length=50, primary_key=True)
             is_canonical = orm.Boolean()
         
-        class ResidueMapping(orm.Model):
+        """class ResidueMapping(orm.Model):
             __tablename__ = 'ResidueMapping'
             __metadata__ = self.metadata
             __database__ = self.database
@@ -45,9 +45,67 @@ class CustomDB(SqliteDB):
             residue_name = orm.String(max_length=10)
             observed_ratio = orm.Float()
             multiple_conformers = orm.JSON(allow_null=True)
+            conflict_code = orm.String(max_length=3, allow_null=True)"""
+
+        class ResidueMappingRange(orm.Model):
+            __tablename__ = 'ResidueMappingRange'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=20, primary_key=True)
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            chain_id = orm.String(max_length=10)
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            auth_pdb_beg = orm.Integer()
+            auth_pdb_end = orm.Integer()
+            pdb_beg = orm.Integer(primary_key=True)
+            pdb_end = orm.Integer(primary_key=True)
+            unp_beg = orm.Integer(primary_key=True)
+            unp_end = orm.Integer(primary_key=True)
+            # Special:
+            author_insertion_code = orm.String(max_length=10, allow_null=True, allow_blank=True, default='')
+            residue_name = orm.String(max_length=10, allow_null=True, allow_blank=True, default='')
+            observed_ratio = orm.Float()
+            multiple_conformers = orm.JSON(allow_null=True)
             conflict_code = orm.String(max_length=3, allow_null=True)
 
+        class SelectedMapping(orm.Model):
+            __tablename__ = 'SelectedMapping'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=50, primary_key=True)
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            chain_id = orm.String(max_length=10)
 
+        class ResidueAnnotation(orm.Model):
+            __tablename__ = 'ResidueAnnotation'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            chain_id = orm.String(max_length=10)
+            resource = orm.String(max_length=100, primary_key=True)
+            resource_id = orm.String(max_length=200, primary_key=True)
+            pdb_start = orm.Integer()
+            pdb_end = orm.Integer()
+
+        class UniProtAnnotation(orm.Model):
+            __tablename__ = 'UniProtAnnotation'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=50, primary_key=True)
+            resource = orm.String(max_length=100, primary_key=True)
+            resource_id = orm.String(max_length=200, primary_key=True)
+            unp_start = orm.Integer()
+            unp_end = orm.Integer()
+        
         self.Mutation = Mutation
         self.IDMapping = IDMapping
-        self.ResidueMapping = ResidueMapping
+        self.UniProtAnnotation = UniProtAnnotation
+        #self.ResidueMapping = ResidueMapping
+        self.ResidueMappingRange = ResidueMappingRange
+        self.SelectedMapping = SelectedMapping
+        self.ResidueAnnotation = ResidueAnnotation

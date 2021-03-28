@@ -24,7 +24,7 @@ import aiofiles
 from tablib import Dataset
 import traceback
 from pdb_profiling.utils import (pipe_out, sort_sub_cols, slice_series, to_interval, 
-                                 lyst22intervel, SEQ_DICT, standardAA, standardNu, range_len,
+                                 lyst22interval, SEQ_DICT, standardAA, standardNu, range_len,
                                  interval2set, lyst2range, subtract_range,
                                  add_range, overlap_range, outside_range_len, related_dataframe)
 from pdb_profiling.log import Abclog
@@ -791,7 +791,7 @@ class SIFTS(Entry):
             query, kwargs = cls.summary_mapping_detail(*record)
             res = await neo4j_api.afetch(query, **kwargs)
             res = cls.to_data_frame(res)
-            res_unp_intervel, res_pdb_intervel = lyst22intervel(res.unp_index, res.residue_number)
+            res_unp_intervel, res_pdb_intervel = lyst22interval(res.unp_index, res.residue_number)
             updated_unp_range.append(json.dumps(res_unp_intervel).decode('utf-8'))
             updated_pdb_range.append(json.dumps(res_pdb_intervel).decode('utf-8'))
         updated_range_df = pd.DataFrame(

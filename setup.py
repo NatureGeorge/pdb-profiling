@@ -13,11 +13,12 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.2.8',
+    version='0.2.9',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
+        'aioftp>=0.18.1',
         'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
         'unsync>=1.2.1',

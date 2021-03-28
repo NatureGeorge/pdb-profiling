@@ -81,3 +81,7 @@ class InvalidFileContentWarning(UserWarning):
 
 class WithoutRCSBClusterMembershipWarning(UserWarning):
     pass
+
+
+class SequenceConflictWarning(UserWarning):
+    pass

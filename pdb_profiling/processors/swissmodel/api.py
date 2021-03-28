@@ -6,7 +6,7 @@
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.ensure import EnsureBase
-from pdb_profiling.utils import pipe_out, init_folder_from_suffix, init_semaphore, a_read_csv, dumpsParams
+from pdb_profiling.utils import pipe_out, init_folder_from_suffix, init_semaphore, a_read_csv, dumpsParams, unsync_wrap
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import InvalidFileContentError
 from typing import Union, Dict, Generator, Set, Any, Optional, List
@@ -96,9 +96,13 @@ class SMR(Abclog):
     @classmethod
     def single_retrieve(cls, unp: str, folder: Optional[Union[Path, str]]=None, semaphore=None, params: Dict = dict(provider='swissmodel'), rate: float = 1.5, file_format: str = 'json'):
         assert file_format in ('json', 'pdb'), "Invalid file format"
-
+        task = cls.task_unit(unp, params, file_format, cls.folder if folder is None else folder)
+        if file_format == 'json':
+            candidate = Path(str(task[2]).replace('json', 'tsv'))
+            if candidate.exists():
+                return unsync_wrap(candidate)
         return UnsyncFetch.single_task(
-            task=cls.task_unit(unp, params, file_format, cls.folder if folder is None else folder),
+            task=task,
             semaphore=cls.web_semaphore if semaphore is None else semaphore,
             to_do_func=cls.process,
             rate=rate)

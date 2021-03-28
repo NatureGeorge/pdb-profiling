@@ -40,7 +40,7 @@ PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/d
 # http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
 # http://ftp-versioned.wwpdb.org/pdb_versioned/data/entries/wm/pdb_00002wmg/pdb_00002wmg_xyz_v1-2.cif.gz
 
-FUNCS = list()
+FUNCS = []
 
 
 def str_number_converter(x):
@@ -88,7 +88,9 @@ class ProcessPDBe(Abclog):
         'assembly_id': int,
         'oper_expression': str,
         'structure_1.range': str,
-        'structure_2.range': str
+        'structure_2.range': str,
+        'alt_code': str,
+        'sheet_id': str_number_converter
     }
 
     @classmethod
@@ -102,7 +104,6 @@ class ProcessPDBe(Abclog):
                 yield method, params, folder/f'{file_prefix}+{task_id}+{i}.json'
         elif method == 'get':
             for pdb in pdbs:
-                # pdb = pdb.lower()
                 identifier = pdb.replace('/', '%')
                 yield method, {'headers': cls.headers, 'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
         else:
@@ -193,7 +194,12 @@ class PDBeDecoder(object):
                      'graph-api/compound/cofactors/', 'graph-api/pdb/funpdbe/',
                      'graph-api/pdb/bound_excluding_branched/',
                      'graph-api/pdb/bound_molecules/', 'graph-api/pdb/ligand_monomers/',
-                     'api/validation/global-percentiles/entry/')
+                     'api/validation/global-percentiles/entry/', 'api/validation/summary_quality_scores/entry/',
+                     'api/validation/key_validation_stats/entry/', 'api/validation/xray_refine_data_stats/entry/',
+                     'api/validation/vdw_clashes/entry/', 'api/validation/outliers/all/',
+                     'api/validation/nmr_cyrange_cores/entry/', # TODO: 2tablar
+                     'api/validation/nmr_ensemble_clustering/entry/'
+                     )
     def yieldCommon(data: Dict) -> Generator:
         for pdb in data:
             values = data[pdb]
@@ -316,12 +322,13 @@ class PDBeDecoder(object):
                      'graph-api/mappings/all_isoforms/', 'graph-api/mappings/',
                      'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/',
-                     'api/mappings/'
+                     'api/mappings/', 'api/nucleic_mappings/', 'api/nucleic_mappings/rfam/', 
+                     'api/nucleic_mappings/sequence_domains/'
                      # 'graph-api/uniprot/'
                      )
     def yieldSIFTSAnnotation(data: Dict) -> Generator:
         valid_annotation_set = {'UniProt', 'Ensembl', 'Pfam', 'CATH',
-                                'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER'}
+                                'CATH-B', 'SCOP', 'InterPro', 'GO', 'EC', 'Homologene', 'HMMER', 'Rfam'}
         for top_root in data:
             # top_root: PDB_ID or else ID
             if data[top_root].keys() <= valid_annotation_set:
@@ -504,12 +511,13 @@ class PDBeDecoder(object):
                      'graph-api/uniprot/sequence_conservation/')
     def graph_api_data_common(data: Dict):
         for pdb in data:
+            id_type = 'pdb_id' if len(pdb) == 4 else 'UniProt'
             for info in data[pdb]['data']:
                 if 'additionalData' in info:
                     flatten_dict(info, 'additionalData')
                 com_keys = tuple(key for key in info.keys()
                                  if key != 'residues')
-                yield info['residues'], ('pdb_id',)+com_keys, (pdb,)+tuple(info[key] for key in com_keys)
+                yield info['residues'], (id_type,)+com_keys, (pdb,)+tuple(info[key] for key in com_keys)
 
     @staticmethod
     @dispatch_on_set('graph-api/pdb/bound_molecule_interactions/')
@@ -521,8 +529,39 @@ class PDBeDecoder(object):
                        for i in interactions['interactions']]
                 yield ret, ('pdb_id', 'bm_id'), (pdb, interactions['bm_id'])
 
+    @staticmethod
+    @dispatch_on_set('api/validation/protein-ramachandran-sidechain-outliers/entry/', 'api/validation/RNA_pucker_suite_outliers/entry/')
+    def yield_protein_ramachandran_sidechain_outlier(data):
+        for pdb in data:
+            for tage in data[pdb]:
+                residues = data[pdb][tage]
+                yield residues, ('_type_', 'pdb_id'), (tage, pdb)
 
-class PDBeModelServer(Abclog):
+    @staticmethod
+    @dispatch_on_set('api/validation/rama_sidechain_listing/entry/', 'api/validation/residuewise_outlier_summary/entry/',
+                     'api/validation/protein-RNA-DNA-geometry-outlier-residues/entry/')
+    def yield_rama_sidechain_listing(data):
+        for pdb in data:
+            molecules = data[pdb]['molecules']
+            for entity in molecules:
+                chains = entity['chains']
+                for chain in chains:
+                    models = chain['models']
+                    for model in models:
+                        residues = model['residues']
+                        yield residues, ('chain_id', 'struct_asym_id', 'model_id', 'entity_id', 'pdb_id'), (chain['chain_id'], chain['struct_asym_id'], model['model_id'], entity['entity_id'], pdb)
+
+    @staticmethod
+    @dispatch_on_set('graph-api/uniprot/superposition/')
+    def yield_unp_pdb_struct_cluster(data):
+        for unp in data:
+            for segment in data[unp]:
+                clusters = segment['clusters']
+                for sub_cluster_id, sub_cluster in enumerate(clusters):
+                    yield sub_cluster, ('_index_', 'segment_start', 'segment_end', 'UniProt'), (sub_cluster_id, segment['segment_start'], segment['segment_end'], unp)
+
+
+class PDBeModelServer(object):
     '''
     Implement ModelServer API
     '''
@@ -558,7 +597,7 @@ class PDBeModelServer(Abclog):
             rate=rate)
 
 
-class PDBeCoordinateServer(Abclog):
+class PDBeCoordinateServer(object):
 
     roots = (f'{BASE_URL}coordinates/', 'https://cs.litemol.org/')
     headers = {'Connection': 'close', 'accept': 'text/plain'}
@@ -593,7 +632,7 @@ class PDBeCoordinateServer(Abclog):
             rate=rate)
 
 
-class PDBArchive(Abclog):
+class PDBArchive(object):
     '''
     Download files from PDB Archive
 
@@ -676,3 +715,46 @@ class PDBVersioned(PDBArchive):
         args = dict(url=f'{cls.root}{suffix}{pdb[1:3]}/pdb_0000{pdb}/{file_name}')
         return 'get', args, folder/file_name
 
+
+class PDBeKBAnnotations(object):
+    ftp_root = f"{FTP_URL}pub/databases/pdbe-kb/annotations/"
+    http_root = ftp_root.replace('ftp:', 'http:')
+    root = http_root
+    api_set = frozenset({
+        '14-3-3-pred/', '3DComplex/',
+        '3DLigandSite/', 'AKID/',
+        'COSPI-Depth/', 'CamKinet/',
+        'ChannelsDB/', 'Covalentizer/',
+        'DynaMine/', 'FireProtDB/',
+        'FoldX/', 'KnotProt/',
+        'M-CSA/', 'MetalPDB/',
+        'Missense3D/', 'P2rank/',
+        'POPScomp_PDBML/', 'ProKinO/',
+        'Scop3P/', 'canSAR/',
+        'cath-funsites/', 'webNMA/'})
+    
+    @staticmethod
+    def wrap_id(pdb_id, suffix):
+        if suffix == 'M-CSA/':
+            return f"{pdb_id}-mcsa"
+        else:
+            return pdb_id
+    
+    @classmethod
+    def task_unit(cls, pdb: str, suffix: str, folder: Path):
+        pdb_ = cls.wrap_id(pdb, suffix)
+        args = dict(
+            url=f'{cls.root}{suffix}{pdb[1:3]}/{pdb_}.json')
+        return 'ftp' if cls.root == cls.ftp_root else 'get', args, folder/f'{pdb_}.json'
+    
+    @classmethod
+    def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, rate: float = 1.5):
+        return UnsyncFetch.single_task(
+            task=cls.task_unit(pdb, suffix, folder),
+            semaphore=semaphore,
+            rate=rate)
+    
+    @staticmethod
+    def yieldPDBeKBAnnotations(data):
+        for chain in data['chains']:
+            yield chain['residues'], ('data_resource', 'pdb_id', 'chain_id'), (data['data_resource'], data['pdb_id'], chain['chain_label'])

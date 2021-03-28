@@ -1,22 +1,37 @@
+# @Created Date: 2020-10-20 10:00:38 am
+# @Filename: test_sele.py
+# @Email:  1730416009@stu.suda.edu.cn
+# @Author: ZeFeng Zhu
+# @Last Modified: 2021-03-15 09:07:11 pm
+# @Copyright (c) 2021 MinghuiGroup, Soochow University
 from pdb_profiling import default_config
 from rich.progress import track
+import pytest
 
 default_config()
 
+
+@pytest.mark.timeout(90)
 def test_init():
     from pdb_profiling.processors.i3d.api import Interactome3D
     Interactome3D.pipe_init_interaction_meta().result()
 
+
+@pytest.mark.timeout(240)
 def test_single_select():
     from pdb_profiling.processors import SIFTS
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
-    demo = SIFTS('P21359')
+    demo = SIFTS('P21359-2')
     demo.unp_is_canonical().result()
     df1 = demo.pipe_select_mo().result()
     demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
+    demo.pipe_select_ho_iso(run_as_completed=True).result()
+    demo.pipe_select_else(func='pipe_protein_ligand_interface', css_cutoff=0.5, run_as_completed=True).result()
 
+
+@pytest.mark.timeout(120)
 def test_identifiers():
     from pdb_profiling.processors import Identifiers, Identifier
     demo = Identifiers([
@@ -24,10 +39,13 @@ def test_identifiers():
         'ENSP00000427757', 'ENSP00000266732',
         'NP_001291289.1', 'ENST00000335295',
         'NP_001165602.1', 'ENST00000402254',
-        'ENST00000371100'])
+        'ENST00000371100', 'ENST00000401731',
+        'ENSP00000387612'])
     demo.fetch('map2unp').run().result()
     Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', identifier='P21359-3:550').result()
 
+
+@pytest.mark.timeout(120)
 def test_uniprots_alt():
     from pdb_profiling.processors import UniProts, Identifiers
     from pdb_profiling.utils import a_concat
@@ -36,9 +54,11 @@ def test_uniprots_alt():
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
 
+
+@pytest.mark.timeout(180)
 def test_other_api():
-    from pdb_profiling.processors import PDB
-    from pdb_profiling.processors.pdbe.api import PDBVersioned
+    from pdb_profiling.processors import PDB, SIFTS
+    from pdb_profiling.processors.pdbe.api import PDBVersioned, PDBeKBAnnotations
     pdb_ob = PDB('1a01')
     pdb_ob.status
     pdb_ob.summary
@@ -46,19 +66,36 @@ def test_other_api():
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/sequence_conservation/').result()
+    pdb_ob.fetch_from_pdbe_api('api/validation/RNA_pucker_suite_outliers/entry/').result()
+    pdb_ob.fetch_from_pdbe_api('api/validation/rama_sidechain_listing/entry/').result()
     PDB('4zai').fetch_from_PDBArchive('obsolete/mmCIF/', PDB.cif2residue_listing).result()
     pv_path = PDB.get_folder()/'pdb-versioned/entries'
     pv_path.mkdir(parents=True, exist_ok=True)
     PDBVersioned.single_retrieve(('4fc3', '_v1-2'), 'entries/', pv_path, PDB.get_web_semaphore(), file_suffix='.cif.gz').result()
     bm_df = pdb_ob.get_bound_molecules().result()
     [pdb_ob.get_bound_molecule_interaction(bm_id).result() for bm_id in bm_df.bm_id.unique()[:2]]
+    SIFTS('P21359-2').fetch_from_pdbe_api('graph-api/uniprot/superposition/', SIFTS.to_dataframe).result()
 
+
+@pytest.mark.timeout(65)
+def test_pdbekdb_self_annotation():
+    from pdb_profiling.processors import SIFTS
+    """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
+    PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
+    assert PDB('12ca').pipe_pdbekb_annotations('MetalPDB/').result() is not None
+    PDBeKBAnnotations.root = PDBeKBAnnotations.http_root"""
+    assert SIFTS('P69327-2').get_mapped_pdbekb_annotaions('M-CSA/', only_protein_res=True).result() is not None
+
+
+@pytest.mark.timeout(60)
 def test_fetch_residue_mapping():
     from pdb_profiling.processors import SIFTS
     pdb_ob = SIFTS('1a01')
     pdb_ob.fetch_residue_mapping(entity_id=1, start=20, end=25).result()
     pdb_ob.fetch_residue_mapping(entity_id=1, start=24, end=27).result()
 
+
+@pytest.mark.timeout(90)
 def test_rcsb_data_api():
     from pdb_profiling.processors import PDB, PDBAssemble
     from pdb_profiling.utils import a_load_json
@@ -80,11 +117,15 @@ def test_rcsb_data_api():
     assert df1.shape == df2.shape
     assert (df1.merge(df2).shape) == df1.shape
 
+
+@pytest.mark.timeout(60)
 def test_rcsb_cluster_membership():
     from pdb_profiling.processors import PDB
     PDB('2d4q').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
     PDB('2e2x').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
 
+
+@pytest.mark.timeout(60)
 def test_other_SIFTS_func():
     from pdb_profiling.processors import SIFTS
     try:
@@ -97,6 +138,8 @@ def test_other_SIFTS_func():
     except Exception:
         pass
 
+
+@pytest.mark.timeout(60)
 def test_get_sequence():
     from pdb_profiling.processors import PDB
     ob = PDB('4u2v')

@@ -94,6 +94,18 @@ class ProteinsDB(SqliteDB):
             gene = orm.JSON()
             sequence = orm.Text()
             length = orm.Integer()
+        
+        """class CoordinateMapping(orm.Model):
+            __tablename__ = 'CoordinateMapping'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            taxid = orm.Integer(primary_key=True)
+            chromosome = orm.String(max_length=20, primary_key=True)
+            geneStart = orm.Integer(primary_key=True)
+            geneEnd = orm.Integer(primary_key=True)
+            proteinStart = orm.Integer(primary_key=True)
+            proteinEnd = orm.Integer(primary_key=True)
+            UniProt = orm.String(max_length=50, primary_key=True)"""
 
         self.DB_REFERENCES = DB_REFERENCES
         self.OTHER_DB_REFERENCES = OTHER_DB_REFERENCES
@@ -101,3 +113,4 @@ class ProteinsDB(SqliteDB):
         self.FEATURES = FEATURES
         self.INTERACTION = INTERACTION
         self.INFO = INFO
+        #self.CoordinateMapping = CoordinateMapping

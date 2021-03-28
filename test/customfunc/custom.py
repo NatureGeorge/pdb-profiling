@@ -7,7 +7,7 @@
 from re import compile as re_compile
 
 
-pat_hgmd = re_compile(r"(.+\.[0-9])+:p\.([A-z]{1})([0-9]+)([A-z]{1})")
+pat_hgmd = re_compile(r"(.+\.[0-9]+):p\.([A-z]{1})([0-9]+)([A-z]{1})")
 pat_cgi = re_compile(r"([A-z]{1})([0-9]+)([A-z]{1})")
 
 def handle_hgmd_df(hgmd_df):

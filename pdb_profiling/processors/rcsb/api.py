@@ -16,7 +16,7 @@ class RCSBDataAPI(Abclog):
     rest_api_root = f'{root}rest/v1/core/'
     graphql_root = f'{root}graphql'
     headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
-    api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/'
+    api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/',
                          'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/'))
 
     @classmethod

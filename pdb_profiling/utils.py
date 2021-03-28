@@ -860,7 +860,7 @@ def get_range_diff(lyst_a: Union[str, List, Tuple], lyst_b: Union[str, List, Tup
     return array_a - array_b
 
 
-def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=None):
+def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=None, similarity_func=overlap.similarity):
     select_index = []
     selected_ranges = [] if selected_ranges is None else selected_ranges
     def unit(cur_index):
@@ -870,7 +870,7 @@ def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=Non
         cur_range = json.loads(cur_range) if isinstance(cur_range, str) else cur_range
         for selected_range in selected_ranges:
             selected_range = json.loads(selected_range) if isinstance(selected_range, str) else selected_range
-            score = overlap.similarity(lyst2range(cur_range),
+            score = similarity_func(lyst2range(cur_range),
                                lyst2range(selected_range))
             if score > cutoff:
                 return
@@ -990,3 +990,8 @@ def get_str_dict_len(x):
         return x.count(':')
     else:
         return len(x)
+
+
+def id2score(identifier):
+    len_id = len(identifier)
+    return -sum(ord(i)*2*(len_id-level) for level, i in enumerate(identifier))
