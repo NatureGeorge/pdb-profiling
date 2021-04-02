@@ -23,6 +23,9 @@ class EnsureBase(object):
     def __init__(self, use_existing: bool = True):
         self.use_existing = use_existing
 
+    def set_use_existing(self, status:bool):
+        self.use_existing = status
+
     @staticmethod
     def create_tmp_path_from_kw(kwargs: Dict):
         path = kwargs['path']
@@ -67,8 +70,12 @@ class EnsureBase(object):
                 try:
                     await aiofiles.os.rename(path, raw_path)
                 except FileExistsError:
-                    await aiofiles.os.remove(path)
-                    warn(f"remove {str(path)}", FileExistsWarning)
+                    if self.use_existing:
+                        await aiofiles.os.remove(path)
+                        warn(f"remove {str(path)}", FileExistsWarning)
+                    else:
+                        await aiofiles.os.remove(raw_path)
+                        await aiofiles.os.rename(path, raw_path)
                 return raw_path
             return wrapper
         return decorator

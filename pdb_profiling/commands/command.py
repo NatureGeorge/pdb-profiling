@@ -7,10 +7,11 @@
 from pdb_profiling import default_config
 from pdb_profiling.commands import CustomDB
 from pdb_profiling.processors import Identifiers, Identifier, SIFTSs, SIFTS, PDB, PDBs
-from pdb_profiling.utils import unsync_run
+from pdb_profiling.utils import unsync_run, SEQ_DICT
+from pdb_profiling.fetcher.webfetch import ensure
 import click
 from unsync import unsync
-from pandas import read_csv, concat, DataFrame
+from pandas import read_csv, concat, DataFrame, read_sql_query
 from importlib import util as imp_util
 from pathlib import Path
 from math import ceil
@@ -35,14 +36,17 @@ def format_info(name: str, template: str = "[green]Initializing %s"):
 @click.option("--folder", default="./", help="The output folder.", type=click.Path())
 @click.option("--custom_db", default="custom.db", type=str)
 @click.option('--dropall/--no-dropall', help="whether to use existing custom DB", default=False, is_flag=True)
+@click.option('--initaa/--no-initaa', default=False, is_flag=True)
 @click.pass_context
-def Interface(ctx, folder, custom_db, dropall):
+def Interface(ctx, folder, custom_db, dropall, initaa):
     folder = Path(folder)
     console.log(format_info(f"Folder: {folder.absolute()}"))
     ctx.ensure_object(dict)
     ctx.obj['folder'] = folder
     default_config(folder)
     ctx.obj['custom_db'] = CustomDB("sqlite:///%s" % (folder/'local_db'/custom_db), dropall)
+    if initaa:
+        ctx.obj['custom_db'].sync_insert(ctx.obj['custom_db'].AAThree2one, [dict(three_letter_code=three, one_letter_code=one) for three, one in SEQ_DICT.items()])
 
 
 @Interface.command("init")
@@ -138,6 +142,38 @@ def id_mapping(ctx, input, column, sep, chunksize, sleep):
             console.log(f'Done: {len(res)+chunksize*index}')
             if sleep:
                 tsleep(uniform(1, 10))
+
+@Interface.command('check-muta-conflict')
+@click.option('--chunksize', type=int, default=100000)
+@click.pass_context
+def check_muta_conflict(ctx, chunksize):
+
+    def get_seq(seq_dict, iso, pos):
+        try:
+            return seq_dict[iso][pos-1]
+        except IndexError:
+            return 'X'
+
+    custom_db = ctx.obj['custom_db']
+    root_query = """SELECT DISTINCT isoform, Pos FROM IDMapping, Mutation
+        WHERE IDMapping.ftId = Mutation.ftId AND isoform != 'NaN'"""
+    fetch_iso_seq_query = "SELECT isoform, sequence FROM ALTERNATIVE_PRODUCTS WHERE isoform IN ({}) AND (sequenceStatus = 'displayed' OR sequenceStatus = 'described');"
+    fetch_can_seq_query = "SELECT accession, sequence FROM INFO WHERE accession IN ({}) ;"
+    total = unsync_run(custom_db.database.fetch_val(query=f"SELECT COUNT(*) FROM ({root_query});"))
+    console.log(f"Total {total} to query")
+    with console.status("[bold green]checking..."):
+        for i in range(ceil(total/chunksize)):
+            unp_pos = DataFrame(unsync_run(custom_db.database.fetch_all(query=f"{root_query} LIMIT {chunksize} OFFSET {chunksize*i};")), columns=['isoform', 'Pos'])
+            mask = unp_pos.isoform.str.contains('-')
+            seq_dict = dict(unsync_run(Identifier.sqlite_api.database.fetch_all(
+                                query=fetch_iso_seq_query.format(','.join(f"'{ix}'" for ix in set(unp_pos[mask].isoform))
+                                ))) +
+                            unsync_run(Identifier.sqlite_api.database.fetch_all(
+                                query=fetch_can_seq_query.format(','.join(f"'{ix}'" for ix in set(unp_pos[~mask].isoform)))
+                                )))
+            unp_pos['Ref'] = [get_seq(seq_dict, iso, pos) for iso, pos in zip(unp_pos.isoform, unp_pos.Pos)]
+            custom_db.sync_insert(custom_db.UniProtSeq, unp_pos.to_dict('records'))
+            console.log(f'Done: {len(unp_pos)+chunksize*i}')
 
 
 @Interface.command("sifts-mapping")
@@ -238,24 +274,28 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
     dfs = read_csv(input, sep='\t', keep_default_na=False,
                    na_values=['NULL', 'null', ''], chunksize=chunksize)
     sqlite_api = ctx.obj['custom_db']
+    if output is not None:
+        output = Path(output)
+    done = 0
     for df in dfs:
-        for col in ('new_pdb_range', 'new_unp_range', 'conflict_pdb_index'):
+        for col in ('new_pdb_range_raw', 'new_unp_range_raw', 'conflict_pdb_index'):
             df[col] = df[col].apply(eval)
         ob = PDBs(())
         ob.tasks = [PDB(row.pdb_id).get_ranged_map_res_df(
                     row.UniProt,
-                    row.new_unp_range,
-                    row.new_pdb_range,
+                    row.new_unp_range_raw,
+                    row.new_pdb_range_raw,
                     conflict_pdb_index=row.conflict_pdb_index,
                     struct_asym_id=row.struct_asym_id) for _, row in df.iterrows()]
         with Progress(*progress_bar_args) as p:
             res = ob.run(p.track).result()
         res_mapping_df = concat(res, sort=False, ignore_index=True)
+        done += len(df)
         if output is not None:
-            output = Path(output)
             res_mapping_df[sorted(res_mapping_df.columns)].to_csv(output, sep='\t', mode='a+', index=False, header=not output.exists())
         else:
             sqlite_api.sync_insert(sqlite_api.ResidueMappingRange, res_mapping_df.to_dict('records'))
+        console.log(f'Done: {done}')
         if sleep:
             tsleep(uniform(0, 3))
 
@@ -263,26 +303,22 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
 @Interface.command('insert-sele-mapping')
 @click.option('--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
-@click.option('--tag/--no-tag', help="whether to there exists select_tag in input file", is_flag=True)
 @click.pass_context
-def sele_mapping(ctx, input, chunksize, tag):
-    usecols = ['UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'chain_id']
-    if tag:
-        usecols.append('select_tag')
+def sele_mapping(ctx, input, chunksize):
+    usecols = ['UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'chain_id', 'bs_score', 'select_rank', 'select_tag', 'after_select_rank']
     dfs = read_csv(input, sep='\t', keep_default_na=False,
                    na_values=[''], 
                    chunksize=chunksize,
                    usecols=usecols)
     custom_db = ctx.obj['custom_db']
     done = 0
-    for df in dfs:
-        if tag:
-            df = df[df.select_tag.eq(True)].drop(columns=['select_tag'])
-        custom_db.sync_insert(
-            custom_db.SelectedMapping, 
-            df.to_dict('records'))
-        done += df.shape[0]
-        console.log(f'Done: {done}')
+    with console.status("[bold green]inserting..."):
+        for df in dfs:
+            custom_db.sync_insert(
+                custom_db.SelectedMappingMeta, 
+                df.to_dict('records'))
+            done += df.shape[0]
+    console.log(f'Done: {done}')
 
 
 @Interface.command('insert-sifts-meta')
@@ -337,6 +373,93 @@ def insert_iso_range(ctx, chunksize):
             """))
         custom_db.sync_insert(custom_db.UniProtAnnotation, tuple(expand_iso_range(res)))
         console.log(f'Done: {len(res)+chunksize*i}')
+
+
+@Interface.command('export-residue-mapping')
+@click.option('--sele/--no-sele', is_flag=True, default=True)
+@click.option('-o', '--output', type=str, help='filename of output file')
+@click.option("--sep", default="\t", help="the seperator of output file", type=str)
+@click.pass_context
+def export_residue_remapping(ctx, sele, output, sep):
+    output_path = ctx.obj['folder']/output
+    query = """
+        SELECT DISTINCT 
+                    CASE IDMapping.is_canonical
+                        WHEN 1
+                        THEN IDMapping.Entry
+                        ELSE IDMapping.isoform
+                    END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
+                    Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg AS residue_number,
+                    (Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg)||ResidueMappingRange.author_insertion_code AS auth_res_num,
+                    ResidueMappingRange.observed_ratio,
+                    ResidueMappingRange.pdb_id,
+                    ResidueMappingRange.entity_id,
+                    ResidueMappingRange.struct_asym_id,
+                    ResidueMappingRange.chain_id,
+                    {}
+        FROM Mutation,ResidueMappingRange
+            INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
+            INNER JOIN UniProtSeq ON UniProtSeq.isoform = IDMapping.isoform 
+                                AND UniProtSeq.Pos = Mutation.Pos 
+                                AND UniProtSeq.Ref = Mutation.Ref
+            INNER JOIN SelectedMappingMeta ON SelectedMappingMeta.UniProt = ResidueMappingRange.UniProt
+                                        AND SelectedMappingMeta.pdb_id = ResidueMappingRange.pdb_id
+                                        AND SelectedMappingMeta.entity_id = ResidueMappingRange.entity_id
+                                        AND SelectedMappingMeta.struct_asym_id = ResidueMappingRange.struct_asym_id
+        WHERE ResidueMappingRange.UniProt = edUniProt
+        AND Mutation.Pos >= ResidueMappingRange.unp_beg
+        AND Mutation.Pos <= ResidueMappingRange.unp_end
+        AND ResidueMappingRange.conflict_code IS NULL
+        AND ResidueMappingRange.observed_ratio > 0
+        AND (ResidueMappingRange.residue_name = '' OR ResidueMappingRange.residue_name IN (SELECT three_letter_code FROM AAThree2one))
+        AND SelectedMappingMeta.select_rank != -1
+        {}
+        ;"""
+    if sele:
+        query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
+    else:
+        query = query.format('SelectedMappingMeta.after_select_rank', '')
+    with console.status("[bold green]query..."):
+        dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
+        for df in dfs:
+            df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
+                output, index=False, sep=sep, mode='a+', header=not output_path.exists())
+    console.log(f'result saved in {output_path}')
+
+
+@Interface.command('fetch1pdb')
+@click.option('-i', '--pdb', type=str, help="PDB Identifier")
+@click.option('-a', '--api', type=str, help="API Name")
+@click.option('-p', '--params', multiple=True, type=str, default=None)
+@click.option('-d', '--data_collection', multiple=True, type=str, default=None)
+@click.option('-m', '--method', type=str, default='get')
+@click.option('-t', '--tag', type=str, default='subset')
+@click.option('--use_existing/--no-use_existing', is_flag=True, default=True)
+def fetch1pdb(pdb, api, params, data_collection, method, tag, use_existing):
+    if params is not None:
+        params = dict(sub.split('=') for item in params for sub in item.split(','))
+        if len(params)> 0:
+            console.log(f"take args: {params}")
+    else:
+        params = {}
+    if method == 'get':
+        if len(data_collection) > 0:
+            console.log(f"current impl '{method}' method, would omit data_collection: {str(data_collection)[:100]}!")
+        data = None
+    elif method == 'post':
+        data = {'atom_site': []}
+        for item in data_collection:
+            data['atom_site'].append(dict(sub.split('=') for sub in item.split(',')))
+        data = json.dumps(data)
+        console.log(f"take data_collection: {data[:100]}")
+    else:
+        return
+    pdb = PDB(pdb)
+    ensure.set_use_existing(use_existing)
+    with console.status("[bold green]download..."):
+        res = pdb.fetch_from_modelServer_api(
+            api_suffix=api, method=method, data_collection=data, filename=tag, **params).result()
+    console.log(f"Result saved in {res}")
 
 
 if __name__ == '__main__':

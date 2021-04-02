@@ -1309,6 +1309,14 @@ class PDB(Base):
             range_df['multiple_conformers'] = nan
             range_df['conflict_code'] = nan
             return range_df
+        elif all(mask):
+            res_map_df_full['UniProt'] = UniProt
+            final_df = res_map_df_full.rename(
+                columns={'unp_residue_number': 'unp_beg', 'residue_number': 'pdb_beg', 'author_residue_number': 'auth_pdb_beg'})
+            final_df['unp_end'] = final_df.unp_beg
+            final_df['pdb_end'] = final_df.pdb_beg
+            final_df['auth_pdb_end'] = final_df.auth_pdb_beg
+            return final_df
         else:
             to_range_df = res_map_df_full[~mask]
             range_df = self.three_range2range_df(*lyst32interval(
@@ -2932,7 +2940,9 @@ class SIFTS(PDB):
             sele_df.loc[[j for i in sele_indexes for j in i], 'select_tag'] = True
         else:
             sele_df.loc[sele_func(allow_sele_df), 'select_tag'] = True
-        return sele_df
+        sele_df['select_rank_score'] = 1/sele_df.select_rank
+        sele_df['after_select_rank'] = sele_df[['select_tag', 'select_rank_score']].apply(tuple, axis=1).rank(method='dense', ascending=False).astype(int)
+        return sele_df.drop(columns=['select_rank_score'])
 
     @unsync
     async def pipe_select_mo(self, exclude_pdbs=frozenset(), OC_cutoff=0.2, select_mo_kwargs={}, **kwargs):        

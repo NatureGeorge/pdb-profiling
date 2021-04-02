@@ -11,13 +11,22 @@ def test_command():
     runner = CliRunner()
     for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
                  'id-mapping',
-                 'sifts-mapping --func pipe_base --chunksize 15',
-                 'residue-mapping --input pipe_base.tsv',
+                 'check-muta-conflict',
+                 'sifts-mapping --chunksize 15',
+                 'insert-sele-mapping --input pipe_select_mo.tsv',
+                 'residue-mapping --input pipe_select_mo.tsv',
+                 'export-residue-mapping -o e_resmap.tsv --sele',
                  'insert-sifts-meta --input test/pytest/data/pdb_demo.tsv --api_suffix api/mappings/pfam/',
                  'insert-isoform-range',
                  ['sifts-mapping', '--func', 'unp_is_canonical_with_id', '--input', 'test/pytest/data/unp_demo.tsv', '--iteroutput', '--skip_pdbs', ''],
-                 #['pisa-range', '--func', 'pipe_protein_ligand_interface', '--input', 'test/pytest/data/pdb_demo.tsv'],
-                 'insert-sele-mapping --input test/pytest/data/pipe_select_mo.tsv --tag',
+                 ['fetch1pdb', '-i', '4hho', '-a', 'atoms', '-t', 'B_ONLY',
+                  '-p', 'label_asym_id=B', '-p', 'copy_all_categories=false'],
+                 ['fetch1pdb', '-i', '3hl2', '-a', 'atoms',
+                 '-p', 'encoding=bcif',
+                 '-d', 'label_asym_id=A,label_seq_id=90',
+                 '-d', 'label_asym_id=B,label_seq_id=100',
+                 '-m', 'post',
+                 '-t', 'A_90_B_10'],
                  ):
         result = runner.invoke(Interface, task.split(' ') if not isinstance(task, list) else task)
         assert result.exit_code == 0, str(task)

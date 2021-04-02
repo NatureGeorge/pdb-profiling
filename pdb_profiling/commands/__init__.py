@@ -11,6 +11,21 @@ from pdb_profiling.processors.database import SqliteDB
 class CustomDB(SqliteDB):
 
     def init_table_model(self):
+        class AAThree2one(orm.Model):
+            __tablename__ = 'AAThree2one'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            three_letter_code = orm.String(max_length=3, primary_key=True)
+            one_letter_code = orm.String(max_length=1, primary_key=True)
+        
+        class UniProtSeq(orm.Model):
+            __tablename__ = 'UniProtSeq'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            isoform = orm.String(max_length=20, primary_key=True)
+            Pos = orm.Integer(primary_key=True)
+            Ref = orm.String(max_length=1, primary_key=True)
+        
         class Mutation(orm.Model):
             __tablename__ = 'Mutation'
             __metadata__ = self.metadata
@@ -69,8 +84,8 @@ class CustomDB(SqliteDB):
             multiple_conformers = orm.JSON(allow_null=True)
             conflict_code = orm.String(max_length=3, allow_null=True)
 
-        class SelectedMapping(orm.Model):
-            __tablename__ = 'SelectedMapping'
+        class SelectedMappingMeta(orm.Model):
+            __tablename__ = 'SelectedMappingMeta'
             __metadata__ = self.metadata
             __database__ = self.database
             UniProt = orm.String(max_length=50, primary_key=True)
@@ -78,6 +93,10 @@ class CustomDB(SqliteDB):
             entity_id = orm.Integer(primary_key=True)
             struct_asym_id = orm.String(max_length=10, primary_key=True)
             chain_id = orm.String(max_length=10)
+            bs_score = orm.Float()
+            select_rank = orm.Integer()
+            select_tag = orm.Boolean()
+            after_select_rank = orm.Integer()
 
         class ResidueAnnotation(orm.Model):
             __tablename__ = 'ResidueAnnotation'
@@ -102,10 +121,12 @@ class CustomDB(SqliteDB):
             unp_start = orm.Integer()
             unp_end = orm.Integer()
         
+        self.AAThree2one = AAThree2one
+        self.UniProtSeq = UniProtSeq
         self.Mutation = Mutation
         self.IDMapping = IDMapping
         self.UniProtAnnotation = UniProtAnnotation
         #self.ResidueMapping = ResidueMapping
         self.ResidueMappingRange = ResidueMappingRange
-        self.SelectedMapping = SelectedMapping
+        self.SelectedMappingMeta = SelectedMappingMeta
         self.ResidueAnnotation = ResidueAnnotation

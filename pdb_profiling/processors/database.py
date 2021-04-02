@@ -25,7 +25,7 @@ class SqliteDB(Abclog):
         self.metadata = sqlalchemy.MetaData()
         self.database = databases.Database(url)
         self.engine = sqlalchemy.create_engine(url)
-        self.engine.execute("PRAGMA journal_mode=WAL")
+        self.engine.execute("PRAGMA journal_mode=WAL")  # auto_vacuum=FULL
         self.init_table_model()
         if drop_all:
             self.metadata.drop_all(self.engine, checkfirst=True)
