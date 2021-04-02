@@ -9,7 +9,8 @@ from pdb_profiling.commands.command import Interface
 
 def test_command():
     runner = CliRunner()
-    for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
+    for task in ('init --initaa',
+                 'insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
                  'id-mapping',
                  'check-muta-conflict',
                  'sifts-mapping --chunksize 15',

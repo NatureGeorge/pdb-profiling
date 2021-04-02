@@ -36,7 +36,7 @@ def format_info(name: str, template: str = "[green]Initializing %s"):
 @click.option("--folder", default="./", help="The output folder.", type=click.Path())
 @click.option("--custom_db", default="custom.db", type=str)
 @click.option('--dropall/--no-dropall', help="whether to use existing custom DB", default=False, is_flag=True)
-@click.option('--initaa/--no-initaa', default=False, is_flag=True)
+@click.option('--initaa/--no-initaa', default=True, is_flag=True)
 @click.pass_context
 def Interface(ctx, folder, custom_db, dropall, initaa):
     folder = Path(folder)
