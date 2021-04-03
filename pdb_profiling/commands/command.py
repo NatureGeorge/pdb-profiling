@@ -55,7 +55,7 @@ def init_folder():
 
 
 @Interface.command("insert-mutation")
-@click.option("--input", help="the file that contains sites info", type=click.Path())
+@click.option("-i", "--input", help="the file that contains sites info", type=click.Path())
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)
 @click.option("--usecols", default='from_id,Ref,Pos,Alt', help="The comma-sep columns of site info", type=str)
 @click.option("--headers/--no-headers", default=True, is_flag=True)
@@ -96,7 +96,7 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 
 
 @Interface.command("id-mapping")
-@click.option('--input', type=click.Path(), default=None)
+@click.option('-i', '--input', type=click.Path(), default=None)
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
@@ -179,7 +179,7 @@ def check_muta_conflict(ctx, chunksize):
 
 
 @Interface.command("sifts-mapping")
-@click.option('--input', type=click.Path(), default=None)
+@click.option('-i', '--input', type=click.Path(), default=None)
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--func', type=str, default='pipe_select_mo')
@@ -189,7 +189,7 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20")
 @click.option('--skip_pdbs', type=str, default='')
 @click.option('--omit', type=int, default=0)
-@click.option('--output', type=str, default='')
+@click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
@@ -267,9 +267,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
 
 
 @Interface.command("residue-mapping")
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=500)
-@click.option('--output', type=str, default=None)
+@click.option('-o', '--output', type=str, default=None)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
 def residue_mapping(ctx, input, chunksize, output, sleep):
@@ -303,7 +303,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
 
 
 @Interface.command('insert-sele-mapping')
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
 @click.pass_context
 def sele_mapping(ctx, input, chunksize):
@@ -324,7 +324,7 @@ def sele_mapping(ctx, input, chunksize):
 
 
 @Interface.command('insert-sifts-meta')
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=500)
 @click.option('--func', type=str, default='fetch_from_pdbe_api')
 @click.option('--api_suffix', type=str)

@@ -379,6 +379,8 @@ class UniProtAPI(Abclog):
     * <https://www.uniprot.org/help/uploadlists>
     * <https://www.uniprot.org/help/api_idmapping>
     '''
+    headers = {'Cache-Control': 'no-cache'}
+
     params = {
         'columns': 'id,feature(ALTERNATIVE%20SEQUENCE)',
         'query': None,
@@ -392,7 +394,7 @@ class UniProtAPI(Abclog):
     def task_unit(cls, chunk, i, folder, name, sep):
         cur_params = deepcopy(cls.params)
         cur_params['query'] = sep.join(chunk)
-        return ('get', {'url': f'{BASE_URL}/uploadlists/', 'params': cur_params}, folder/f'{name}+{i}.tsv')
+        return ('get', {'url': f'{BASE_URL}/uploadlists/', 'params': cur_params, 'headers': cls.headers}, folder/f'{name}+{i}.tsv')
 
     @classmethod
     def yieldTasks(cls, lyst: Iterable, chunksize: int, folder, name: str, sep: str = ',') -> Generator:
