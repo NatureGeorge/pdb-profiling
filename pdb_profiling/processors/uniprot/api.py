@@ -379,7 +379,7 @@ class UniProtAPI(Abclog):
     * <https://www.uniprot.org/help/uploadlists>
     * <https://www.uniprot.org/help/api_idmapping>
     '''
-    headers = {'Cache-Control': 'no-cache'}
+    headers = {'accept': 'text/plain', 'Cache-Control': 'no-cache'}
 
     params = {
         'columns': 'id,feature(ALTERNATIVE%20SEQUENCE)',
