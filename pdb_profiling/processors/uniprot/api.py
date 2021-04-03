@@ -11,15 +11,15 @@ from pathlib import Path
 from unsync import unsync, Unfuture
 from copy import deepcopy
 from pdb_profiling.log import Abclog
-from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, a_read_csv
+from pdb_profiling.utils import init_semaphore, init_folder_from_suffix, init_folder_from_suffixes, a_read_csv
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from uuid import uuid4
-# import logging
-# from collections import Counter
-# from pdb_profiling.processors.uniprot.process import ExtractIsoAlt
+from pdb_profiling.cif_gz_stream import iter_index
+from aiohttp import ClientSession
+from aiofiles import open as aiofiles_open
 
 
-QUERY_COLUMNS: List[str] = [
+"""QUERY_COLUMNS: List[str] = [
     'id', 'length', 'reviewed',
     'comment(ALTERNATIVE%20PRODUCTS)',
     'feature(ALTERNATIVE%20SEQUENCE)',
@@ -36,20 +36,20 @@ RESULT_COLUMNS: List[str] = [
 COLUMNS_DICT: Dict = dict(zip(QUERY_COLUMNS, RESULT_COLUMNS))
 
 
-RESULT_NEW_COLUMN: List[str] = ['yourlist', 'isomap']
+RESULT_NEW_COLUMN: List[str] = ['yourlist', 'isomap']"""
 
 
 BASE_URL: str = 'https://www.uniprot.org'
 
 
-PARAMS: Dict = {
+"""PARAMS: Dict = {
     # 'fil': 'organism%3A"Homo+sapiens+(Human)+[9606]"+AND+reviewed%3Ayes',
     # reviewed:yes+AND+organism:9606
     'columns': None,
     'query': None,
     'from': None,
     'to': 'ACC',
-    'format': 'tab'}
+    'format': 'tab'}"""
 
 """
 class MapUniProtID(Abclog):
@@ -379,7 +379,7 @@ class UniProtAPI(Abclog):
     * <https://www.uniprot.org/help/uploadlists>
     * <https://www.uniprot.org/help/api_idmapping>
     '''
-    headers = {'accept': 'text/plain', 'Cache-Control': 'no-cache'}
+    headers = {'Cache-Control': 'no-cache'}
 
     params = {
         'columns': 'id,feature(ALTERNATIVE%20SEQUENCE)',
@@ -419,17 +419,11 @@ class UniProtAPI(Abclog):
             rate=rate) for task in cls.yieldTasks(lyst, chunksize, cls.folder, name, sep)]
 
 
-class UniProtFASTA(Abclog):
+class UniProtINFO(Abclog):
     '''
-    Download UniProt Fasta Sequences
-
-    >>> UniProtFASTA.retrieve(
-        ('Q6NZ36', 'P12755'),
-        init_folder_from_suffix(yourfolder, 'UniProt/fasta/'))
+    * Download UniProt Fasta Sequences
+    * Download UniProt Features
     '''
-
-    params = {'include': 'no'}
-    obj = {}
 
     @classmethod
     @unsync
@@ -438,53 +432,82 @@ class UniProtFASTA(Abclog):
     
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
-        cls.folder = init_folder_from_suffix(folder, 'UniProt/fasta/')
-
-    """
-    @classmethod
-    @unsync
-    async def process(cls, path: Union[str, Path, Unfuture]):
-        if not isinstance(path, (Path, str)):
-            path = await path  # .result()
-        path = Path(path)
-        if not path.stat().st_size:
-            return None
-        if not cls.obj:
-            folder = path.parent
-            kwargs = {'ret_res': False}
-        else:
-            folder = cls.obj['fasta_folder']
-            kwargs = {'concur_req': cls.obj['unp_concurreq'], 'rate': cls.obj['unp_concurrate'],
-                      'ret_res': False, 'semaphore': cls.obj['semaphore']}
-        unps = read_csv(path, sep='\t', usecols=['UniProt']).UniProt.drop_duplicates()
-        for fob in cls.retrieve(unps, folder, **kwargs):
-            await fob
-        return path
-        """
-
-    @classmethod
-    def task_unit(cls, unp:str, folder: Union[str, Path]):
-        cur_fileName = f'{unp}.fasta'
-        cur_filePath = str(Path(folder, cur_fileName))
-        return ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': cls.params}, cur_filePath)
-
-    @classmethod
-    def yieldTasks(cls, lyst: Iterable, folder: Union[str, Path]) -> Generator:
-        for unp in lyst:
-            return cls.task_unit(unp, folder)
-
-    @classmethod
-    def retrieve(cls, lyst: Iterable, folder: Union[str, Path], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, semaphore=None):
-        return UnsyncFetch.multi_tasks(
-            cls.yieldTasks(lyst, folder), 
-            concur_req=concur_req, 
-            rate=rate, 
-            ret_res=ret_res,
-            semaphore=cls.web_semaphore if semaphore is None else semaphore)
+        cls.fasta_folder, cls.txt_folder = tuple(init_folder_from_suffixes(folder, ('UniProt/fasta', 'UniProt/txt')))
     
     @classmethod
-    def single_retrieve(cls, identifier: str, folder: Optional[Union[str, Path]]=None, semaphore=None, rate: float = 1.5):
+    def get_fasta_folder(cls):
+        return cls.fasta_folder
+    
+    @classmethod
+    def get_txt_folder(cls):
+        return cls.txt_folder
+
+    def __init__(self, api_suffix):
+        if api_suffix == 'fasta':
+            self.get_cur_folder = self.get_fasta_folder
+            self.params = {'include': 'no'}
+        elif api_suffix == 'txt':
+            self.get_cur_folder = self.get_txt_folder
+            self.params = {}
+        else:
+            raise AssertionError(f'Invalid api_suffix: {api_suffix} for UniProt')
+        self.suffix = api_suffix
+
+    def task_unit(self, unp:str):
+        cur_fileName = f'{unp}.{self.suffix}'
+        return ('get', {'url': f'{BASE_URL}/uniprot/{cur_fileName}', 'params': self.params}, self.get_cur_folder()/cur_fileName)
+    
+    def single_retrieve(self, identifier: str, rate: float = 1.5):
         return UnsyncFetch.single_task(
-            task=cls.task_unit(identifier, cls.folder if folder is None else folder),
-            semaphore=cls.web_semaphore if semaphore is None else semaphore,
+            task=self.task_unit(identifier),
+            semaphore=self.web_semaphore,
             rate=rate)
+    
+    @classmethod
+    async def txt_reader(cls, url):
+        remain_part = b''
+        async with cls.web_semaphore:
+            async with ClientSession() as session:
+                async with session.get(url=url, timeout=3600) as resp:
+                    if resp.status == 200:
+                        async for rv in resp.content.iter_any():
+                            if rv:
+                                index = (None, *iter_index(rv, b'\n', 1), None)
+                                if len(index) == 2:
+                                    remain_part += rv
+                                    continue
+                                if remain_part:
+                                    yield remain_part + rv[:index[1]]
+                                    remain_part = b''
+                                    for start, end in zip(index[1:-1], index[2:-1]):
+                                        yield rv[start:end]
+                                else:
+                                    for start, end in zip(index[:-1], index[1:-1]):
+                                        yield rv[start:end]
+                                if index[-2] != len(rv):
+                                    remain_part = rv[index[-2]:]
+                        if remain_part:
+                            yield remain_part
+                    else:
+                        raise Exception(
+                            "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp) +
+                            f"\nurl={url}")
+    
+    @staticmethod
+    @unsync
+    async def txt_writer(handle, path, header: bytes = b'', start_key: bytes = b'FT   VAR_SEQ', content_key: bytes = b'FT          '):
+        start = False
+        async with aiofiles_open(path, 'wb') as fileOb:
+            if header:
+                await fileOb.write(header)
+            async for line in handle:
+                if line.startswith(start_key):
+                    start = True
+                elif start and not line.startswith(content_key):
+                    return path
+                if start:
+                    await fileOb.write(line)
+
+    def stream_retrieve_txt(self, identifier, name_suffix='VAR_SEQ', **kwargs):
+        assert self.suffix == 'txt'
+        return self.txt_writer(self.txt_reader(f'{BASE_URL}/uniprot/{identifier}.{self.suffix}'), self.get_cur_folder()/f'{identifier}+{name_suffix}.{self.suffix}', **kwargs)

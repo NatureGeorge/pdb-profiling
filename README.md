@@ -1,6 +1,6 @@
 # pdb-profiling
 
-[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.4596476%20-gray.svg?colorB=5A65B3&style=flat)](https://zenodo.org/badge/latestdoi/247475852)
+[![DOI](https://zenodo.org/badge/247475852.svg)](https://zenodo.org/badge/latestdoi/247475852)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat&logo=github&colorB=5A65B3)](https://github.com/naturegeorge/pdb-profiling/blob/master/LICENSE)
 [![SupportPythonVersion](https://img.shields.io/pypi/pyversions/pdb-profiling.svg?style=flat&logo=python&colorB=5A65B3)](https://pypi.org/project/pdb-profiling/)
 [![Version](https://img.shields.io/pypi/v/pdb-profiling?style=flat&logo=PYPI&colorB=5A65B3)](https://github.com/naturegeorge/pdb-profiling/blob/master/pdb_profiling/__init__.py)

@@ -11,9 +11,10 @@ from pandas import DataFrame, concat, isna, Series
 from numpy import nan
 from re import compile as re_compile
 from cachetools import LRUCache
+from aiofiles import open as aiofiles_open
 from pdb_profiling.utils import init_folder_from_suffix, a_concat, a_read_csv
 from pdb_profiling.processors.uniprot import UniProtDB
-from pdb_profiling.processors.uniprot.api import UniProtAPI
+from pdb_profiling.processors.uniprot.api import UniProtAPI, UniProtINFO
 
 class UniProts(object):
     
@@ -21,9 +22,11 @@ class UniProts(object):
     pattern_iso_Value = re_compile(r'/([^=]+)="([^;]+)"')
     pattern_inIso = re_compile(r"([A-z\s\->]+)\s\(in\s([^\)]+)\)")
     pattern_iso_keyValue = re_compile(r"([^=]+)=([^;]+);\s+")
-    pattern_inDel = re_compile(r"([A-z]+)\s->\s([A-z]+)")
+    pattern_inDel = re_compile(r"([A-z\s]+)\s->\s([A-z\s]+)")
     
     tasks = LRUCache(maxsize=1024)
+
+    UniProtTXT = UniProtINFO('txt')
 
     @classmethod
     def register_task(cls, key, task):
@@ -33,6 +36,18 @@ class UniProts(object):
     def set_folder(cls, folder: Union[Path, str]):
         cls.sqlite_api = UniProtDB("sqlite:///%s" % (init_folder_from_suffix(folder, 'local_db')/"uniprot.db"))
     
+    @classmethod
+    @unsync
+    async def as_txt2tsv(cls, identifier:str, **kwargs):
+        path = await cls.UniProtTXT.stream_retrieve_txt(identifier, **kwargs)
+        if path is None:
+            return identifier, None
+        else:
+            async with aiofiles_open(path, 'rt') as handle:
+                txt = await handle.read()
+            raw = txt.replace('FT                  ', '').replace('\n','').split('FT   VAR_SEQ         ')[1:]
+            return identifier, '; '.join('VAR_SEQ '+i.replace(' /', ';  /') for i in raw)
+
     @staticmethod
     def getAltProInfo(inputLyst, groupCol="isoforms", flagCol="Name"):
         def toFrame(dict):
@@ -164,6 +179,8 @@ class UniProts(object):
             raise
         altSeq_df[['begin', 'end']] = altSeq_df.AltRange.apply(cls.split_dot_range).apply(Series)
         altSeq_df[["before", "after"]] = altSeq_df.AltInfo.apply(lambda x: cls.pattern_inDel.search(x).groups() if x != "Missing" else (nan, '')).apply(Series)
+        altSeq_df.before = altSeq_df.before.apply(lambda x: x.replace(' ', '') if isinstance(x, str) else x)
+        altSeq_df.after = altSeq_df.after.apply(lambda x: x.replace(' ', '') if isinstance(x, str) else x)
         altSeq_df['before_len'] = altSeq_df.apply(lambda x: len(x['before']) if isinstance(x['before'], str) else len(range(x['begin'], x['end']))+1, axis=1)
         altSeq_df['after_len'] = altSeq_df.after.apply(len)
 
@@ -182,15 +199,21 @@ class UniProts(object):
     
     @classmethod
     @unsync
-    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', **kwargs):
-        UniProtAPI.params['columns'] = kwargs.get('columns', 'id,feature(ALTERNATIVE%20SEQUENCE)')
-        UniProtAPI.params['from'] = kwargs.get('from', 'ACC+ID')
-        UniProtAPI.with_name_suffix = kwargs.get('with_name_suffix', True)
-        for res in UniProtAPI.retrieve(accessions, name, **kwargs):
-            dfrm = await a_read_csv(res, sep='\t').then(cls.deal_with_alternative_seq)
-            if dfrm is None:
-                continue
-            await cls.sqlite_api.async_insert(cls.sqlite_api.VAR_SEQ, dfrm.to_dict('records'))
+    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', via_txt:bool=True, **kwargs):
+        if via_txt:
+            tasks = [cls.as_txt2tsv(ac, name_suffix=name) for ac in accessions]
+            dfrm = await cls.deal_with_alternative_seq(DataFrame([await task for task in tasks], columns=['Entry', 'Alternative sequence']))
+            if dfrm is not None:
+                await cls.sqlite_api.async_insert(cls.sqlite_api.VAR_SEQ, dfrm.to_dict('records'))
+        else:
+            UniProtAPI.params['columns'] = kwargs.get('columns', 'id,feature(ALTERNATIVE%20SEQUENCE)')
+            UniProtAPI.params['from'] = kwargs.get('from', 'ACC+ID')
+            UniProtAPI.with_name_suffix = kwargs.get('with_name_suffix', True)
+            for res in UniProtAPI.retrieve(accessions, name, **kwargs):
+                dfrm = await a_read_csv(res, sep='\t').then(cls.deal_with_alternative_seq)
+                if dfrm is None:
+                    continue
+                await cls.sqlite_api.async_insert(cls.sqlite_api.VAR_SEQ, dfrm.to_dict('records'))
     
     @classmethod
     @unsync

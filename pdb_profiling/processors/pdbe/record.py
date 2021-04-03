@@ -38,7 +38,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, get_str_dict_len, SEQ_DICT)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
-from pdb_profiling.processors.uniprot.api import UniProtFASTA
+from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
 from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI
@@ -2112,6 +2112,8 @@ class SIFTS(PDB):
 
     unp_head = re_compile(r'>sp\|(.+)\|')
 
+    UniProtFASTA = UniProtINFO('fasta')
+
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
         if tag == 'pdb_id':
@@ -2134,7 +2136,7 @@ class SIFTS(PDB):
     def fetch_unp_fasta(cls, identifier):
         task = cls.tasks.get((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), None)
         if task is None:    
-            task = UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
+            task = cls.UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
             cls.register_task((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), task)
         return task
 
