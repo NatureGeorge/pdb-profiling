@@ -100,11 +100,13 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
+@click.option('--auto_assign/--no-auto_assign', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
-def id_mapping(ctx, input, column, sep, chunksize, sleep):
+def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):
     sqlite_api = ctx.obj['custom_db']
     cols = ('ftId', 'Entry', 'isoform', 'is_canonical')
+    Identifier.auto_assign_when_seq_conflict = auto_assign
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
             query="SELECT COUNT(DISTINCT ftId) FROM Mutation WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)"))[0]
@@ -376,21 +378,24 @@ def insert_iso_range(ctx, chunksize):
 
 
 @Interface.command('export-residue-mapping')
+@click.option('--ftId/--no-ftId', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('-o', '--output', type=str, help='filename of output file')
 @click.option("--sep", default="\t", help="the seperator of output file", type=str)
 @click.pass_context
-def export_residue_remapping(ctx, sele, output, sep):
+def export_residue_remapping(ctx, ftId, sele, output, sep):
     output_path = ctx.obj['folder']/output
     query = """
         SELECT DISTINCT 
+                    %s
                     CASE IDMapping.is_canonical
                         WHEN 1
                         THEN IDMapping.Entry
                         ELSE IDMapping.isoform
                     END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
                     Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg AS residue_number,
-                    (Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg)||ResidueMappingRange.author_insertion_code AS auth_res_num,
+                    Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg AS author_residue_number,
+                    ResidueMappingRange.author_insertion_code,
                     ResidueMappingRange.observed_ratio,
                     ResidueMappingRange.pdb_id,
                     ResidueMappingRange.entity_id,
@@ -415,6 +420,10 @@ def export_residue_remapping(ctx, sele, output, sep):
         AND SelectedMappingMeta.select_rank != -1
         {}
         ;"""
+    if ftId:
+        query = query % 'Mutation.ftId,'
+    else:
+        query = query % ''
     if sele:
         query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
     else:

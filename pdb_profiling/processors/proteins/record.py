@@ -33,6 +33,8 @@ class Identifier(Abclog):
         ('UniProt', 'isoform'): re_compile(r'^((?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,})[\-]*([0-9]*)$')
         })
 
+    auto_assign_when_seq_conflict = False
+
     @classmethod
     @unsync
     async def set_web_semaphore(cls, *web_semaphore_values):
@@ -242,18 +244,19 @@ class Identifier(Abclog):
             if sequenceStatus is None:
                 return self.raw_identifier, accession, accession, True
             else:
-                if self.level == 'protein':
-                    tseq = (await self.fetch_sequence())[1]
-                else:
-                    tseq = (await Identifier((await self.get_all_level_identifiers())['protein']).fetch_sequence())[1]
-                tseqlen = len(tseq)
-                tseq_head = tseq[:50]
-                for isoform, cseqlen, cseq_head, sequenceStatus in (await self.sqlite_api.database.fetch_all(query=f"SELECT isoform,length(sequence),substr(sequence,1,50),sequenceStatus FROM ALTERNATIVE_PRODUCTS WHERE accession == '{accession}' AND sequenceStatus IN ('displayed', 'described') ORDER BY isoform")):
-                    if cseqlen == tseqlen:
-                        if sum(1 for x1, x2 in zip(cseq_head, tseq_head) if x1 == x2) >= 40:
-                            warn(f'Exists sequence conflict between {self.raw_identifier} and {accession}(with isoforms), but still assign the {isoform} since their length of protein-seq are equal. This is a naive assignment and maybe error-prone!', SequenceConflictWarning)
-                            return self.raw_identifier, accession, isoform, (sequenceStatus == 'displayed')
-                warn(f'Exists sequence conflict (also unequal length) between {self.raw_identifier} and {accession}(with isoforms), assign NaN instead.', SequenceConflictWarning)
+                if self.auto_assign_when_seq_conflict:
+                    if self.level == 'protein':
+                        tseq = (await self.fetch_sequence())[1]
+                    else:
+                        tseq = (await Identifier((await self.get_all_level_identifiers())['protein']).fetch_sequence())[1]
+                    tseqlen = len(tseq)
+                    tseq_head = tseq[:50]
+                    for isoform, cseqlen, cseq_head, sequenceStatus in (await self.sqlite_api.database.fetch_all(query=f"SELECT isoform,length(sequence),substr(sequence,1,50),sequenceStatus FROM ALTERNATIVE_PRODUCTS WHERE accession == '{accession}' AND sequenceStatus IN ('displayed', 'described') ORDER BY isoform")):
+                        if cseqlen == tseqlen:
+                            if sum(1 for x1, x2 in zip(cseq_head, tseq_head) if x1 == x2) >= 40:
+                                warn(f'Exists sequence conflict between {self.raw_identifier} and {accession}(with isoforms), but still assign the {isoform} since their length of protein-seq are equal. This is a naive assignment and maybe error-prone!', SequenceConflictWarning)
+                                return self.raw_identifier, accession, isoform, (sequenceStatus == 'displayed')
+                    warn(f'Exists sequence conflict (also unequal length) between {self.raw_identifier} and {accession}(with isoforms), assign NaN instead.', SequenceConflictWarning)
                 return self.raw_identifier, accession, 'NaN', True
 
     @unsync
