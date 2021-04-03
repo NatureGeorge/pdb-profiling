@@ -378,12 +378,12 @@ def insert_iso_range(ctx, chunksize):
 
 
 @Interface.command('export-residue-mapping')
-@click.option('--ftId/--no-ftId', is_flag=True, default=False)
+@click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('-o', '--output', type=str, help='filename of output file')
 @click.option("--sep", default="\t", help="the seperator of output file", type=str)
 @click.pass_context
-def export_residue_remapping(ctx, ftId, sele, output, sep):
+def export_residue_remapping(ctx, with_id, sele, output, sep):
     output_path = ctx.obj['folder']/output
     query = """
         SELECT DISTINCT 
@@ -420,7 +420,7 @@ def export_residue_remapping(ctx, ftId, sele, output, sep):
         AND SelectedMappingMeta.select_rank != -1
         {}
         ;"""
-    if ftId:
+    if with_id:
         query = query % 'Mutation.ftId,'
     else:
         query = query % ''
