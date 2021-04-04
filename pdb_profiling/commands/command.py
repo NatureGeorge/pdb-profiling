@@ -381,9 +381,8 @@ def insert_iso_range(ctx, chunksize):
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('-o', '--output', type=str, help='filename of output file')
-@click.option("--sep", default="\t", help="the seperator of output file", type=str)
 @click.pass_context
-def export_residue_remapping(ctx, with_id, sele, output, sep):
+def export_residue_remapping(ctx, with_id, sele, output):
     output_path = ctx.obj['folder']/output
     query = """
         SELECT DISTINCT 
@@ -418,8 +417,7 @@ def export_residue_remapping(ctx, with_id, sele, output, sep):
         AND ResidueMappingRange.observed_ratio > 0
         AND (ResidueMappingRange.residue_name = '' OR ResidueMappingRange.residue_name IN (SELECT three_letter_code FROM AAThree2one))
         AND SelectedMappingMeta.select_rank != -1
-        {}
-        ;"""
+        {} ;"""
     if with_id:
         query = query % 'Mutation.ftId,'
     else:
@@ -432,8 +430,87 @@ def export_residue_remapping(ctx, with_id, sele, output, sep):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, sep=sep, mode='a+', header=not output_path.exists())
+                output, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
+
+
+@Interface.command('insert-sele-mutation-mapping')
+@click.option('-i', '--input', type=click.Path())
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
+@click.pass_context
+def insert_mapped_resmap(ctx, input, chunksize):
+    custom_db = ctx.obj['custom_db']
+    dfs = read_csv(input, sep='\t', keep_default_na=False,
+                   na_values=[''], chunksize=chunksize,
+                   usecols=['UniProt', 'Ref', 'Pos', 'Alt'])
+    done = 0
+    for df in dfs:
+        custom_db.sync_insert(custom_db.MappedMutation, df.to_dict('records'))
+        done += df.shape[0]
+        console.log(f'Done: {done}')
+
+
+@Interface.command('export-smr-residue-mapping')
+@click.option('--identity_cutoff', type=float, default=0.3)
+@click.option('--with_id/--no-with_id', is_flag=True, default=False)
+@click.option('--sele/--no-sele', is_flag=True, default=True)
+@click.option('--allow_oligo_state', type=str, default=None)
+@click.option('-o', '--output', type=str, help='filename of output file')
+@click.pass_context
+def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_oligo_state, output):
+    output_path = ctx.obj['folder']/output
+    # sele_o_path = ctx.obj['folder']/(output_path.name.replace(output_path.suffix,'')+'.sele'+output_path.suffix)
+    query = """
+    SELECT DISTINCT
+        %s
+        CASE IDMapping.is_canonical
+                    WHEN 1
+                    THEN IDMapping.Entry
+                    ELSE IDMapping.isoform
+        END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
+        SMRModel.select_tag,SMRModel.coordinates,
+        {}
+    FROM Mutation, SMRModel
+        INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
+        INNER JOIN UniProtSeq ON UniProtSeq.isoform = IDMapping.isoform 
+                            AND UniProtSeq.Pos = Mutation.Pos 
+                            AND UniProtSeq.Ref = Mutation.Ref
+    WHERE SMRModel.UniProt = edUniProt
+    AND Mutation.Pos >= SMRModel.unp_beg
+    AND Mutation.Pos <= SMRModel.unp_end
+    AND SMRModel.identity >= %s
+    AND SMRModel.select_rank > 0
+    %s
+    AND NOT EXISTS (SELECT * FROM MappedMutation 
+                  WHERE edUniProt = MappedMutation.UniProt 
+                    AND MappedMutation.Pos = Mutation.Pos 
+                    AND MappedMutation.Alt = Mutation.Alt LIMIT 1)
+    {};
+    """
+    if with_id:
+        if allow_oligo_state is None:
+            query = query % ('Mutation.ftId,', identity_cutoff, '')
+        else:
+            query = query % ('Mutation.ftId,', identity_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+    else:
+        if allow_oligo_state is None:
+            query = query % ('', identity_cutoff, '')
+        else:
+            query = query % ('', identity_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+    if sele:
+        query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+    else:
+        query = query.format('SMRModel.select_rank', '')
+    with console.status("[bold green]query..."):
+        dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
+        for df in dfs:
+            df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
+                output, index=False, mode='a+', sep='\t',header=not output_path.exists())
+    console.log(f'result saved in {output_path}')
+    #full_df = read_csv(output_path, sep='\t', keep_default_na=False)
+    #best_indexes = full_df.groupby(['UniProt','Pos', 'Alt']).select_rank.idxmin()
+    #full_df.loc[best_indexes].to_csv(sele_o_path, sep='\t', index=False)
+    #console.log(f'sele result saved in {sele_o_path}')
 
 
 @Interface.command('insert-smr-mapping')

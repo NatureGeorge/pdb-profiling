@@ -137,6 +137,15 @@ class CustomDB(SqliteDB):
             select_rank = orm.Integer()
             select_tag = orm.Boolean()
         
+        class MappedMutation(orm.Model):
+            __tablename__ = 'MappedMutation'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=50, primary_key=True)
+            Ref = orm.String(max_length=3, primary_key=True)
+            Pos = orm.Integer(primary_key=True)
+            Alt = orm.String(max_length=3, primary_key=True)
+        
         self.AAThree2one = AAThree2one
         self.UniProtSeq = UniProtSeq
         self.Mutation = Mutation
@@ -146,3 +155,4 @@ class CustomDB(SqliteDB):
         self.SelectedMappingMeta = SelectedMappingMeta
         self.ResidueAnnotation = ResidueAnnotation
         self.SMRModel = SMRModel
+        self.MappedMutation = MappedMutation

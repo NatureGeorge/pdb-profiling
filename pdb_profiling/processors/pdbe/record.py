@@ -3205,10 +3205,13 @@ class SIFTS(PDB):
         return dfrm
 
     @staticmethod
-    def select_smr_mo(smr_df, allow_oligo_state=('monomer',), selected_sifts_unp_ranges=list(), smr_sort_cols=None, ascending=False, OC_cutoff=0.2):
+    def select_smr_mo(smr_df, allow_oligo_state=None, selected_sifts_unp_ranges=list(), smr_sort_cols=None, ascending=False, OC_cutoff=0.2):
         smr_df['select_rank'] = -1
         smr_df['select_tag'] = False
-        allow_smr_df = smr_df[smr_df['oligo-state'].isin(allow_oligo_state)]
+        if allow_oligo_state is not None:
+            allow_smr_df = smr_df[smr_df['oligo-state'].isin(allow_oligo_state)] # allow_oligo_state=('monomer',)
+        else:
+            allow_smr_df = smr_df
         
         if smr_sort_cols is None:
             rank_index = allow_smr_df.index
@@ -3231,7 +3234,7 @@ class SIFTS(PDB):
             return
         return self.select_smr_mo(
             smr_df, 
-            kwargs.get('allow_oligo_state', ('monomer',)),
+            kwargs.get('allow_oligo_state', None),
             sifts_mo_df[sifts_mo_df.select_tag.eq(True)].new_unp_range if sifts_mo_df is not None else [], 
             kwargs.get('smr_sort_cols', None),
             kwargs.get('ascending', False),
