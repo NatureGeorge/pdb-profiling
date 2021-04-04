@@ -16,7 +16,8 @@ from unsync import unsync
 from aiofiles import open as aiofiles_open
 import orjson as json
 from pandas import Series, concat, isna
-from tenacity import retry, wait_random, stop_after_attempt, retry_if_exception_type, RetryError
+from numpy import nan
+from tenacity import wait_random, stop_after_attempt, retry_if_exception_type, RetryError
 
 BASE_URL: str = 'https://swissmodel.expasy.org/'
 
@@ -163,13 +164,18 @@ class SMR(Abclog):
         df['unp_range'] = df.apply(lambda x: f"[[{x['from']},{x['to']}]]", axis=1)
         if 'identity' in df.columns:
             df.identity = df.identity/100
-        if 'qmean' in df.columns:
-            return concat((
-                df.drop(columns=['from', 'to', 'qmean']),
-                df.qmean.apply(lambda x: json.loads(x) if not isna(x) else default_qmean).apply(Series)), axis=1)
-            # add_prefix('qmean.')
         else:
-            return df.drop(columns=['from', 'to'])
+            df['identity'] = nan
+        if 'qmean' not in df.columns:
+            df['qmean'] = nan
+        ret = concat((
+            df.drop(columns=['qmean']),
+            df.qmean.apply(lambda x: json.loads(x) if not isna(x) else default_qmean).apply(Series)), axis=1)
+        ret_cols = ret.columns
+        for col in ('found_by', 'ligand_chains') + tuple(default_qmean.keys()):
+            if col not in ret_cols:
+                ret[col] = nan
+        return ret
 
 
 default_qmean = {

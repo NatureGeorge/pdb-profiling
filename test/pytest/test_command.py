@@ -16,6 +16,8 @@ def test_command():
                  'insert-sele-mapping --input pipe_select_mo.tsv',
                  'residue-mapping --input pipe_select_mo.tsv',
                  'export-residue-mapping -o e_resmap.tsv --sele',
+                 'sifts-mapping --func pipe_select_smr_mo --chunksize 10',
+                 'insert-smr-mapping -i pipe_select_smr_mo.tsv',
                  'insert-sifts-meta --input test/pytest/data/pdb_demo.tsv --api_suffix api/mappings/pfam/',
                  'insert-isoform-range',
                  ['sifts-mapping', '--func', 'unp_is_canonical_with_id', '--input', 'test/pytest/data/unp_demo.tsv', '--iteroutput', '--skip_pdbs', ''],

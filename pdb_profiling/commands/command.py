@@ -340,7 +340,7 @@ def insert_sifts_meta(ctx, input, chunksize, func, api_suffix, then_func, sleep)
         if df is not None:
             await custom_db.async_insert(custom_db.ResidueAnnotation, df.to_dict('records'))
     
-    df = read_csv(input, header=None, chunksize=chunksize)
+    df = read_csv(input, header=None, chunksize=chunksize, keep_default_na=False, na_values=[''])
     done = 0
     for ids in df:
         pdbs = PDBs(ids[0].unique())
@@ -434,6 +434,24 @@ def export_residue_remapping(ctx, with_id, sele, output, sep):
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
                 output, index=False, sep=sep, mode='a+', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
+
+
+@Interface.command('insert-smr-mapping')
+@click.option('-i', '--input', type=click.Path())
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
+@click.pass_context
+def insert_smr_mapping(ctx, input, chunksize):
+    custom_db = ctx.obj['custom_db']
+    dfs = read_csv(input, sep='\t', keep_default_na=False, 
+                   na_values=[''], chunksize=chunksize, 
+                   usecols=['UniProt', 'coordinates', 'from', 'to', 'identity', 'similarity', 'coverage', 'oligo-state', 'ligand_chains', 'select_rank', 'select_tag'])
+    done = 0
+    for df in dfs:
+        df['with_ligand'] = df.ligand_chains.notnull()
+        df = df.drop(columns=['ligand_chains']).rename(columns={'oligo-state': 'oligo_state', 'from': 'unp_beg', 'to': 'unp_end'})
+        custom_db.sync_insert(custom_db.SMRModel, df.to_dict('records'))
+        done += df.shape[0]
+        console.log(f'Done: {done}')
 
 
 @Interface.command('fetch1pdb')

@@ -4,7 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-05-13 08:54:09 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-__version__ = '0.2.10'
+__version__ = '0.2.11'
 
 
 def default_config(folder='./'):

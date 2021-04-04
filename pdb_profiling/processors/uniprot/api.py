@@ -17,7 +17,12 @@ from uuid import uuid4
 from pdb_profiling.cif_gz_stream import iter_index
 from aiohttp import ClientSession
 from aiofiles import open as aiofiles_open
+from pdb_profiling.ensure import EnsureBase
+from pdb_profiling.exceptions import InvalidFileContentError
+from tenacity import wait_random, stop_after_attempt, retry_if_exception_type
 
+ensure = EnsureBase()
+msc_rt_kw = dict(wait=wait_random(max=1), stop=stop_after_attempt(3), retry=retry_if_exception_type(InvalidFileContentError))
 
 """QUERY_COLUMNS: List[str] = [
     'id', 'length', 'reviewed',
@@ -495,6 +500,7 @@ class UniProtINFO(Abclog):
     
     @staticmethod
     @unsync
+    @ensure.make_sure_complete(**msc_rt_kw)
     async def txt_writer(handle, path, header: bytes = b'', start_key: bytes = b'FT   VAR_SEQ', content_key: bytes = b'FT          '):
         start = False
         async with aiofiles_open(path, 'wb') as fileOb:
@@ -510,4 +516,4 @@ class UniProtINFO(Abclog):
 
     def stream_retrieve_txt(self, identifier, name_suffix='VAR_SEQ', **kwargs):
         assert self.suffix == 'txt'
-        return self.txt_writer(self.txt_reader(f'{BASE_URL}/uniprot/{identifier}.{self.suffix}'), self.get_cur_folder()/f'{identifier}+{name_suffix}.{self.suffix}', **kwargs)
+        return self.txt_writer(handle=self.txt_reader(f'{BASE_URL}/uniprot/{identifier}.{self.suffix}'), path=self.get_cur_folder()/f'{identifier}+{name_suffix}.{self.suffix}', **kwargs)

@@ -121,12 +121,28 @@ class CustomDB(SqliteDB):
             unp_start = orm.Integer()
             unp_end = orm.Integer()
         
+        class SMRModel(orm.Model):
+            __tablename__ = 'SMRModel'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            UniProt = orm.String(max_length=50, primary_key=True)
+            coordinates = orm.String(max_length=500, primary_key=True)
+            unp_beg = orm.Integer()
+            unp_end = orm.Integer()
+            identity = orm.Float()
+            similarity = orm.Float()
+            coverage = orm.Float()
+            oligo_state = orm.String(max_length=50)
+            with_ligand = orm.Boolean()
+            select_rank = orm.Integer()
+            select_tag = orm.Boolean()
+        
         self.AAThree2one = AAThree2one
         self.UniProtSeq = UniProtSeq
         self.Mutation = Mutation
         self.IDMapping = IDMapping
         self.UniProtAnnotation = UniProtAnnotation
-        #self.ResidueMapping = ResidueMapping
         self.ResidueMappingRange = ResidueMappingRange
         self.SelectedMappingMeta = SelectedMappingMeta
         self.ResidueAnnotation = ResidueAnnotation
+        self.SMRModel = SMRModel
