@@ -429,6 +429,8 @@ def export_residue_remapping(ctx, with_id, sele, output):
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
+            if df.shape[0] == 0:
+                continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
                 output, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
@@ -504,6 +506,8 @@ def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_olig
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
+            if df.shape[0] == 0:
+                continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
                 output, index=False, mode='a+', sep='\t',header=not output_path.exists())
     console.log(f'result saved in {output_path}')
