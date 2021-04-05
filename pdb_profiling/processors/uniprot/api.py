@@ -18,11 +18,10 @@ from pdb_profiling.cif_gz_stream import iter_index
 from aiohttp import ClientSession
 from aiofiles import open as aiofiles_open
 from pdb_profiling.ensure import EnsureBase
-from pdb_profiling.exceptions import InvalidFileContentError
-from tenacity import wait_random, stop_after_attempt, retry_if_exception_type
+from tenacity import wait_random, stop_after_attempt
 
 ensure = EnsureBase()
-msc_rt_kw = dict(wait=wait_random(max=1), stop=stop_after_attempt(3), retry=retry_if_exception_type(InvalidFileContentError))
+rt_kw = dict(wait=wait_random(max=20), stop=stop_after_attempt(6))
 
 """QUERY_COLUMNS: List[str] = [
     'id', 'length', 'reviewed',
@@ -500,7 +499,7 @@ class UniProtINFO(Abclog):
     
     @staticmethod
     @unsync
-    @ensure.make_sure_complete(**msc_rt_kw)
+    @ensure.make_sure_complete(**rt_kw)
     async def txt_writer(handle, path, header: bytes = b'', start_key: bytes = b'FT   VAR_SEQ', content_key: bytes = b'FT          '):
         start = False
         async with aiofiles_open(path, 'wb') as fileOb:

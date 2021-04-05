@@ -99,7 +99,7 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 @click.option('-i', '--input', type=click.Path(), default=None)
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
-@click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
 @click.option('--auto_assign/--no-auto_assign', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
@@ -453,13 +453,14 @@ def insert_mapped_resmap(ctx, input, chunksize):
 
 
 @Interface.command('export-smr-residue-mapping')
-@click.option('--identity_cutoff', type=float, default=0.3)
+@click.option('--identity_cutoff', type=float, default=0)
+@click.option('--length_cutoff', type=int, default=0)
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('--allow_oligo_state', type=str, default=None)
 @click.option('-o', '--output', type=str, help='filename of output file')
 @click.pass_context
-def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_oligo_state, output):
+def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, sele, allow_oligo_state, output):
     output_path = ctx.obj['folder']/output
     # sele_o_path = ctx.obj['folder']/(output_path.name.replace(output_path.suffix,'')+'.sele'+output_path.suffix)
     query = """
@@ -470,7 +471,7 @@ def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_olig
                     THEN IDMapping.Entry
                     ELSE IDMapping.isoform
         END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
-        SMRModel.select_tag,SMRModel.coordinates,
+        SMRModel.oligo_state,SMRModel.select_tag,SMRModel.coordinates,
         {}
     FROM Mutation, SMRModel
         INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
@@ -482,6 +483,7 @@ def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_olig
     AND Mutation.Pos <= SMRModel.unp_end
     AND SMRModel.identity >= %s
     AND SMRModel.select_rank > 0
+    AND SMRModel.unp_end - SMRModel.unp_beg + 1 >= %s
     %s
     AND NOT EXISTS (SELECT * FROM MappedMutation 
                   WHERE edUniProt = MappedMutation.UniProt 
@@ -491,14 +493,14 @@ def export_smr_residue_remapping(ctx, identity_cutoff, with_id, sele, allow_olig
     """
     if with_id:
         if allow_oligo_state is None:
-            query = query % ('Mutation.ftId,', identity_cutoff, '')
+            query = query % ('Mutation.ftId,', identity_cutoff, length_cutoff, '')
         else:
-            query = query % ('Mutation.ftId,', identity_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+            query = query % ('Mutation.ftId,', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
     else:
         if allow_oligo_state is None:
-            query = query % ('', identity_cutoff, '')
+            query = query % ('', identity_cutoff, length_cutoff, '')
         else:
-            query = query % ('', identity_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+            query = query % ('', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
     if sele:
         query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
     else:
