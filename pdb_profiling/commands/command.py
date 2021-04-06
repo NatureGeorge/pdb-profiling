@@ -141,7 +141,7 @@ def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):
             values = [dict(zip(cols, i)) for i in res]
             if values:
                 sqlite_api.sync_insert(sqlite_api.IDMapping, values)
-            console.log(f'Done: {len(res)+chunksize*index}')
+            console.log(f'Done: {len(res)+index}')
             if sleep:
                 tsleep(uniform(1, 10))
 

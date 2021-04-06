@@ -199,7 +199,7 @@ class UniProts(object):
     
     @classmethod
     @unsync
-    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', via_txt:bool=True, **kwargs):
+    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', via_txt:bool=False, **kwargs):
         if via_txt:
             tasks = [cls.as_txt2tsv(ac, name_suffix=name) for ac in accessions]
             dfrm = await cls.deal_with_alternative_seq(DataFrame([await task for task in tasks], columns=['Entry', 'Alternative sequence']))

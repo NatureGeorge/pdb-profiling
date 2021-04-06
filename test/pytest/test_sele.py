@@ -49,7 +49,7 @@ def test_identifiers():
 def test_uniprots_alt():
     from pdb_profiling.processors import UniProts, Identifiers
     from pdb_profiling.utils import a_concat
-    UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972')).result()
+    UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972'), via_txt=True).result()
     
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
