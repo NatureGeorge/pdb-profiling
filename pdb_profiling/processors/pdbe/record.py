@@ -38,7 +38,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, get_str_dict_len, SEQ_DICT)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
-from pdb_profiling.processors.uniprot.api import UniProtFASTA
+from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
 from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI
@@ -2101,7 +2101,7 @@ class SIFTS(PDB):
     OligoState = namedtuple('OligoState', 'pdb_id oligo_state has_unmapped_protein')
     MappingMeta = namedtuple('MappingMeta', 'UniProt species identity')
 
-    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20'
+    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
     entry_filter = '(experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR"'
 
     complete_chains_run_as_completed = False
@@ -2111,6 +2111,8 @@ class SIFTS(PDB):
     deletion_part_kwargs = dict()
 
     unp_head = re_compile(r'>sp\|(.+)\|')
+
+    UniProtFASTA = UniProtINFO('fasta')
 
     def set_id(self, identifier: str):
         tag = default_id_tag(identifier, None)
@@ -2134,7 +2136,7 @@ class SIFTS(PDB):
     def fetch_unp_fasta(cls, identifier):
         task = cls.tasks.get((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), None)
         if task is None:    
-            task = UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
+            task = cls.UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
             cls.register_task((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), task)
         return task
 
@@ -3203,10 +3205,13 @@ class SIFTS(PDB):
         return dfrm
 
     @staticmethod
-    def select_smr_mo(smr_df, allow_oligo_state=('monomer',), selected_sifts_unp_ranges=list(), smr_sort_cols=None, ascending=False, OC_cutoff=0.2):
+    def select_smr_mo(smr_df, allow_oligo_state=None, selected_sifts_unp_ranges=list(), smr_sort_cols=None, ascending=False, OC_cutoff=0.2):
         smr_df['select_rank'] = -1
         smr_df['select_tag'] = False
-        allow_smr_df = smr_df[smr_df['oligo-state'].isin(allow_oligo_state)]
+        if allow_oligo_state is not None:
+            allow_smr_df = smr_df[smr_df['oligo-state'].isin(allow_oligo_state)] # allow_oligo_state=('monomer',)
+        else:
+            allow_smr_df = smr_df
         
         if smr_sort_cols is None:
             rank_index = allow_smr_df.index
@@ -3229,7 +3234,7 @@ class SIFTS(PDB):
             return
         return self.select_smr_mo(
             smr_df, 
-            kwargs.get('allow_oligo_state', ('monomer',)),
+            kwargs.get('allow_oligo_state', None),
             sifts_mo_df[sifts_mo_df.select_tag.eq(True)].new_unp_range if sifts_mo_df is not None else [], 
             kwargs.get('smr_sort_cols', None),
             kwargs.get('ascending', False),

@@ -23,8 +23,8 @@ def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
     demo.unp_is_canonical().result()
-    df1 = demo.pipe_select_mo().result()
-    demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
+    demo.pipe_select_mo().result()
+    #demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_ho_iso(run_as_completed=True).result()
@@ -49,7 +49,7 @@ def test_identifiers():
 def test_uniprots_alt():
     from pdb_profiling.processors import UniProts, Identifiers
     from pdb_profiling.utils import a_concat
-    UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972')).result()
+    UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972'), via_txt=True).result()
     
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()

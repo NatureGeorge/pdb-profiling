@@ -55,7 +55,7 @@ def init_folder():
 
 
 @Interface.command("insert-mutation")
-@click.option("--input", help="the file that contains sites info", type=click.Path())
+@click.option("-i", "--input", help="the file that contains sites info", type=click.Path())
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)
 @click.option("--usecols", default='from_id,Ref,Pos,Alt', help="The comma-sep columns of site info", type=str)
 @click.option("--headers/--no-headers", default=True, is_flag=True)
@@ -96,15 +96,17 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 
 
 @Interface.command("id-mapping")
-@click.option('--input', type=click.Path(), default=None)
+@click.option('-i', '--input', type=click.Path(), default=None)
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
-@click.option('--chunksize', type=int, help="the chunksize parameter", default=200)
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
+@click.option('--auto_assign/--no-auto_assign', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
-def id_mapping(ctx, input, column, sep, chunksize, sleep):
+def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):
     sqlite_api = ctx.obj['custom_db']
     cols = ('ftId', 'Entry', 'isoform', 'is_canonical')
+    Identifier.auto_assign_when_seq_conflict = auto_assign
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
             query="SELECT COUNT(DISTINCT ftId) FROM Mutation WHERE ftId NOT IN (SELECT DISTINCT ftId FROM IDMapping)"))[0]
@@ -139,7 +141,7 @@ def id_mapping(ctx, input, column, sep, chunksize, sleep):
             values = [dict(zip(cols, i)) for i in res]
             if values:
                 sqlite_api.sync_insert(sqlite_api.IDMapping, values)
-            console.log(f'Done: {len(res)+chunksize*index}')
+            console.log(f'Done: {len(res)+index}')
             if sleep:
                 tsleep(uniform(1, 10))
 
@@ -177,17 +179,17 @@ def check_muta_conflict(ctx, chunksize):
 
 
 @Interface.command("sifts-mapping")
-@click.option('--input', type=click.Path(), default=None)
+@click.option('-i', '--input', type=click.Path(), default=None)
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--func', type=str, default='pipe_select_mo')
 @click.option('--kwargs', type=str, default='{}')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
 @click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
-@click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20")
+@click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20")
 @click.option('--skip_pdbs', type=str, default='')
 @click.option('--omit', type=int, default=0)
-@click.option('--output', type=str, default='')
+@click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
@@ -265,9 +267,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
 
 
 @Interface.command("residue-mapping")
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=500)
-@click.option('--output', type=str, default=None)
+@click.option('-o', '--output', type=str, default=None)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
 def residue_mapping(ctx, input, chunksize, output, sleep):
@@ -301,7 +303,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
 
 
 @Interface.command('insert-sele-mapping')
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
 @click.pass_context
 def sele_mapping(ctx, input, chunksize):
@@ -322,7 +324,7 @@ def sele_mapping(ctx, input, chunksize):
 
 
 @Interface.command('insert-sifts-meta')
-@click.option('--input', type=click.Path())
+@click.option('-i', '--input', type=click.Path())
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=500)
 @click.option('--func', type=str, default='fetch_from_pdbe_api')
 @click.option('--api_suffix', type=str)
@@ -338,7 +340,7 @@ def insert_sifts_meta(ctx, input, chunksize, func, api_suffix, then_func, sleep)
         if df is not None:
             await custom_db.async_insert(custom_db.ResidueAnnotation, df.to_dict('records'))
     
-    df = read_csv(input, header=None, chunksize=chunksize)
+    df = read_csv(input, header=None, chunksize=chunksize, keep_default_na=False, na_values=[''])
     done = 0
     for ids in df:
         pdbs = PDBs(ids[0].unique())
@@ -375,22 +377,24 @@ def insert_iso_range(ctx, chunksize):
         console.log(f'Done: {len(res)+chunksize*i}')
 
 
-@Interface.command('export-residue-mapping')
+@Interface.command('export-mutation-mapping')
+@click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('-o', '--output', type=str, help='filename of output file')
-@click.option("--sep", default="\t", help="the seperator of output file", type=str)
 @click.pass_context
-def export_residue_remapping(ctx, sele, output, sep):
+def export_residue_remapping(ctx, with_id, sele, output):
     output_path = ctx.obj['folder']/output
     query = """
         SELECT DISTINCT 
+                    %s
                     CASE IDMapping.is_canonical
                         WHEN 1
                         THEN IDMapping.Entry
                         ELSE IDMapping.isoform
                     END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
                     Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg AS residue_number,
-                    (Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg)||ResidueMappingRange.author_insertion_code AS auth_res_num,
+                    Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg AS author_residue_number,
+                    ResidueMappingRange.author_insertion_code,
                     ResidueMappingRange.observed_ratio,
                     ResidueMappingRange.pdb_id,
                     ResidueMappingRange.entity_id,
@@ -413,8 +417,11 @@ def export_residue_remapping(ctx, sele, output, sep):
         AND ResidueMappingRange.observed_ratio > 0
         AND (ResidueMappingRange.residue_name = '' OR ResidueMappingRange.residue_name IN (SELECT three_letter_code FROM AAThree2one))
         AND SelectedMappingMeta.select_rank != -1
-        {}
-        ;"""
+        {} ;"""
+    if with_id:
+        query = query % 'Mutation.ftId,'
+    else:
+        query = query % ''
     if sele:
         query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
     else:
@@ -422,9 +429,112 @@ def export_residue_remapping(ctx, sele, output, sep):
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
+            if df.shape[0] == 0:
+                continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, sep=sep, mode='a+', header=not output_path.exists())
+                output, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
+
+
+@Interface.command('insert-sele-mutation-mapping')
+@click.option('-i', '--input', type=click.Path())
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
+@click.pass_context
+def insert_mapped_resmap(ctx, input, chunksize):
+    custom_db = ctx.obj['custom_db']
+    dfs = read_csv(input, sep='\t', keep_default_na=False,
+                   na_values=[''], chunksize=chunksize,
+                   usecols=['UniProt', 'Ref', 'Pos', 'Alt'])
+    done = 0
+    for df in dfs:
+        custom_db.sync_insert(custom_db.MappedMutation, df.to_dict('records'))
+        done += df.shape[0]
+        console.log(f'Done: {done}')
+
+
+@Interface.command('export-smr-mutation-mapping')
+@click.option('--identity_cutoff', type=float, default=0)
+@click.option('--length_cutoff', type=int, default=0)
+@click.option('--with_id/--no-with_id', is_flag=True, default=False)
+@click.option('--sele/--no-sele', is_flag=True, default=True)
+@click.option('--allow_oligo_state', type=str, default=None)
+@click.option('-o', '--output', type=str, help='filename of output file')
+@click.pass_context
+def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, sele, allow_oligo_state, output):
+    output_path = ctx.obj['folder']/output
+    # sele_o_path = ctx.obj['folder']/(output_path.name.replace(output_path.suffix,'')+'.sele'+output_path.suffix)
+    query = """
+    SELECT DISTINCT
+        %s
+        CASE IDMapping.is_canonical
+                    WHEN 1
+                    THEN IDMapping.Entry
+                    ELSE IDMapping.isoform
+        END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
+        SMRModel.oligo_state,SMRModel.select_tag,SMRModel.coordinates,
+        {}
+    FROM Mutation, SMRModel
+        INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
+        INNER JOIN UniProtSeq ON UniProtSeq.isoform = IDMapping.isoform 
+                            AND UniProtSeq.Pos = Mutation.Pos 
+                            AND UniProtSeq.Ref = Mutation.Ref
+    WHERE SMRModel.UniProt = edUniProt
+    AND Mutation.Pos >= SMRModel.unp_beg
+    AND Mutation.Pos <= SMRModel.unp_end
+    AND SMRModel.identity >= %s
+    AND SMRModel.select_rank > 0
+    AND SMRModel.unp_end - SMRModel.unp_beg + 1 >= %s
+    %s
+    AND NOT EXISTS (SELECT * FROM MappedMutation 
+                  WHERE edUniProt = MappedMutation.UniProt 
+                    AND MappedMutation.Pos = Mutation.Pos 
+                    AND MappedMutation.Alt = Mutation.Alt LIMIT 1)
+    {};
+    """
+    if with_id:
+        if allow_oligo_state is None:
+            query = query % ('Mutation.ftId,', identity_cutoff, length_cutoff, '')
+        else:
+            query = query % ('Mutation.ftId,', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+    else:
+        if allow_oligo_state is None:
+            query = query % ('', identity_cutoff, length_cutoff, '')
+        else:
+            query = query % ('', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
+    if sele:
+        query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+    else:
+        query = query.format('SMRModel.select_rank', '')
+    with console.status("[bold green]query..."):
+        dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
+        for df in dfs:
+            if df.shape[0] == 0:
+                continue
+            df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
+                output, index=False, mode='a+', sep='\t',header=not output_path.exists())
+    console.log(f'result saved in {output_path}')
+    #full_df = read_csv(output_path, sep='\t', keep_default_na=False)
+    #best_indexes = full_df.groupby(['UniProt','Pos', 'Alt']).select_rank.idxmin()
+    #full_df.loc[best_indexes].to_csv(sele_o_path, sep='\t', index=False)
+    #console.log(f'sele result saved in {sele_o_path}')
+
+
+@Interface.command('insert-smr-mapping')
+@click.option('-i', '--input', type=click.Path())
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=10000)
+@click.pass_context
+def insert_smr_mapping(ctx, input, chunksize):
+    custom_db = ctx.obj['custom_db']
+    dfs = read_csv(input, sep='\t', keep_default_na=False, 
+                   na_values=[''], chunksize=chunksize, 
+                   usecols=['UniProt', 'coordinates', 'from', 'to', 'identity', 'similarity', 'coverage', 'oligo-state', 'ligand_chains', 'select_rank', 'select_tag'])
+    done = 0
+    for df in dfs:
+        df['with_ligand'] = df.ligand_chains.notnull()
+        df = df.drop(columns=['ligand_chains']).rename(columns={'oligo-state': 'oligo_state', 'from': 'unp_beg', 'to': 'unp_end'})
+        custom_db.sync_insert(custom_db.SMRModel, df.to_dict('records'))
+        done += df.shape[0]
+        console.log(f'Done: {done}')
 
 
 @Interface.command('fetch1pdb')

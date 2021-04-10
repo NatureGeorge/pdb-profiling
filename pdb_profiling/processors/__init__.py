@@ -15,7 +15,7 @@ from pdb_profiling.processors.pdbe.record import (
     SIFTSs
     )
 from pdb_profiling.processors.pdbe.api import PDBeModelServer, PDBArchive, PDBVersioned
-from pdb_profiling.processors.uniprot.api import UniProtFASTA, UniProtAPI
+from pdb_profiling.processors.uniprot.api import UniProtINFO, UniProtAPI
 from pdb_profiling.processors.uniprot.record import UniProts
 from pdb_profiling.processors.proteins.api import ProteinsAPI
 from pdb_profiling.processors.proteins.record import Identifier, Identifiers

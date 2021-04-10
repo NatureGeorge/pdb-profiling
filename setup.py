@@ -13,7 +13,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.2.10',
+    version='0.2.12',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},

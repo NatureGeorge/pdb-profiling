@@ -85,7 +85,7 @@ class UnsyncFetch(Abclog):
                             await asyncio.sleep(rate)
                             return path
                         elif resp.status in (204, 300, 400, 403, 404, 405, 406):
-                            cls.logger.debug(f"204|300|400|403|404|405|406 for: {info}")
+                            cls.logger.debug(f"{resp.status} for: {info}")
                             return None
                         else:
                             mes = "code={resp.status}, message={resp.reason}, headers={resp.headers}".format(resp=resp)
