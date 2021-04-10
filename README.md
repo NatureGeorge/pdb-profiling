@@ -82,7 +82,6 @@ python setup.py install              # or "sudo python setup.py install" or "pyt
 * SWISS-MODEL Repository API
 * UniProt API
 * EBI Proteins API
-* Interactome3D API
 * RCSB Data API
 * RCSB Search API
 * ...

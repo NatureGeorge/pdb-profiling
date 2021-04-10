@@ -186,7 +186,7 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--kwargs', type=str, default='{}')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
 @click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
-@click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_COUNT > 20")
+@click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20")
 @click.option('--skip_pdbs', type=str, default='')
 @click.option('--omit', type=int, default=0)
 @click.option('-o', '--output', type=str, default='')
@@ -377,7 +377,7 @@ def insert_iso_range(ctx, chunksize):
         console.log(f'Done: {len(res)+chunksize*i}')
 
 
-@Interface.command('export-residue-mapping')
+@Interface.command('export-mutation-mapping')
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
 @click.option('-o', '--output', type=str, help='filename of output file')
@@ -452,7 +452,7 @@ def insert_mapped_resmap(ctx, input, chunksize):
         console.log(f'Done: {done}')
 
 
-@Interface.command('export-smr-residue-mapping')
+@Interface.command('export-smr-mutation-mapping')
 @click.option('--identity_cutoff', type=float, default=0)
 @click.option('--length_cutoff', type=int, default=0)
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
