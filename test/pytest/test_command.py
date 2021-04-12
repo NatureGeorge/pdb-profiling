@@ -22,7 +22,7 @@ def test_command():
                  'export-smr-mutation-mapping -o e_smr_resmap.tsv --sele',
                  'insert-sifts-meta --input test/pytest/data/pdb_demo.tsv --api_suffix api/mappings/pfam/',
                  'insert-isoform-range',
-                 ['sifts-mapping', '--func', 'unp_is_canonical_with_id', '--input', 'test/pytest/data/unp_demo.tsv', '--iteroutput', '--skip_pdbs', ''],
+                 ['sifts-mapping', '--func', 'unp_is_canonical_with_id', '--input', 'test/pytest/data/unp_demo.tsv', '--iteroutput'],
                  ['fetch1pdb', '-i', '4hho', '-a', 'atoms', '-t', 'B_ONLY',
                   '-p', 'label_asym_id=B', '-p', 'copy_all_categories=false'],
                  ['fetch1pdb', '-i', '3hl2', '-a', 'atoms',

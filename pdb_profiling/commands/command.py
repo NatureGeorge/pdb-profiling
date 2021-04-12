@@ -183,11 +183,11 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--func', type=str, default='pipe_select_mo')
-@click.option('--kwargs', type=str, default='{}')
+@click.option('-k', '--kwargs', multiple=True, type=str, default=None)
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
 @click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
 @click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20")
-@click.option('--skip_pdbs', type=str, default='')
+@click.option('--skip_pdbs', multiple=True, type=str, default=None)
 @click.option('--omit', type=int, default=0)
 @click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
@@ -198,15 +198,21 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
 
+    if kwargs is not None:
+        kwargs = dict(sub.split('=') for item in kwargs for sub in item.split(','))
+        if len(kwargs) > 0:
+            console.log(f"take args: {kwargs}")
+    else:
+        kwargs = {}
+    
+    if skip_pdbs is not None:
+        kwargs['skip_pdbs'] = [pdbi for item in skip_pdbs for pdbi in item.split(',')]
+
     SIFTS.entry_filter = entry_filter
     SIFTS.chain_filter = chain_filter
     sqlite_api = ctx.obj['custom_db']
     output = f'{func}.tsv' if output == '' else output
     output_path = ctx.obj['folder']/output
-    skip_pdbs = skip_pdbs.split(',')
-    kwargs = eval(kwargs)
-    if len(skip_pdbs) > 0 and len(skip_pdbs[0]) != 0:
-        kwargs['skip_pdbs'] = skip_pdbs
     
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
@@ -227,9 +233,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
                 dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
                             header=not output_path.exists(), mode='a+')
             console.log(f'Done: {len(res)+chunksize*i}')
-            if len(res) < chunksize:
-                break
-            if sleep:
+            #if len(res) < chunksize:
+            #    break
+            if sleep and len(res) == chunksize:
                 tsleep(uniform(1, 10))
     else:
         if column is None:
@@ -252,9 +258,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
             else:
                 DataFrame(res).to_csv(output_path, sep='\t', index=False, header=False, mode='a+')
             console.log(f'Done: {i+len(res)}')
-            if len(res) < chunksize:
-                break
-            if sleep:
+            #if len(res) < chunksize:
+            #    break
+            if sleep and len(res) == chunksize:
                 tsleep(uniform(1, 10))
 
 

@@ -84,6 +84,7 @@ python setup.py install              # or "sudo python setup.py install" or "pyt
 * EBI Proteins API
 * RCSB Data API
 * RCSB Search API
+* Eutils API (minimum usage)
 * ...
 
 > click [here](https://pdb-profiling.netlify.app/docs/5-reference/) for more details
