@@ -85,3 +85,7 @@ class WithoutRCSBClusterMembershipWarning(UserWarning):
 
 class SequenceConflictWarning(UserWarning):
     pass
+
+
+class PDBeKBResidueMappingErrorWarning(UserWarning):
+    pass

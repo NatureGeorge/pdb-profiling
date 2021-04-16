@@ -49,7 +49,8 @@ from pdb_profiling.processors.i3d.api import Interactome3D
 from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning, 
                                     ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
                                     PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
-                                    PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning)
+                                    PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning,
+                                    PDBeKBResidueMappingErrorWarning)
 from pdb_profiling.ensure import aio_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
@@ -1211,6 +1212,8 @@ class PDB(Base):
             add_0_assg_oper_df['struct_asym_id_in_assembly'] = add_0_assg_oper_df.struct_asym_id
             add_0_assg_oper_df['details'] = 'asymmetric_unit'
             self.subset_assembly = frozenset()
+            if not hasattr(self, 'assembly'):
+                await self.set_assembly()
             await self.sqlite_api.async_insert(self.sqlite_api.profile_id, add_0_assg_oper_df.to_dict('records'))
             self.register_task((repr(self), 'profile_id'), add_0_assg_oper_df)
             return add_0_assg_oper_df
@@ -1907,11 +1910,11 @@ class PDBInterface(PDBAssemble):
                 interfacedetail_df[colName] = sele_m.group(1)
 
         interfacedetail_df = await cls.to_dataframe_with_kwargs(path,
-            usecols=['pdb_code', 'assemble_code', 'interface_number', 'chain_id',
-                     'residue', 'sequence', 'insertion_code',
-                     'buried_surface_area', 'solvent_accessible_area',
-                     'interface_detail.interface_structure_1.structure.selection',
-                     'interface_detail.interface_structure_2.structure.selection'],
+            #usecols=['pdb_code', 'assemble_code', 'interface_number', 'chain_id',
+            #         'residue', 'sequence', 'insertion_code',
+            #         'buried_surface_area', 'solvent_accessible_area',
+            #         'interface_detail.interface_structure_1.structure.selection',
+            #         'interface_detail.interface_structure_2.structure.selection'],
             na_values=[' ', '?'])
         if interfacedetail_df is None:
             return None
@@ -2418,9 +2421,12 @@ class SIFTS(PDB):
                 new_unp_range.append(urange)
                 new_pdb_range.append(prange)
             else:
-                newurange, newprange = await cls.rsmfga_unit(UniProt, pdb_id, entity_id, *prange)
-                new_unp_range.extend(newurange)
-                new_pdb_range.extend(newprange)
+                try:
+                    newurange, newprange = await cls.rsmfga_unit(UniProt, pdb_id, entity_id, *prange)
+                    new_unp_range.extend(newurange)
+                    new_pdb_range.extend(newprange)
+                except AttributeError as e:
+                    warn(str(e), PDBeKBResidueMappingErrorWarning)
         return json.dumps(new_unp_range).decode('utf-8'), json.dumps(new_pdb_range).decode('utf-8')
 
     @staticmethod
@@ -3293,7 +3299,8 @@ class SIFTS(PDB):
         rename_dict = dict(zip((f'{i}_1' for i in common_cols), common_cols))
         sele_df = sele_df.add_suffix('_1').rename(columns=rename_dict)
         p_df = interact_df.merge(sele_df)
-        assert p_df.shape[0] > 0
+        same_cols = interact_df.columns.intersection(sele_df.columns)
+        assert p_df.shape[0] > 0, f"{interact_df[same_cols]}\n{sele_df[same_cols]}"
         p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
         p_df['id_score_1'] = list(map(self.get_id_score_for_assembly, zip(p_df.struct_asym_id_1, p_df.asym_id_rank_1, p_df.assembly_id)))
         return p_df

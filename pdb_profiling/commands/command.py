@@ -200,6 +200,8 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
 
     kwargs = dict(sub.split('=') for item in kwargs for sub in item.split(','))
     if len(kwargs) > 0:
+        for key,value in kwargs.items():
+            kwargs[key] = eval(value)
         console.log(f"take args: {kwargs}")
     
     skip_pdbs = [pdbi for item in skip_pdbs for pdbi in item.split(',')]
