@@ -23,6 +23,7 @@ def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
     demo.unp_is_canonical().result()
+    demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
     demo.pipe_select_mo().result()
     #demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()

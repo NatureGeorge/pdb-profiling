@@ -216,8 +216,8 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
     
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
-            query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0]
-        console.log(f"Total {total-omit} to query")
+            query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0] - omit
+        console.log(f"Total {total} to query")
         for i in range(ceil(total/chunksize)):
             res = unsync_run(sqlite_api.database.fetch_all(
                 query=f"""
@@ -426,12 +426,16 @@ def export_residue_remapping(ctx, with_id, sele, output):
         {} ;"""
     if with_id:
         query = query % 'Mutation.ftId,'
+        if sele:
+            query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY Mutation.ftId, ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('SelectedMappingMeta.after_select_rank', '')
     else:
         query = query % ''
-    if sele:
-        query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
-    else:
-        query = query.format('SelectedMappingMeta.after_select_rank', '')
+        if sele:
+            query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('SelectedMappingMeta.after_select_rank', '')
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
@@ -508,7 +512,10 @@ def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, s
         else:
             query = query % ('', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
     if sele:
-        query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+        if with_id:
+            query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY Mutation.ftId, SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
     else:
         query = query.format('SMRModel.select_rank', '')
     with console.status("[bold green]query..."):

@@ -34,7 +34,8 @@ setup(
         'scikit-learn>=0.23.2',
         'python-slugify>=4.0.0',
         'cachetools>=4.1.0',
-        'click>=7.1.2'
+        'click>=7.1.2',
+        'parasail>=1.2.4'
      ],
     ext_modules=cythonize([Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"])]),
     license="MIT",
