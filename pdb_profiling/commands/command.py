@@ -183,11 +183,11 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--func', type=str, default='pipe_select_mo')
-@click.option('--kwargs', type=str, default='{}')
+@click.option('-k', '--kwargs', multiple=True, type=str)
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
 @click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
 @click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20")
-@click.option('--skip_pdbs', type=str, default='')
+@click.option('--skip_pdbs', multiple=True, type=str)
 @click.option('--omit', type=int, default=0)
 @click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
@@ -198,20 +198,26 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
 
+    kwargs = dict(sub.split('=') for item in kwargs for sub in item.split(','))
+    if len(kwargs) > 0:
+        for key,value in kwargs.items():
+            kwargs[key] = eval(value)
+        console.log(f"take args: {kwargs}")
+    
+    skip_pdbs = [pdbi for item in skip_pdbs for pdbi in item.split(',')]
+    if skip_pdbs:
+        kwargs['skip_pdbs'] = skip_pdbs
+
     SIFTS.entry_filter = entry_filter
     SIFTS.chain_filter = chain_filter
     sqlite_api = ctx.obj['custom_db']
     output = f'{func}.tsv' if output == '' else output
     output_path = ctx.obj['folder']/output
-    skip_pdbs = skip_pdbs.split(',')
-    kwargs = eval(kwargs)
-    if len(skip_pdbs) > 0 and len(skip_pdbs[0]) != 0:
-        kwargs['skip_pdbs'] = skip_pdbs
     
     if input is None:
         total = unsync_run(sqlite_api.database.fetch_one(
-            query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0]
-        console.log(f"Total {total-omit} to query")
+            query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0] - omit
+        console.log(f"Total {total} to query")
         for i in range(ceil(total/chunksize)):
             res = unsync_run(sqlite_api.database.fetch_all(
                 query=f"""
@@ -227,9 +233,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
                 dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
                             header=not output_path.exists(), mode='a+')
             console.log(f'Done: {len(res)+chunksize*i}')
-            if len(res) < chunksize:
-                break
-            if sleep:
+            #if len(res) < chunksize:
+            #    break
+            if sleep and len(res) == chunksize:
                 tsleep(uniform(1, 10))
     else:
         if column is None:
@@ -252,9 +258,9 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
             else:
                 DataFrame(res).to_csv(output_path, sep='\t', index=False, header=False, mode='a+')
             console.log(f'Done: {i+len(res)}')
-            if len(res) < chunksize:
-                break
-            if sleep:
+            #if len(res) < chunksize:
+            #    break
+            if sleep and len(res) == chunksize:
                 tsleep(uniform(1, 10))
 
 
@@ -420,12 +426,16 @@ def export_residue_remapping(ctx, with_id, sele, output):
         {} ;"""
     if with_id:
         query = query % 'Mutation.ftId,'
+        if sele:
+            query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY Mutation.ftId, ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('SelectedMappingMeta.after_select_rank', '')
     else:
         query = query % ''
-    if sele:
-        query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
-    else:
-        query = query.format('SelectedMappingMeta.after_select_rank', '')
+        if sele:
+            query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('SelectedMappingMeta.after_select_rank', '')
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
@@ -502,7 +512,10 @@ def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, s
         else:
             query = query % ('', identity_cutoff, length_cutoff, f"AND SMRModel.oligo_state IN {allow_oligo_state}")
     if sele:
-        query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+        if with_id:
+            query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY Mutation.ftId, SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
+        else:
+            query = query.format('MIN(SMRModel.select_rank)', 'GROUP BY SMRModel.UniProt, Mutation.Pos, Mutation.Alt')
     else:
         query = query.format('SMRModel.select_rank', '')
     with console.status("[bold green]query..."):

@@ -43,13 +43,14 @@ from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
 from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI
 from pdb_profiling.processors.swissmodel.api import SMR
-from pdb_profiling.data import blosum62, miyata_similarity_matrix
+from pdb_profiling.data import miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
 from pdb_profiling.processors.i3d.api import Interactome3D
 from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning, 
                                     ConflictChainIDWarning, PossibleObsoletedUniProtWarning,
                                     PossibleObsoletedPDBEntryWarning, SkipAssemblyWarning,
-                                    PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning)
+                                    PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning,
+                                    PDBeKBResidueMappingErrorWarning)
 from pdb_profiling.ensure import aio_file_exists_stat
 from textdistance import sorensen
 from warnings import warn
@@ -57,6 +58,7 @@ from cachetools import LRUCache
 from sklearn.neighbors import NearestNeighbors
 from random import choice
 from tenacity import retry, wait_random, stop_after_attempt, RetryError
+from parasail import nw_trace_scan_sat, blosum62
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -1211,6 +1213,8 @@ class PDB(Base):
             add_0_assg_oper_df['struct_asym_id_in_assembly'] = add_0_assg_oper_df.struct_asym_id
             add_0_assg_oper_df['details'] = 'asymmetric_unit'
             self.subset_assembly = frozenset()
+            if not hasattr(self, 'assembly'):
+                await self.set_assembly()
             await self.sqlite_api.async_insert(self.sqlite_api.profile_id, add_0_assg_oper_df.to_dict('records'))
             self.register_task((repr(self), 'profile_id'), add_0_assg_oper_df)
             return add_0_assg_oper_df
@@ -1907,11 +1911,11 @@ class PDBInterface(PDBAssemble):
                 interfacedetail_df[colName] = sele_m.group(1)
 
         interfacedetail_df = await cls.to_dataframe_with_kwargs(path,
-            usecols=['pdb_code', 'assemble_code', 'interface_number', 'chain_id',
-                     'residue', 'sequence', 'insertion_code',
-                     'buried_surface_area', 'solvent_accessible_area',
-                     'interface_detail.interface_structure_1.structure.selection',
-                     'interface_detail.interface_structure_2.structure.selection'],
+            #usecols=['pdb_code', 'assemble_code', 'interface_number', 'chain_id',
+            #         'residue', 'sequence', 'insertion_code',
+            #         'buried_surface_area', 'solvent_accessible_area',
+            #         'interface_detail.interface_structure_1.structure.selection',
+            #         'interface_detail.interface_structure_2.structure.selection'],
             na_values=[' ', '?'])
         if interfacedetail_df is None:
             return None
@@ -2101,7 +2105,7 @@ class SIFTS(PDB):
     OligoState = namedtuple('OligoState', 'pdb_id oligo_state has_unmapped_protein')
     MappingMeta = namedtuple('MappingMeta', 'UniProt species identity')
 
-    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
+    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and new_identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
     entry_filter = '(experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR"'
 
     complete_chains_run_as_completed = False
@@ -2172,6 +2176,27 @@ class SIFTS(PDB):
             return res.reset_index(drop=True)
         else:
             return
+
+    @staticmethod
+    @unsync
+    def generate_new_identity(dfrm):
+        '''
+        new_identity(Seq_A, Seq_B)= identical_characters / length(trimed_alignment)
+        '''
+        if isinstance(dfrm, Unfuture):
+            dfrm = dfrm.result()
+        if 'new_pdb_range_raw' in dfrm.columns:
+            pdb_range_col = 'new_pdb_range_raw' 
+            unp_range_col = 'new_unp_range_raw'
+        new_pdb_range_len = dfrm[pdb_range_col].apply(range_len)
+        new_unp_range_len = dfrm[unp_range_col].apply(range_len)
+        assert all(new_pdb_range_len==new_unp_range_len)
+        conflict_range_len = dfrm.conflict_pdb_range.apply(range_len)
+        pdb_gaps = dfrm[pdb_range_col].apply(get_gap_list)
+        unp_gaps = dfrm[unp_range_col].apply(get_gap_list)
+        indel_len = pdb_gaps.apply(lambda x: sum(i for i in x if i > 0)) + unp_gaps.apply(lambda x: sum(i for i in x if i > 0))
+        dfrm['new_identity'] = round((new_pdb_range_len-conflict_range_len)/(indel_len+new_pdb_range_len), 2)
+        return dfrm
 
     @staticmethod
     @unsync
@@ -2336,10 +2361,10 @@ class SIFTS(PDB):
     def convert_index(lrange: Union[List, Tuple, str], rrange: Union[List,Tuple, str], sites: Iterable[int], nan_value=None):
         '''convert from rrange to lrange'''
         def unit(lrange, rrange, site):
-            for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
-                assert (lend - lstart) == (rend-rstart), "convert_index(): Invalid range {} {}".format(lrange, rrange)
-                if (site >= rstart) and (site <= rend):
-                    return int(site + lstart - rstart)
+            for (lbeg, lend), (rbeg, rend) in zip(lrange, rrange):
+                assert (lend - lbeg) == (rend-rbeg), "convert_index(): Invalid range {} {}".format(lrange, rrange)
+                if (site >= rbeg) and (site <= rend):
+                    return int(site + lbeg - rbeg)
                 else:
                     continue
             return nan_value
@@ -2418,9 +2443,12 @@ class SIFTS(PDB):
                 new_unp_range.append(urange)
                 new_pdb_range.append(prange)
             else:
-                newurange, newprange = await cls.rsmfga_unit(UniProt, pdb_id, entity_id, *prange)
-                new_unp_range.extend(newurange)
-                new_pdb_range.extend(newprange)
+                try:
+                    newurange, newprange = await cls.rsmfga_unit(UniProt, pdb_id, entity_id, *prange)
+                    new_unp_range.extend(newurange)
+                    new_pdb_range.extend(newprange)
+                except AttributeError as e:
+                    warn(str(e), PDBeKBResidueMappingErrorWarning)
         return json.dumps(new_unp_range).decode('utf-8'), json.dumps(new_pdb_range).decode('utf-8')
 
     @staticmethod
@@ -2540,7 +2568,8 @@ class SIFTS(PDB):
         new_tail = new_pdb_range[-1][-1]
         ori_tail = pdb_range[-1][-1]
         tail_gap = new_tail - ori_tail
-        if tail_gap > 0:
+        return tail_gap <= 0
+        """if tail_gap > 0:
             new_pdb_range = list(list(i) for i in new_pdb_range)
             new_unp_range = list(list(i) for i in new_unp_range)
             new_pdb_range[-1][-1] -= tail_gap
@@ -2548,6 +2577,8 @@ class SIFTS(PDB):
             new_pdb_range = tuple(tuple(i) for i in new_pdb_range)
             new_unp_range = tuple(tuple(i) for i in new_unp_range)
         return new_pdb_range, new_unp_range
+        """
+        
 
     @classmethod
     @unsync
@@ -2562,11 +2593,12 @@ class SIFTS(PDB):
         f_dfrm = f_dfrm[f_dfrm.sifts_range_tag.isin(('Deletion', 'Insertion_Undivided', 'InDel_2', 'InDel_3'))].reset_index(drop=True)
 
         if len(f_dfrm) > 0:
-            tasks = f_dfrm.apply(lambda x: cls.a_sliding_alignment(
+            tasks = f_dfrm.apply(lambda x: cls.a_re_align(
                 x['range_diff'], x['pdb_range'], x['unp_range'], x['pdb_id'], x['entity_id'], x['UniProt']), axis=1)
             res = [await i for i in tasks]
             f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame(list(zip(*i)) for i in res)
-            f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame([cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)])
+            assert all(cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range))
+            #f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame([cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)])
             dfrm_ed = merge(dfrm, f_dfrm.drop(columns=['range_diff']), how='left')
             assert dfrm_ed.shape[0] == dfrm.shape[0]
             dfrm_ed.new_pdb_range = dfrm_ed.apply(lambda x: x['pdb_range'] if isna(x['new_pdb_range']) else x['new_pdb_range'],axis=1)
@@ -2579,53 +2611,47 @@ class SIFTS(PDB):
             return dfrm_ed
 
     @staticmethod
-    def sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, **kwargs):
-        '''
-        TODO: improve code
-        '''
-        def generate_seq_item(seq, gap_index, gap_num):
-            yield from seq[:gap_index]
-            for _ in range(gap_num):
-                yield '-'
-            yield from seq[gap_index:]
-
-        def get_optimal_range(abs_diff, seg_to_add, seg_to_ori, lstart, lend, rstart, rend, on_left):
-            res = tuple(sum(blosum62.get((l, r), 0) for l, r in zip(generate_seq_item(seg_to_add, i, abs_diff), seg_to_ori)) for i in range(len(seg_to_add)+1))
-            max_val = max(res)
-            index = res.index(max_val)
-            assert index >= 0 # ???
-            # assert max_val not in res[index+1:]
-            yield (lstart, lstart+index), (rstart, rstart+index)
+    def re_alignment(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, **kwargs):
+        def get_optimal_range(lseq, rseq, lbeg, lend, rbeg, rend):
             '''
             NOTE:
                 UniProt	chain_id	entity_id	pdb_id	struct_asym_id	pdb_range	unp_range	range_diff	new_pdb_range	new_unp_range	
                 P36022	A	1	4w8f	A	[[2,1676],[1683,1684],[1849,2649]]	[[1364,3038],[3064,3076],[3292,4092]]	[0, 11, 0]	((2, 1676), (1683, 1684), (1685, 1684), (1849,...	((1364, 3038), (3064, 3065), (3077, 3076), (32...
             '''
-            if on_left:
-                start1, end1 = lstart+index+1, lend
-                start2 ,end2 = rstart+index+1+abs_diff, rend
+            aln = nw_trace_scan_sat(lseq, rseq, 10, 1, blosum62)
+            cur_lbeg = lbeg
+            cur_rbeg = rbeg
+            cur_lend = lend
+            cur_rend = rend
+            for v in aln.cigar.seq:
+                seg_len = aln.cigar.decode_len(v)
+                seg_type = aln.cigar.decode_op(v)
+                if seg_type == b'=' or seg_type == b'X':
+                    cur_lend = cur_lbeg+seg_len-1
+                    cur_rend = cur_rbeg+seg_len-1
+                    yield (cur_lbeg, cur_lend), (cur_rbeg, cur_rend)
+                    cur_lbeg = cur_lend + 1
+                    cur_rbeg = cur_rend + 1
+                elif seg_type == b'I':
+                    cur_lbeg += seg_len
+                elif seg_type == b'D':
+                    cur_rbeg += seg_len
+                else:
+                    raise ValueError(f'Unexpected type: {seg_type}')
+
+        for diff, (lbeg, lseg), (rbeg, rseg) in zip(range_diff, get_seq_seg(pdb_seq, pdb_range), get_seq_seg(unp_seq, unp_range)):
+
+            lend = lbeg + len(lseg) - 1
+            rend = rbeg + len(rseg) - 1
+
+            if diff != 0:
+                yield from get_optimal_range(lseg, rseg, lbeg, lend, rbeg, rend)
             else:
-                start1, end1 = lstart+index+1+abs_diff, lend
-                start2 ,end2 = rstart+index+1, rend
-            if (start1 < end1) and (start2 < end2): 
-                yield (start1, end1),  (start2, end2)
-
-        for diff, (lstart, lseg), (rstart, rseg) in zip(range_diff, get_seq_seg(pdb_seq, pdb_range), get_seq_seg(unp_seq, unp_range)):
-
-            lend = lstart + len(lseg) - 1
-            rend = rstart + len(rseg) - 1
-
-            if diff > 0:
-                yield from get_optimal_range(diff, lseg, rseg, lstart, lend, rstart, rend, True)
-            elif diff < 0:
-                yield from get_optimal_range(-diff, rseg, lseg, lstart, lend, rstart, rend, False)
-            else:
-                yield (lstart, lend), (rstart, rend)
-                continue
+                yield (lbeg, lend), (rbeg, rend)
 
     @classmethod
     @unsync
-    async def a_sliding_alignment(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt):
+    async def a_re_align(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
         try:
             _, unp_seq = await cls.fetch_unp_fasta(UniProt)
@@ -2633,11 +2659,11 @@ class SIFTS(PDB):
             raise PossibleObsoletedUniProtError(UniProt)
         pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
         unp_range = json.loads(unp_range) if isinstance(unp_range, str) else unp_range
-        return cls.sliding_alignment_score(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
+        return cls.re_alignment(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_base(self, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None):
+    async def pipe_base(self, complete_chains:bool=False, check_pdb_status:bool=False, skip_pdbs=None, only_canonical:bool=False):
         init_task = self.fetch_from_pdbe_api('api/mappings/all_isoforms/', Base.to_dataframe)
         if check_pdb_status:
             init_task = await self.check_pdb_status(init_task)
@@ -2651,12 +2677,16 @@ class SIFTS(PDB):
                 return
         if complete_chains:
             init_task = await self.complete_chains(init_task)
+        if only_canonical:
+            init_task = init_task[init_task.is_canonical.eq(True)].reset_index(drop=True)
+            if len(init_task) == 0:
+                return
         try:
             sifts_df = await self.reformat(init_task
                 ).then(self.dealWithInDel
                 ).then(self.fix_range
-                ).then(self.add_residue_conflict
-                ).then(self.double_check_conflict_and_range)
+                ).then(self.add_residue_conflict)
+                #).then(self.double_check_conflict_and_range)
         except PossibleObsoletedUniProtError as e:
             warn(f'{repr(self)}, {e}', PossibleObsoletedUniProtWarning)
             return None
@@ -2858,6 +2888,7 @@ class SIFTS(PDB):
         bs_score_df['bs_score'] = bs_score_df.aligned_p + bs_score_df.CN_terminal_p + bs_score_df.insertion_p + bs_score_df.deletion_p
         ret = concat([full_df, bs_score_df], axis=1)
         ret.bs_score = ret.bs_score/ret.c_unp_len
+        ret = await self.generate_new_identity(ret)
         return ret
 
     @unsync
@@ -3293,7 +3324,8 @@ class SIFTS(PDB):
         rename_dict = dict(zip((f'{i}_1' for i in common_cols), common_cols))
         sele_df = sele_df.add_suffix('_1').rename(columns=rename_dict)
         p_df = interact_df.merge(sele_df)
-        assert p_df.shape[0] > 0
+        same_cols = interact_df.columns.intersection(sele_df.columns)
+        assert p_df.shape[0] > 0, f"{interact_df[same_cols]}\n{sele_df[same_cols]}"
         p_df['unp_interface_range_1'] = p_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
         p_df['id_score_1'] = list(map(self.get_id_score_for_assembly, zip(p_df.struct_asym_id_1, p_df.asym_id_rank_1, p_df.assembly_id)))
         return p_df

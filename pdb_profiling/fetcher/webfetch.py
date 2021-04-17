@@ -72,8 +72,7 @@ class UnsyncFetch(Abclog):
         cls.logger.debug(f"http_download: Start to download file: {info['url']}")
         try:
             async with semaphore:
-                # connector=aiohttp.TCPConnector(ssl=False)
-                async with aiohttp.ClientSession(trust_env=True) as session:
+                async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), trust_env=True) as session:
                     async_func = getattr(session, method)
                     async with async_func(**info) as resp:
                         if resp.status == 200:

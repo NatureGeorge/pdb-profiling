@@ -23,6 +23,7 @@ def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
     demo.unp_is_canonical().result()
+    demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
     demo.pipe_select_mo().result()
     #demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
@@ -62,6 +63,8 @@ def test_other_api():
     pdb_ob = PDB('1a01')
     pdb_ob.status
     pdb_ob.summary
+    pdb_ob.stats_chain().result()
+    SIFTS('1a01').get_oligo_state().result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/secondary_structure/').result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
