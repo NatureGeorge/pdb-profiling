@@ -2105,7 +2105,7 @@ class SIFTS(PDB):
     OligoState = namedtuple('OligoState', 'pdb_id oligo_state has_unmapped_protein')
     MappingMeta = namedtuple('MappingMeta', 'UniProt species identity')
 
-    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
+    chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and new_identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
     entry_filter = '(experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR"'
 
     complete_chains_run_as_completed = False
@@ -2176,6 +2176,27 @@ class SIFTS(PDB):
             return res.reset_index(drop=True)
         else:
             return
+
+    @staticmethod
+    @unsync
+    def generate_new_identity(dfrm):
+        '''
+        new_identity(Seq_A, Seq_B)= identical_characters / length(trimed_alignment)
+        '''
+        if isinstance(dfrm, Unfuture):
+            dfrm = dfrm.result()
+        if 'new_pdb_range_raw' in dfrm.columns:
+            pdb_range_col = 'new_pdb_range_raw' 
+            unp_range_col = 'new_unp_range_raw'
+        new_pdb_range_len = dfrm[pdb_range_col].apply(range_len)
+        new_unp_range_len = dfrm[unp_range_col].apply(range_len)
+        assert all(new_pdb_range_len==new_unp_range_len)
+        conflict_range_len = dfrm.conflict_pdb_range.apply(range_len)
+        pdb_gaps = dfrm[pdb_range_col].apply(get_gap_list)
+        unp_gaps = dfrm[unp_range_col].apply(get_gap_list)
+        indel_len = pdb_gaps.apply(lambda x: sum(i for i in x if i > 0)) + unp_gaps.apply(lambda x: sum(i for i in x if i > 0))
+        dfrm['new_identity'] = round((new_pdb_range_len-conflict_range_len)/(indel_len+new_pdb_range_len), 2)
+        return dfrm
 
     @staticmethod
     @unsync
@@ -2867,6 +2888,7 @@ class SIFTS(PDB):
         bs_score_df['bs_score'] = bs_score_df.aligned_p + bs_score_df.CN_terminal_p + bs_score_df.insertion_p + bs_score_df.deletion_p
         ret = concat([full_df, bs_score_df], axis=1)
         ret.bs_score = ret.bs_score/ret.c_unp_len
+        ret = await self.generate_new_identity(ret)
         return ret
 
     @unsync

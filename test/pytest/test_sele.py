@@ -63,6 +63,8 @@ def test_other_api():
     pdb_ob = PDB('1a01')
     pdb_ob.status
     pdb_ob.summary
+    pdb_ob.stats_chain().result()
+    SIFTS('1a01').get_oligo_state().result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/secondary_structure/').result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
