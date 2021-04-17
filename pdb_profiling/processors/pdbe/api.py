@@ -718,8 +718,8 @@ class PDBVersioned(PDBArchive):
 
 class PDBeKBAnnotations(object):
     ftp_root = f"{FTP_URL}pub/databases/pdbe-kb/annotations/"
-    http_root = ftp_root.replace('ftp:', 'http:')
-    root = http_root
+    https_root = ftp_root.replace('ftp:', 'https:')
+    root = https_root
     api_set = frozenset({
         '14-3-3-pred/', '3DComplex/',
         '3DLigandSite/', 'AKID/',
