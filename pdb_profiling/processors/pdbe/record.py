@@ -2188,9 +2188,12 @@ class SIFTS(PDB):
         if 'new_pdb_range_raw' in dfrm.columns:
             pdb_range_col = 'new_pdb_range_raw' 
             unp_range_col = 'new_unp_range_raw'
+        else:
+            pdb_range_col = 'new_pdb_range' 
+            unp_range_col = 'new_unp_range'
         new_pdb_range_len = dfrm[pdb_range_col].apply(range_len)
-        new_unp_range_len = dfrm[unp_range_col].apply(range_len)
-        assert all(new_pdb_range_len==new_unp_range_len)
+        new_unp_range_len = dfrm[unp_range_col].apply(range_len) # TODO: drop
+        assert all(new_pdb_range_len==new_unp_range_len) # TODO: drop
         conflict_range_len = dfrm.conflict_pdb_range.apply(range_len)
         pdb_gaps = dfrm[pdb_range_col].apply(get_gap_list)
         unp_gaps = dfrm[unp_range_col].apply(get_gap_list)
@@ -2211,7 +2214,7 @@ class SIFTS(PDB):
 
     @staticmethod
     @unsync
-    def reformat(dfrm: Union[DataFrame, Unfuture]) -> DataFrame:
+    def reformat(dfrm: Union[DataFrame, Unfuture], drop_non_sequencial:bool=True) -> DataFrame:
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
         if 'pdb_start' not in dfrm.columns:
@@ -2220,6 +2223,18 @@ class SIFTS(PDB):
             dfrm.rename(columns={
                 'start.residue_number': 'pdb_start', 
                 'end.residue_number': 'pdb_end'}, inplace=True)
+        
+        if drop_non_sequencial:
+            """
+            NOTE:
+                {'pdb_id': '5o32', 'entity_id': 3, 'UniProt': 'P08603'}
+                [[1, 246], [260, 383]]
+                [[19, 264], [1107, 387]]
+            """
+            pass_mask = (dfrm.pdb_start <= dfrm.pdb_end) & (dfrm.unp_start <= dfrm.unp_end)
+            if not all(pass_mask):
+                warn(f"Drop:\n{dfrm[~pass_mask][['UniProt','pdb_id','struct_asym_id','pdb_start','pdb_end','unp_start','unp_end']]}")
+                dfrm = dfrm[pass_mask].reset_index(drop=True)
         '''
         NOTE: sort for cases like P00441 5j0c (chain A,B)
         NOTE: hasn't handle multiple identity values!
@@ -2403,9 +2418,9 @@ class SIFTS(PDB):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
-        pdb_range_col = 'new_pdb_range' if 'new_pdb_range' in dfrm.columns else 'pdb_range'
-        unp_range_col = 'new_unp_range' if 'new_unp_range' in dfrm.columns else 'unp_range'
-        focus = ['UniProt', 'entity_id', 'pdb_id', 'pdb_range']
+        pdb_range_col = 'new_pdb_range'# if 'new_pdb_range' in dfrm.columns else 'pdb_range'
+        unp_range_col = 'new_unp_range'# if 'new_unp_range' in dfrm.columns else 'unp_range'
+        focus = ['UniProt', 'entity_id', 'pdb_id', 'pdb_range', 'unp_range']
         '''
                 (UniProt	chain_id	entity_id	identifier	identity	is_canonical	name	pdb_id	struct_asym_id	pdb_range	unp_range)
         NOTE: add pdb_range because of (P00720	B	1	ENLYS_BPT4	0.94	True	ENLYS_BPT4	2b7x	B	[[1,24],[31,170]]	[[1,24],[25,164]])
@@ -2587,9 +2602,20 @@ class SIFTS(PDB):
             dfrm = await dfrm
         if isinstance(dfrm, Tuple):
             dfrm = dfrm[0]
-        
-        focus = ['UniProt', 'entity_id', 'pdb_id']
-        f_dfrm = dfrm[focus+['pdb_range', 'unp_range', 'Entry', 'range_diff', 'sifts_range_tag']].drop_duplicates(subset=focus)
+        '''
+        NOTE: same entity with different range
+            UniProt         P42262	P42262
+            chain_id	    A	B
+            entity_id	    1	1
+            identity	    0.66	0.66
+            is_canonical	True	True
+            pdb_id	        2xhd	2xhd
+            struct_asym_id	A	B
+            pdb_range	    [[3,263]]	[[2,263]]
+            unp_range	    [[413,796]]	[[412,796]]
+        '''
+        focus = ['UniProt', 'entity_id', 'pdb_id', 'pdb_range', 'unp_range']
+        f_dfrm = dfrm[focus+['Entry', 'range_diff', 'sifts_range_tag']].drop_duplicates(subset=focus)
         f_dfrm = f_dfrm[f_dfrm.sifts_range_tag.isin(('Deletion', 'Insertion_Undivided', 'InDel_2', 'InDel_3'))].reset_index(drop=True)
 
         if len(f_dfrm) > 0:
@@ -2597,7 +2623,7 @@ class SIFTS(PDB):
                 x['range_diff'], x['pdb_range'], x['unp_range'], x['pdb_id'], x['entity_id'], x['UniProt']), axis=1)
             res = [await i for i in tasks]
             f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame(list(zip(*i)) for i in res)
-            assert all(cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range))
+            assert all(cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)) # TODO: drop
             #f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame([cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)])
             dfrm_ed = merge(dfrm, f_dfrm.drop(columns=['range_diff']), how='left')
             assert dfrm_ed.shape[0] == dfrm.shape[0]
@@ -2638,8 +2664,15 @@ class SIFTS(PDB):
                     cur_rbeg += seg_len
                 else:
                     raise ValueError(f'Unexpected type: {seg_type}')
+        """
+        NOTE:
+            {'pdb_id': '5o32', 'entity_id': 3, 'UniProt': 'P08603'}
+            [[1, 246], [260, 383]]
+            [[19, 264], [1107, 387]]
+        """
+        for diff, (lbeg, lseg), (rbeg, rseg) in zip(range_diff, get_seq_seg(pdb_seq, pdb_range, **kwargs), get_seq_seg(unp_seq, unp_range, **kwargs)):
 
-        for diff, (lbeg, lseg), (rbeg, rseg) in zip(range_diff, get_seq_seg(pdb_seq, pdb_range), get_seq_seg(unp_seq, unp_range)):
+            # assert bool(lseg) and bool(rseg), f"{pdb_range}\n{unp_range}"
 
             lend = lbeg + len(lseg) - 1
             rend = rbeg + len(rseg) - 1

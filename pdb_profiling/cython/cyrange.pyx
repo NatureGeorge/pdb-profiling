@@ -235,7 +235,7 @@ cpdef bint isin_range(object input_range, int value):
     return False
 
 
-cpdef int convert_index(object lrange, object rrange, int site):
+cdef int convert_index(object lrange, object rrange, int site) except *:
     # convert from rrange to lrange
     cdef int lstart, rstart, lend, rend
     for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
