@@ -4,14 +4,13 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-12-24 01:28:34 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from hashlib import sha1
 from pathlib import Path
 from typing import Union
 
 
-class RCSBDataAPI(Abclog):
+class RCSBDataAPI(object):
     root = 'https://data.rcsb.org/'
     rest_api_root = f'{root}rest/v1/core/'
     graphql_root = f'{root}graphql'
@@ -32,10 +31,21 @@ class RCSBDataAPI(Abclog):
         return UnsyncFetch.single_task(task=('get', dict(url=cls.graphql_root, params=dict(query=query), headers=cls.headers), Path(folder)/f'{sha1(bytes(query, encoding="utf-8")).hexdigest()}.json'), semaphore=semaphore, to_do_func=to_do_func, rate=rate)
 
 
-class RCSBSearchAPI(Abclog):
+class RCSBSearchAPI(object):
     root = 'https://search.rcsb.org/rcsbsearch/v1/query'
     headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
 
     @classmethod
     def single_retrieve(cls, query, folder, semaphore, to_do_func=None, rate: float = 1.5):
         return UnsyncFetch.single_task(task=('get', dict(url=cls.root, params=dict(json=query), headers=cls.headers), Path(folder)/f'{sha1(bytes(query, encoding="utf-8")).hexdigest()}.json'), semaphore=semaphore, to_do_func=to_do_func, rate=rate)
+
+
+class RCSB1DCoordinatesAPI(object):
+    root = 'https://1d-coordinates.rcsb.org/'
+    graphql_root = f'{root}graphql'
+
+    headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
+
+    @classmethod
+    def graphql_retrieve(cls, query, folder, semaphore, to_do_func=None, rate: float = 1.5):
+        return UnsyncFetch.single_task(task=('get', dict(url=cls.graphql_root, params=dict(query=query), headers=cls.headers), Path(folder)/f'{sha1(bytes(query, encoding="utf-8")).hexdigest()}.json'), semaphore=semaphore, to_do_func=to_do_func, rate=rate)

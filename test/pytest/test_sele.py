@@ -6,6 +6,7 @@
 # @Copyright (c) 2021 MinghuiGroup, Soochow University
 from pdb_profiling import default_config
 from rich.progress import track
+from pandas import DataFrame
 import pytest
 
 default_config()
@@ -152,3 +153,41 @@ def test_get_sequence():
     ob.get_sequence(mode='mod_x_seq', entity_id=1).result()
     ob.get_sequence(struct_asym_id='A').result()
     ob.get_sequence(chain_id='A').result()
+
+
+@pytest.mark.timeout(20)
+def test_show_rcsb_error():
+    from pdb_profiling.processors import SIFTS
+    from pdb_profiling.utils import a_load_json
+    data = SIFTS("P21359").fetch_from_rcsb_api(api_suffix='1d_coordinates', query='''
+    {
+        alignment(
+            from:UNIPROT,
+            to:PDB_ENTITY,
+            queryId:"P21359"
+        ){
+            target_alignment {
+            target_id
+            coverage{
+                query_length
+                target_length
+            }
+            aligned_regions {
+                query_begin
+                query_end
+                target_begin
+                target_end
+            }
+            }
+        }
+    }
+    ''').then(a_load_json).result()['data']['alignment']['target_alignment']
+    """def yiele_mapping(data):
+        for mapping in data:
+            for region in mapping['aligned_regions']:
+                info = dict(target_id=mapping['target_id'], query_length=mapping['coverage']['query_length'], target_length=mapping['coverage']['target_length'])
+                yield {**region,**info}
+    DataFrame(yiele_mapping(data)).sort_values(by='target_id')[
+        ['target_id', 'target_begin', 'target_end', 'query_begin', 'query_end']
+    ]"""
+    assert data is not None

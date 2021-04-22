@@ -24,6 +24,7 @@ from warnings import warn
 class Identifier(Abclog):
     suffix = r'[0-9]+)[\.]*([0-9]*)'
     pats = OrderedDict({
+        ('RefSeq', 'genome'): re_compile(f'(NC_{suffix}'),
         ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_%s' % suffix),
         ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
         ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
@@ -37,14 +38,7 @@ class Identifier(Abclog):
 
     @classmethod
     @unsync
-    async def set_web_semaphore(cls, *web_semaphore_values):
-        if len(web_semaphore_values) == 0:
-            proteins_api, ensembl_api, eutils_api = 20, 20, 20
-        elif len(web_semaphore_values) < 3:
-            num = web_semaphore_values[0]
-            proteins_api, ensembl_api, eutils_api = num, num, num
-        else:
-            proteins_api, ensembl_api, eutils_api = web_semaphore_values[:3]
+    async def set_web_semaphore(cls, proteins_api=20, ensembl_api=20, eutils_api=20):
         cls.proteins_api_web_semaphore = await init_semaphore(proteins_api)
         cls.ensembl_api_web_semaphore = await init_semaphore(ensembl_api)
         cls.eutils_api_web_semaphore = await init_semaphore(eutils_api)

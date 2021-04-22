@@ -41,7 +41,7 @@ from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBe
 from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
-from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI
+from pdb_profiling.processors.rcsb.api import RCSBDataAPI, RCSBSearchAPI, RCSB1DCoordinatesAPI
 from pdb_profiling.processors.swissmodel.api import SMR
 from pdb_profiling.data import miyata_similarity_matrix
 from pdb_profiling import cif_gz_stream
@@ -110,12 +110,6 @@ class Base(object):
             cls.tasks[key] = task
         return task
 
-    def set_neo4j_connection(self, api):
-        pass
-
-    def set_sqlite_connection(self, api):
-        pass
-
     @classmethod
     @unsync
     async def set_web_semaphore(cls, web_semaphore_value: int):
@@ -132,17 +126,6 @@ class Base(object):
     def get_web_semaphore(cls):
         return cls.web_semaphore
 
-    '''
-    @classmethod
-    @unsync
-    async def set_db_semaphore(cls, db_semaphore_value):
-        cls.db_semaphore = await init_semaphore(db_semaphore_value)
-
-    @classmethod
-    def get_db_semaphore(cls):
-        return cls.db_semaphore
-    '''
-
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
         """Set your folder path
@@ -154,7 +137,7 @@ class Base(object):
         assert folder.exists(), "Folder not exist! Please create it or input a valid folder!"
         cls.folder = folder
         tuple(init_folder_from_suffixes(cls.folder, API_SET))
-        tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search'}))
+        tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search', '1d_coordinates'}))
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -179,7 +162,7 @@ class Base(object):
         cls.register_task((cls.__class__.__name__, api_suffix, then_func, json, identifier), task)
         return task
 
-    def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None, infer_path: bool = True) -> Unfuture:
+    def fetch_from_pdbe_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None, infer_path: bool = True, **kwargs) -> Unfuture:
         """fetch data from PDBe API
 
         Args:
@@ -208,12 +191,13 @@ class Base(object):
                     method='get',
                     folder=self.get_folder()/api_suffix,
                     semaphore=self.get_web_semaphore())
+        args = {**kwargs, **args}
         if json:
             args['to_do_func'] = None
         task = ProcessPDBe.single_retrieve(**args)
         return self.r_task(task, then_func, api_suffix, identifier, json)
     
-    def fetch_from_rcsb_api(self, api_suffix: str, query=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None):
+    def fetch_from_rcsb_api(self, api_suffix: str, query=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, json: bool = False, mask_id: str = None, **kwargs):
         task = self.tasks.get((repr(self), api_suffix, query, then_func, json, mask_id), None)
         if task is not None:
             return task
@@ -229,8 +213,12 @@ class Base(object):
         elif api_suffix == 'search':
             args = dict(query=query, folder=self.get_folder()/'data_rcsb/search', semaphore=self.rcsb_semaphore)
             task_func = RCSBSearchAPI.single_retrieve
+        elif api_suffix == '1d_coordinates':
+            args = dict(query=query, folder=self.get_folder()/'data_rcsb/1d_coordinates', semaphore=self.rcsb_semaphore)
+            task_func = RCSB1DCoordinatesAPI.graphql_retrieve
         else:
             raise AssertionError(f"Invlaid API SUFFIX! Valid set:\n{RCSBDataAPI.api_set} or graphql or search")
+        args = {**kwargs, **args}
         if json:
             args['to_do_func'] = None
         task = task_func(**args)
@@ -370,7 +358,7 @@ class PDB(Base):
     def get_id(self):
         return self.pdb_id
 
-    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, root='random', **params):
+    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, root='random', kwargs=dict(), **params):
         assert api_suffix in PDBeCoordinateServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeCoordinateServer.api_set}"
         dparams = dumpsParams(params)
         task = self.tasks.get((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), None)
@@ -381,13 +369,14 @@ class PDB(Base):
             suffix=api_suffix,
             params=params,
             folder=self.get_folder()/'coordinate-server'/api_suffix,
-            semaphore=self.get_web_semaphore())
+            semaphore=self.get_web_semaphore(),
+            **kwargs)
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), task)
         return task
 
-    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='subset', **params) -> Unfuture:
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='subset', kwargs=dict(), **params) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
         dparams = dumpsParams(params) if len(params) > 0 else None
         task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), None)
@@ -401,7 +390,8 @@ class PDB(Base):
             semaphore=self.get_web_semaphore(),
             params=params,
             data_collection=data_collection,
-            filename=filename)
+            filename=filename,
+            **kwargs)
         if then_func is not None:
             task = task.then(then_func)
         self.register_task((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), task)
@@ -2576,24 +2566,6 @@ class SIFTS(PDB):
                 return df[columns]
             else:
                 return
-    
-    @staticmethod
-    def check_range_tail(new_pdb_range, new_unp_range, pdb_range):
-        pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
-        new_tail = new_pdb_range[-1][-1]
-        ori_tail = pdb_range[-1][-1]
-        tail_gap = new_tail - ori_tail
-        return tail_gap <= 0
-        """if tail_gap > 0:
-            new_pdb_range = list(list(i) for i in new_pdb_range)
-            new_unp_range = list(list(i) for i in new_unp_range)
-            new_pdb_range[-1][-1] -= tail_gap
-            new_unp_range[-1][-1] -= tail_gap
-            new_pdb_range = tuple(tuple(i) for i in new_pdb_range)
-            new_unp_range = tuple(tuple(i) for i in new_unp_range)
-        return new_pdb_range, new_unp_range
-        """
-        
 
     @classmethod
     @unsync
@@ -2623,7 +2595,7 @@ class SIFTS(PDB):
                 x['range_diff'], x['pdb_range'], x['unp_range'], x['pdb_id'], x['entity_id'], x['UniProt']), axis=1)
             res = [await i for i in tasks]
             f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame(list(zip(*i)) for i in res)
-            assert all(cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)) # TODO: drop
+            #assert all(cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range))
             #f_dfrm[['new_pdb_range', 'new_unp_range']] = DataFrame([cls.check_range_tail(*args) for args in zip(f_dfrm.new_pdb_range, f_dfrm.new_unp_range, f_dfrm.pdb_range)])
             dfrm_ed = merge(dfrm, f_dfrm.drop(columns=['range_diff']), how='left')
             assert dfrm_ed.shape[0] == dfrm.shape[0]
