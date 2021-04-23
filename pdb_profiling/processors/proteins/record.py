@@ -4,6 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-09-28 05:43:34 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.ensembl.api import EnsemblAPI
 from pdb_profiling.processors.eutils.api import EutilsAPI
 from pdb_profiling.processors.proteins.api import ProteinsAPI
@@ -21,18 +22,7 @@ from collections import OrderedDict
 from warnings import warn
 
 
-class Identifier(Abclog):
-    suffix = r'[0-9]+)[\.]*([0-9]*)'
-    pats = OrderedDict({
-        ('RefSeq', 'genome'): re_compile(f'(NC_{suffix}'),
-        ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_%s' % suffix),
-        ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
-        ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
-        ('Ensembl', 'gene'): re_compile(f'(ENS[A-Z]*G{suffix}'),
-        ('Ensembl', 'transcript'): re_compile(f'(ENS[A-Z]*T{suffix}'),
-        ('Ensembl', 'protein'): re_compile(f'(ENS[A-Z]*P{suffix}'),
-        ('UniProt', 'isoform'): re_compile(r'^((?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,})[\-]*([0-9]*)$')
-        })
+class Identifier(Abclog, IdentifierBase):
 
     auto_assign_when_seq_conflict = False
 
@@ -56,30 +46,14 @@ class Identifier(Abclog):
         cls.ensembl_archive_folder = init_folder_from_suffix(
             cls.folder, 'ensembl/archive/id')
 
-    @classmethod
-    def get_type(cls, identifier: str):
-        for key, pat in cls.pats.items():
-            res = pat.fullmatch(identifier)
-            if bool(res):
-                return key, res.groups()
-
-    def __init__(self, identifier: str, folder: Optional[Union[Path, str]] = None):
-        try:
-            (self.source, self.level), (self.identifier,
-                                        self.version) = self.get_type(identifier)
-            self.raw_identifier = identifier
-            if folder is not None:
-                self.set_folder(folder)
-            getattr(self, 'sqlite_api')
-        except TypeError:
-            raise ValueError(f"Unexpected identifier type: {identifier}")
-        except AttributeError:
-            raise AttributeError(
-                "Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")
+    def __post_init__(self):
+        super().__post_init__()
+        if not hasattr(self, 'sqlite_api'):
+            raise AttributeError("Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")
         self.status = None
 
     def __repr__(self):
-        return f'<{self.source} {self.level} {self.identifier} {self.version}>'
+        return f'<{self.source} {self.level} {self.identifier} {self.identifier_suffix}>'
 
     @unsync
     async def set_status(self):
@@ -288,7 +262,7 @@ class Identifier(Abclog):
 
     @unsync
     async def map2unp(self, **kwargs):
-        if self.level == 'model':
+        if self.level.startswith('model'):
             return self.raw_identifier, 'NaN', 'NaN', False
         elif self.source == 'UniProt':
             return self.raw_identifier, self.identifier, self.raw_identifier, (self.raw_identifier == self.identifier)

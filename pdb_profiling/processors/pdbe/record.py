@@ -22,7 +22,7 @@ from bisect import bisect_left
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
 from operator import itemgetter
-from pdb_profiling.processors.pdbe import default_id_tag
+from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import *
 from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range, trim_range
@@ -87,7 +87,7 @@ class PropertyRegister(object):
         return getattr(that, f'_{self._name}')
 
 
-class Base(object):
+class Base(IdentifierBase):
     
     folder = None
     tasks = LRUCache(maxsize=1024)
@@ -138,6 +138,8 @@ class Base(object):
         cls.folder = folder
         tuple(init_folder_from_suffixes(cls.folder, API_SET))
         tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search', '1d_coordinates'}))
+        cls.sqlite_api = PDBeDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
+        cls.rcsb_sqlite_api = RCSBDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"RCSBDB.db"))
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -292,8 +294,6 @@ class PDB(Base):
     @classmethod
     def set_folder(cls, folder: Union[Path, str]):
         super().set_folder(folder)
-        cls.sqlite_api = PDBeDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
-        cls.rcsb_sqlite_api = RCSBDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"RCSBDB.db"))
         cls.assembly_cif_folder = cls.folder/'pdbe_assembly_cif'
         cls.assembly_cif_folder.mkdir(parents=True, exist_ok=True)
         tuple(init_folder_from_suffixes(cls.folder/'model-server', PDBeModelServer.api_set))
@@ -345,15 +345,16 @@ class PDB(Base):
         """
         pass
 
-    def __init__(self, pdb_id: str):
+    def __post_init__(self):
+        super().__post_init__()
         self.check_folder()
-        self.set_id(pdb_id)
+        self.set_id()
         self.pdb_ob = self
         self.properties_inited = False
     
-    def set_id(self, pdb_id: str):
-        assert default_id_tag(pdb_id) == 'pdb_id', f"Invalid PDB ID: {pdb_id} !"
-        self.pdb_id = pdb_id.lower()
+    def set_id(self):
+        assert self.source == 'PDB'
+        self.pdb_id = self.identifier.lower()
 
     def get_id(self):
         return self.pdb_id
@@ -735,7 +736,7 @@ class PDB(Base):
         assemblys = set(ass_eec_df.assembly_id) | {0}
         self.assembly: Dict[int, PDBAssemble] = dict(zip(
             assemblys, 
-            (PDBAssemble(ass_id, self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
+            (PDBAssemble(ass_id).add_args(pdb_ob=self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
@@ -1123,14 +1124,14 @@ class PDB(Base):
             data_collection=json.dumps(dict(atom_site=[dict(
                 label_asym_id=struct_asym_id,
                 label_seq_id=int(residue_number))])).decode('utf-8'),
-            then_func=PDB.to_assg_oper_df)
+            then_func=self.to_assg_oper_df)
         return assg_oper_df
     
     @unsync
     async def cs_source_ass_oper_df(self, struct_asym_id, residue_number):
         assg_oper_df = await self.fetch_from_coordinateServer_api(
             'residues', 
-            then_func=PDB.to_assg_oper_df,
+            then_func=self.to_assg_oper_df,
             root='ebi',
             asymId=struct_asym_id, 
             seqNumber=int(residue_number), 
@@ -1609,7 +1610,6 @@ class PDBAssemble(PDB):
 
     tasks = LRUCache(maxsize=1024)
 
-    id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)")
     struct_range_pattern = re_compile(r"\[.+\]([A-Z]+[_0-9]*):-?[0-9]+[\?A-Z]*")  # e.g. [FMN]B:149 [C2E]A:301 [ACE]H:-8? [BR]BA:957A
     rare_pat = re_compile(r"([A-Z]+)_([0-9]+)")  # e.g. 2rde assembly 1 A_1, B_1...
     interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?")  # [4CA]BB:170+AB [ZN]D:154A+[CU]C:154
@@ -1621,12 +1621,15 @@ class PDBAssemble(PDB):
                 return ass
         raise ValueError(f"{repr(self)}: Without expected assemble info\n{self.summary['assemblies']}")
 
-    def __init__(self, pdb_ass_id, pdb_ob: Optional[PDB]=None):
-        super().__init__(pdb_ass_id)
+    def add_args(self, pdb_ob=None):
         if pdb_ob is None:
             self.pdb_ob = PDB(self.pdb_id)
         else:
             self.pdb_ob = pdb_ob
+        return self
+
+    def __post_init__(self):
+        super().__post_init__()
         '''
         NOTE: reference: <https://www.ebi.ac.uk/training/online/course/pdbepisa-identifying-and-interpreting-likely-biolo/1555-special-code-doing-nothing-structure>
         '''
@@ -1634,12 +1637,10 @@ class PDBAssemble(PDB):
             'symmetry_operator': ('isin', ('1_555', '1555', 1555))  # 1555 for api%pisa%asiscomponent%+6e4h%0%interfaces
         }  # 'structure_2.symmetry_id': ('eq', '1_555'),'css': ('ge', 0)
 
-    def set_id(self, pdb_ass_id: str):
-        self.pdb_ass_id = pdb_ass_id.lower()
-        try:
-            self.pdb_id, self.assembly_id = self.id_pattern.fullmatch(self.pdb_ass_id).groups()
-        except AttributeError:
-            raise ValueError(f"Invalid ID: {self.pdb_ass_id}")
+    def set_id(self):
+        assert self.level == 'entry_like' and self.raw_identifier.count('/') == 1
+        self.pdb_ass_id = self.raw_identifier.lower()
+        self.pdb_id, self.assembly_id = self.pdb_ass_id.split('/')
         self.assembly_id = int(self.assembly_id)
     
     def get_id(self):
@@ -1767,7 +1768,7 @@ class PDBAssemble(PDB):
             focus_interface_df.struct_asym_id_in_assembly_2)
 
         self.interface: Dict[int, PDBInterface] = dict(zip(
-            focus_interface_ids, (PDBInterface(if_id, self, use_au).store(chains=frozenset(chains), css=css) for if_id, chains, css in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains, focus_interface_df.css))))
+            focus_interface_ids, (PDBInterface(if_id).add_args(pdbAssemble_ob=self, use_au=use_au).store(chains=frozenset(chains), css=css) for if_id, chains, css in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains, focus_interface_df.css))))
 
     def get_interface(self, interface_id):
         return self.interface[interface_id]
@@ -1858,15 +1859,14 @@ class PDBInterface(PDBAssemble):
  
     tasks = LRUCache(maxsize=1024)
 
-    id_pattern = re_compile(r"([a-z0-9]{4})/([0-9]+)/([0-9]+)")
-
-    def __init__(self, pdb_ass_int_id, pdbAssemble_ob: Optional[PDBAssemble]=None, use_au:bool=False):
-        super().__init__(pdb_ass_int_id)
+    def add_args(self, pdbAssemble_ob: Optional[PDBAssemble]=None, use_au:bool=False):
         self.use_au = use_au
         if pdbAssemble_ob is None:
-            self.pdbAssemble_ob = PDBAssemble(f"{self.pdb_id}/{self.assembly_id}")
+            self.pdbAssemble_ob = PDBAssemble(
+                f"{self.pdb_id}/{self.assembly_id}")
         else:
             self.pdbAssemble_ob = pdbAssemble_ob
+        return self
 
     def __repr__(self):
         if hasattr(self, 'info'):
@@ -1874,13 +1874,10 @@ class PDBInterface(PDBAssemble):
         else:
             return f"<{self.__class__.__name__} {self.get_id()}>"
 
-    def set_id(self, pdb_ass_int_id: str):
-        self.pdb_ass_int_id = pdb_ass_int_id.lower()
-        try:
-            self.pdb_id, self.assembly_id, self.interface_id = self.id_pattern.fullmatch(
-                self.pdb_ass_int_id).groups()
-        except AttributeError:
-            raise ValueError(f"Invalid ID: {self.pdb_ass_int_id}")
+    def set_id(self):
+        assert self.level == 'entry_like' and self.raw_identifier.count('/') == 2
+        self.pdb_ass_int_id = self.raw_identifier.lower()
+        self.pdb_id, self.assembly_id, self.interface_id = self.raw_identifier.split('/')
         self.assembly_id = int(self.assembly_id)
         self.interface_id = int(self.interface_id)
     
@@ -2075,6 +2072,77 @@ class PDBInterface(PDBAssemble):
                 return
 
 
+class RCSB1DCoordinates(Base):
+    '''RCSB 1D-Coordinates'''
+    tasks = LRUCache(maxsize=1024)
+
+    sequence_reference = {
+        ('RefSeq', 'genome'): 'NCBI_GENOME',
+        ('RefSeq', 'protein'): 'NCBI_PROTEIN',
+        ('UniProt', 'isoform'): 'UNIPROT',
+        ('PDB', 'entity'): 'PDB_ENTITY',
+        ('PDB', 'instance'): 'PDB_INSTANCE',
+    }
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.check_folder()
+        self.seq_ref_type = self.sequence_reference[self.source, self.level]
+    
+    @property
+    def seq_ref_id(self):
+        if self.source in ('RefSeq', 'UniProt'):
+            return self.identifier
+        elif self.source == 'PDB':
+            return self.raw_identifier.upper()
+    
+    def get_id(self):
+        return self.seq_ref_id
+
+    def pipe_aln(self, seq_ref_type, with_seq:bool=False, **kwargs):
+        assert seq_ref_type in self.sequence_reference.values()
+        args = (self.seq_ref_type, seq_ref_type, self.seq_ref_id, 'query_sequence', 'target_sequence') if with_seq else (self.seq_ref_type, seq_ref_type, self.seq_ref_id, '', '')
+        return self.fetch_from_rcsb_api(api_suffix='1d_coordinates', query='''
+        {
+            alignment(from:%s, to:%s, queryId:"%s"){
+                %s
+                target_alignment {
+                    target_id
+                    %s
+                    coverage{
+                        query_length
+                        target_length
+                    }
+                    aligned_regions {
+                        query_begin
+                        query_end
+                        target_begin
+                        target_end
+                    }
+                    orientation
+                }
+            }
+        }
+        ''' % args, **kwargs)
+    
+    def yield_mapping(self, data):
+        for mapping in data['data']['alignment']['target_alignment']:
+            for region in mapping['aligned_regions']:
+                info = dict(query_id=self.seq_ref_id,
+                            target_id=mapping['target_id'], 
+                            query_length=mapping['coverage']['query_length'], 
+                            target_length=mapping['coverage']['target_length'],
+                            orientation=mapping['orientation'])
+                yield {**region,**info}
+    
+    @unsync
+    async def pipe_aln_df(self, seq_ref_type, **kwargs):
+        try:
+            return DataFrame(self.yield_mapping(await self.pipe_aln(seq_ref_type, **kwargs).then(a_load_json)))
+        except TypeError:
+            pass
+
+
 class SIFTS(PDB):
     '''
     TODO
@@ -2082,13 +2150,12 @@ class SIFTS(PDB):
     1. Better OligoState
       * RAW (both from wwPDB and self assigned)
       * FILTERED 
-    2. Define Best Isoform
-    3. UniProt Isoform Interaction
+    ~~2. Define Best Isoform~~
+    ~~3. UniProt Isoform Interaction~~
     ~~4. PDBChain Instance Interaction (Biological Relevance)~~
     '''
 
     tasks = LRUCache(maxsize=1024)
-    sa_cache = LRUCache(maxsize=100)
 
     EntityChain = namedtuple('EntityChain', 'pdb_id entity_chain_info entity_count chain_count')
     UniProtEntity = namedtuple('UniProtEntity', 'pdb_id unp_entity_info entity_unp_info entity_with_unp_count min_unp_count')
@@ -2108,23 +2175,20 @@ class SIFTS(PDB):
 
     UniProtFASTA = UniProtINFO('fasta')
 
-    def set_id(self, identifier: str):
-        tag = default_id_tag(identifier, None)
-        if tag == 'pdb_id':
-            self.level = 'PDB Entry'
-            self.identifier = identifier.lower()
-            self.pdb_id = self.identifier
-        elif tag == 'UniProt':
-            self.level = tag
-            self.identifier = identifier.upper()
+    def set_id(self):
+        if self.source == 'PDB':
+            self.for_get_id = self.identifier.lower()
+            self.pdb_id = self.for_get_id
+        elif self.source == 'UniProt':
+            self.for_get_id = self.raw_identifier.upper()
         else:
-            raise AssertionError(f"Invalid identifier: <{identifier}, {tag}>")
+            raise AssertionError(f'Invalid identifier: {self.raw_identifier} for {self.__class__.__name__}!')
 
     def get_id(self):
-        return self.identifier
+        return self.for_get_id
 
     def __repr__(self):
-        return f"<{self.__class__.__name__} {self.level} {self.get_id()}>"
+        return f"<{self.__class__.__name__} {self.source}_{self.level} {self.get_id()}>"
 
     @classmethod
     def fetch_unp_fasta(cls, identifier):
@@ -3113,7 +3177,7 @@ class SIFTS(PDB):
         sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, check_pdb_status=check_pdb_status, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
         if sele_df is None:
             return
-        sele_df = sele_df[sele_df.Entry.eq(self.identifier.split('-')[0])]
+        sele_df = sele_df[sele_df.Entry.eq(self.get_id().split('-')[0])]
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
             lambda x: frozenset(combinations_with_replacement(x, 2)))
         
@@ -3230,7 +3294,7 @@ class SIFTS(PDB):
         assert self.level == 'UniProt'
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
-        swap_index = dfrm[dfrm.UniProt_1.ne(self.identifier)].index
+        swap_index = dfrm[dfrm.UniProt_1.ne(self.get_id())].index
         cols_1 = [col for col in dfrm.columns if '_1' in col]
         cols_2 = [col for col in dfrm.columns if '_2' in col]
         store_1 = dfrm.loc[swap_index, cols_1].rename(columns=dict(zip(cols_1, [col.replace('_1', '_2') for col in cols_1])))
@@ -3265,7 +3329,7 @@ class SIFTS(PDB):
             sifts_mo_df = kwargs['sifts_mo_df']
         else:
             sifts_mo_df = await self.pipe_select_mo(**kwargs)
-        smr_df = (await SMR.single_retrieve(self.identifier).then(SMR.to_dataframe)) if smr_df is None else smr_df
+        smr_df = (await SMR.single_retrieve(self.get_id()).then(SMR.to_dataframe)) if smr_df is None else smr_df
         if smr_df is None or len(smr_df) == 0:
             return
         return self.select_smr_mo(
@@ -3354,14 +3418,14 @@ class SIFTS(PDB):
         if interaction_type == 'ho':
             assert len(p_a_df) > 0
         elif interaction_type == 'ho_iso':
-            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
+            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
         elif interaction_type == 'he':
-            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.identifier) | p_a_df.UniProt_2.eq(self.identifier)) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
+            p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
         else:
             raise ValueError(f"Invalid interaction_type: {interaction_type}!")
         if len(p_a_df) == 0:
             return
-        i3d_df = await self.search_partner_from_i3d(self.identifier.split('-')[0], interaction_type[:2])
+        i3d_df = await self.search_partner_from_i3d(self.get_id().split('-')[0], interaction_type[:2])
 
         if len(i3d_df) == 0:
             p_df = p_a_df
@@ -3377,18 +3441,18 @@ class SIFTS(PDB):
     async def unp_is_canonical(self):
         if self.level != 'UniProt':
             return None
-        if '-' not in self.identifier:
+        if '-' not in self.get_id():
             return True
         try:
-            header = (await self.fetch_unp_fasta(self.identifier))[0]
+            header = (await self.fetch_unp_fasta(self.get_id()))[0]
         except TypeError:
-            warn(self.identifier, PossibleObsoletedUniProtWarning)
+            warn(self.get_id(), PossibleObsoletedUniProtWarning)
             return None
-        return self.identifier != self.unp_head.match(header).group(1)
+        return self.get_id() != self.unp_head.match(header).group(1)
     
     @unsync
     async def unp_is_canonical_with_id(self):
-        return self.identifier, (await self.unp_is_canonical())
+        return self.get_id(), (await self.unp_is_canonical())
     
     """@classmethod
     @unsync
@@ -3473,16 +3537,11 @@ class Compounds(Base):
 
     tasks = LRUCache(maxsize=1024)
 
-    def set_id(self, identifier: str):
-        assert len(identifier) > 0, "Empty string is not a valid identifier!"
-        self.identifier = identifier.upper()
-
-    def get_id(self):
-        return self.identifier
-
-    def __init__(self, identifier:str):
+    def __post_init__(self, **kwargs):
+        super().__post_init__(**kwargs)
+        assert self.level == 'compounds'
         self.check_folder()
-        self.set_id(identifier)
+        self.raw_identifier = self.raw_identifier.upper()
 
 
 class PDBs(tuple):
