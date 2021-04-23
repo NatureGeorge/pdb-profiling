@@ -182,7 +182,7 @@ class Base(IdentifierBase):
         if task is not None:
             return task
 
-        if infer_path:
+        if infer_path and not json:
             infer = self.infer_ret_from_args(api_suffix, identifier)
             if infer.exists():
                 task = unsync_wrap(infer)
@@ -1863,7 +1863,7 @@ class PDBInterface(PDBAssemble):
         self.use_au = use_au
         if pdbAssemble_ob is None:
             self.pdbAssemble_ob = PDBAssemble(
-                f"{self.pdb_id}/{self.assembly_id}")
+                f"{self.pdb_id}/{self.assembly_id}").add_args()
         else:
             self.pdbAssemble_ob = pdbAssemble_ob
         return self
@@ -2079,6 +2079,7 @@ class RCSB1DCoordinates(Base):
     sequence_reference = {
         ('RefSeq', 'genome'): 'NCBI_GENOME',
         ('RefSeq', 'protein'): 'NCBI_PROTEIN',
+        ('RefSeq', 'model_protein'): 'NCBI_PROTEIN',
         ('UniProt', 'isoform'): 'UNIPROT',
         ('PDB', 'entity'): 'PDB_ENTITY',
         ('PDB', 'instance'): 'PDB_INSTANCE',
@@ -2770,7 +2771,7 @@ class SIFTS(PDB):
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class',
                     'experimental_method', 'multi_method', '-r_factor', '-r_free']
 
-        if self.level == 'PDB Entry':
+        if self.source == 'PDB':
             return await self.pipe_score_for_pdb_entry(sifts_df, exp_cols)
         else:
             return await self.pipe_score_for_unp_isoform(sifts_df, exp_cols)
@@ -3005,7 +3006,7 @@ class SIFTS(PDB):
         res = await self.pipe_score(**kwargs)
         if res is None: return
         full_df, exp_df = res
-        if self.level == 'UniProt':
+        if self.source == 'UniProt':
             m_df = full_df[~full_df.pdb_id.isin(exclude_pdbs)]
             sele_df = merge(
                 m_df.query(self.chain_filter) if self.chain_filter else m_df,
@@ -3291,7 +3292,7 @@ class SIFTS(PDB):
 
     @unsync
     def sort_interact_cols(self, dfrm):
-        assert self.level == 'UniProt'
+        assert self.source == 'UniProt'
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
         swap_index = dfrm[dfrm.UniProt_1.ne(self.get_id())].index
@@ -3439,7 +3440,7 @@ class SIFTS(PDB):
     
     @unsync
     async def unp_is_canonical(self):
-        if self.level != 'UniProt':
+        if self.source != 'UniProt':
             return None
         if '-' not in self.get_id():
             return True
@@ -3453,16 +3454,6 @@ class SIFTS(PDB):
     @unsync
     async def unp_is_canonical_with_id(self):
         return self.get_id(), (await self.unp_is_canonical())
-    
-    """@classmethod
-    @unsync
-    def meta_pdbekb_annotaion(cls, dfrm):
-        if isinstance(dfrm, Unfuture):
-            dfrm = dfrm.result()
-        dfrm = dfrm.rename(columns={'data_resource': 'resource', 'residue_number': 'pdb_start'})
-        dfrm['pdb_end'] = dfrm.pdb_start
-        dfrm['resource_id'] = dfrm.pdb_start.astype(str)
-        return dfrm[['pdb_id', 'entity_id', 'struct_asym_id', 'chain_id', 'resource', 'resource_id', 'pdb_start', 'pdb_end']]"""
 
     @classmethod
     @unsync
