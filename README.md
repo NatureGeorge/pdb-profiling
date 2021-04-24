@@ -24,7 +24,7 @@ Profiling Protein Structures from Protein Data Bank and integrate various resour
 
 ## Install
 
-> Notice: require Python Environment >= 3.6, Platform Independent
+> Notice: require Python Environment >= 3.7, Platform Independent
 
 Install by `pip` command.
 

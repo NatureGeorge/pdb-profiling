@@ -100,7 +100,7 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
-@click.option('--auto_assign/--no-auto_assign', default=True, is_flag=True)
+@click.option('--auto_assign/--no-auto_assign', default=False, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
 def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):

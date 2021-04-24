@@ -44,7 +44,10 @@ def test_identifiers():
         'ENST00000371100', 'ENST00000401731',
         'ENSP00000387612'])
     demo.fetch('map2unp').run().result()
-    Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', identifier='P21359-3:550').result()
+    Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', ':550').result()
+    Identifier('P21359-2').init().result().get_canonical_isoform_ob().result()
+    Identifier('P21359-2').get_isoform_ob().result()
+    Identifier('P21359-1').get_all_ref_identifiers().result()
 
 
 @pytest.mark.timeout(120)
@@ -59,7 +62,7 @@ def test_uniprots_alt():
 
 @pytest.mark.timeout(180)
 def test_other_api():
-    from pdb_profiling.processors import PDB, SIFTS
+    from pdb_profiling.processors import PDB, SIFTS, PDBAssembly
     from pdb_profiling.processors.pdbe.api import PDBVersioned, PDBeKBAnnotations
     pdb_ob = PDB('1a01')
     pdb_ob.status
@@ -79,6 +82,7 @@ def test_other_api():
     bm_df = pdb_ob.get_bound_molecules().result()
     [pdb_ob.get_bound_molecule_interaction(bm_id).result() for bm_id in bm_df.bm_id.unique()[:2]]
     SIFTS('P21359-2').fetch_from_pdbe_api('graph-api/uniprot/superposition/', SIFTS.to_dataframe).result()
+    PDBAssembly('1a01/1').add_args().assembly_summary
 
 
 @pytest.mark.timeout(65)
@@ -101,7 +105,7 @@ def test_fetch_residue_mapping():
 
 @pytest.mark.timeout(90)
 def test_rcsb_data_api():
-    from pdb_profiling.processors import PDB, PDBAssemble
+    from pdb_profiling.processors import PDB, PDBAssembly
     from pdb_profiling.utils import a_load_json
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
@@ -112,7 +116,7 @@ def test_rcsb_data_api():
         json=True).result()['data']['entry']['rcsb_entry_container_identifiers']['assembly_ids']
 
     for assembly_id in assembly_ids:
-        data = PDBAssemble(f'{pdb_id}/{assembly_id}').fetch_from_rcsb_api('assembly/', then_func=a_load_json, json=True).result()
+        data = PDBAssembly(f'{pdb_id}/{assembly_id}').fetch_from_rcsb_api('assembly/', then_func=a_load_json, json=True).result()
         data['pdbx_struct_assembly_gen']
         data['pdbx_struct_oper_list']
 
@@ -158,4 +162,5 @@ def test_get_sequence():
 @pytest.mark.timeout(20)
 def test_show_rcsb_error():
     from pdb_profiling.processors import RCSB1DCoordinates
-    assert RCSB1DCoordinates('6OB3.B').pipe_aln_df('NCBI_GENOME').result() is not None
+    #assert RCSB1DCoordinates('6OB3.B').pipe_aln_df('NCBI_GENOME').result() is not None
+    assert RCSB1DCoordinates('P21359').pipe_aln_df('PDB_INSTANCE').result() is not None

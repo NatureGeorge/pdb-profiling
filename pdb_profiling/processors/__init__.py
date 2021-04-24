@@ -7,7 +7,7 @@
 from pdb_profiling.processors.pdbe.record import (
     Base, 
     PDB, 
-    PDBAssemble,
+    PDBAssembly,
     PDBInterface,
     SIFTS,
     Compounds,

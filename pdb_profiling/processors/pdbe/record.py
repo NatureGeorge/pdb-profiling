@@ -723,7 +723,7 @@ class PDB(Base):
             assemblys = sorted(assemblys)
         if not hasattr(self, 'assembly'):
             await self.set_assembly()
-        self.focus_assembly: Dict[int, PDBAssemble] = {ass_id: ass_ob for ass_id, ass_ob in self.assembly.items() if ass_id in assemblys}
+        self.focus_assembly: Dict[int, PDBAssembly] = {ass_id: ass_ob for ass_id, ass_ob in self.assembly.items() if ass_id in assemblys}
 
     @unsync
     async def set_assembly(self):
@@ -734,9 +734,9 @@ class PDB(Base):
         ass_eec_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
         ass_eec_df = ass_eec_df[ass_eec_df.details.notnull()]
         assemblys = set(ass_eec_df.assembly_id) | {0}
-        self.assembly: Dict[int, PDBAssemble] = dict(zip(
+        self.assembly: Dict[int, PDBAssembly] = dict(zip(
             assemblys, 
-            (PDBAssemble(ass_id).add_args(pdb_ob=self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
+            (PDBAssembly(ass_id).add_args(pdb_ob=self) for ass_id in self.to_assembly_id(self.pdb_id, assemblys))))
 
     def get_assembly(self, assembly_id):
         return self.assembly[assembly_id]
@@ -1418,7 +1418,7 @@ class PDB(Base):
         return res
 
     @unsync
-    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=False, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, **kwargs):
+    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=True, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, **kwargs):
         # maybe the name `au2bu` should be changed since its actual behavior is to use copied chains
         if chain_pairs is not None:
             chain_pairs = chain_pairs[self.pdb_id]
@@ -1606,7 +1606,7 @@ class PDB(Base):
         return df
 
 
-class PDBAssemble(PDB):
+class PDBAssembly(PDB):
 
     tasks = LRUCache(maxsize=1024)
 
@@ -1615,7 +1615,7 @@ class PDBAssemble(PDB):
     interface_structures_pat = re_compile(r"(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?\+(\[.+\])?([A-Z]+)(:-?[0-9]+[\?A-Z]*)?")  # [4CA]BB:170+AB [ZN]D:154A+[CU]C:154
 
     @property
-    def assemble_summary(self) -> Dict:
+    def assembly_summary(self) -> Dict:
         for ass in self.summary['assemblies']:
             if int(ass['assembly_id']) == self.assembly_id:
                 return ass
@@ -1729,10 +1729,10 @@ class PDBAssemble(PDB):
                 yield f"{pdb_assembly_id}/{interface_id}"
         
         interfacelist_df, use_au = await self.get_interfacelist_df(
-            'api/pisa/asiscomponent/', PDBAssemble.to_asiscomponent_interfaces_df)
+            'api/pisa/asiscomponent/', PDBAssembly.to_asiscomponent_interfaces_df)
         if interfacelist_df is None:
             interfacelist_df, use_au = await self.get_interfacelist_df(
-                'api/pisa/interfacelist/', PDBAssemble.to_interfacelist_df)
+                'api/pisa/interfacelist/', PDBAssembly.to_interfacelist_df)
             self.interface_filters['structure_2.symmetry_id'] = ('isin', ('1_555', '1555', 1555))
             del self.interface_filters['symmetry_operator']
         else:
@@ -1768,7 +1768,7 @@ class PDBAssemble(PDB):
             focus_interface_df.struct_asym_id_in_assembly_2)
 
         self.interface: Dict[int, PDBInterface] = dict(zip(
-            focus_interface_ids, (PDBInterface(if_id).add_args(pdbAssemble_ob=self, use_au=use_au).store(chains=frozenset(chains), css=css) for if_id, chains, css in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains, focus_interface_df.css))))
+            focus_interface_ids, (PDBInterface(if_id).add_args(PDBAssembly_ob=self, use_au=use_au).store(chains=frozenset(chains), css=css) for if_id, chains, css in zip(to_interface_id(self.get_id(), focus_interface_ids), focus_interface_chains, focus_interface_df.css))))
 
     def get_interface(self, interface_id):
         return self.interface[interface_id]
@@ -1855,17 +1855,17 @@ class PDBAssemble(PDB):
             'polydeoxyribonucleotide/polyribonucleotide hybrid') if molecule_types is None else molecule_types, False)
 
 
-class PDBInterface(PDBAssemble):
+class PDBInterface(PDBAssembly):
  
     tasks = LRUCache(maxsize=1024)
 
-    def add_args(self, pdbAssemble_ob: Optional[PDBAssemble]=None, use_au:bool=False):
+    def add_args(self, PDBAssembly_ob: Optional[PDBAssembly]=None, use_au:bool=False):
         self.use_au = use_au
-        if pdbAssemble_ob is None:
-            self.pdbAssemble_ob = PDBAssemble(
+        if PDBAssembly_ob is None:
+            self.PDBAssembly_ob = PDBAssembly(
                 f"{self.pdb_id}/{self.assembly_id}").add_args()
         else:
-            self.pdbAssemble_ob = pdbAssemble_ob
+            self.PDBAssembly_ob = PDBAssembly_ob
         return self
 
     def __repr__(self):
@@ -1975,8 +1975,8 @@ class PDBInterface(PDBAssemble):
             # NOTE: Exception example: 2beq assembly_id 1 interface_id 32
             warn(f"{repr(self)}: interfacedetail({struct_sele_set}) inconsistent with interfacelist({set(self.info['chains'])}) ! May miss some data.", PISAErrorWarning)
             return
-        eec_as_df = await self.pdbAssemble_ob.get_assemble_eec_as_df()
-        res_df = await self.pdbAssemble_ob.pdb_ob.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
+        eec_as_df = await self.PDBAssembly_ob.get_assemble_eec_as_df()
+        res_df = await self.PDBAssembly_ob.pdb_ob.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe)
         interfacedetail_df = interfacedetail_df.merge(eec_as_df, how="left")
         interfacedetail_df = interfacedetail_df.merge(res_df, how="left")
         if keep_interface_res_df:
@@ -2100,7 +2100,7 @@ class RCSB1DCoordinates(Base):
     def get_id(self):
         return self.seq_ref_id
 
-    def pipe_aln(self, seq_ref_type, with_seq:bool=False, **kwargs):
+    def alignment(self, seq_ref_type, with_seq:bool=False, **kwargs):
         assert seq_ref_type in self.sequence_reference.values()
         args = (self.seq_ref_type, seq_ref_type, self.seq_ref_id, 'query_sequence', 'target_sequence') if with_seq else (self.seq_ref_type, seq_ref_type, self.seq_ref_id, '', '')
         return self.fetch_from_rcsb_api(api_suffix='1d_coordinates', query='''
@@ -2137,9 +2137,9 @@ class RCSB1DCoordinates(Base):
                 yield {**region,**info}
     
     @unsync
-    async def pipe_aln_df(self, seq_ref_type, **kwargs):
+    async def alignment_df(self, seq_ref_type, **kwargs):
         try:
-            return DataFrame(self.yield_mapping(await self.pipe_aln(seq_ref_type, **kwargs).then(a_load_json)))
+            return DataFrame(self.yield_mapping(await self.alignment(seq_ref_type, **kwargs).then(a_load_json)))
         except TypeError:
             pass
 
@@ -2189,7 +2189,7 @@ class SIFTS(PDB):
         return self.for_get_id
 
     def __repr__(self):
-        return f"<{self.__class__.__name__} {self.source}_{self.level} {self.get_id()}>"
+        return f"<{self.__class__.__name__} {self.source} {self.level} {self.get_id()}>"
 
     @classmethod
     def fetch_unp_fasta(cls, identifier):
@@ -3352,19 +3352,29 @@ class SIFTS(PDB):
         p_df['i_group'] = p_df.apply(lambda x: tuple(sorted((x['UniProt_1'], x['UniProt_2']))), axis=1)
         return p_df
 
+    @unsync
+    async def pipe_scheduled_interface_res_dict_for_pdb(self, **kwargs):
+        assert self.source == 'PDB'
+        return await self.schedule_interface_tasks((await self.pipe_interface_res_dict(**kwargs)),False,None)
+
     @staticmethod
     async def schedule_interface_tasks(ob, run_as_completed, progress_bar):
         if run_as_completed:
+            assert isinstance(ob, (SIFTSs,PDBs))
             res = await ob.run(tqdm=progress_bar)
             ob.tasks = [i.get_interface_res_dict() for interfaces in res for i in interfaces]
             res = await ob.run(tqdm=progress_bar)
         else:
-            res = [await i for i in ob.tasks]
-            inteface_lyst = [i for interfaces in res for i in interfaces if not i.use_au]  # TODO: check whether 'not use_au' will affect selected results
+            if isinstance(ob, (SIFTSs,PDBs)):
+                res = [await i for i in ob.tasks]
+                inteface_lyst = [i for interfaces in res for i in interfaces if not i.use_au]  # TODO: check whether 'not use_au' will affect selected results
+            else:
+                assert isinstance(ob, list)
+                inteface_lyst = [i for i in ob if not i.use_au]
             res = []
             for index in range(0, len(inteface_lyst), 100):
-                ob.tasks = [i.get_interface_res_dict() for i in inteface_lyst[index:index+100]]
-                res.extend([await i for i in ob.tasks])
+                tasks = [i.get_interface_res_dict() for i in inteface_lyst[index:index+100]]
+                res.extend([await i for i in tasks])
         return DataFrame(j for j in res if j is not None)
 
     @staticmethod
