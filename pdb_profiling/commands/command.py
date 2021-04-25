@@ -294,7 +294,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
                     row.new_unp_range_raw,
                     row.new_pdb_range_raw,
                     conflict_pdb_index=row.conflict_pdb_index,
-                    struct_asym_id=row.struct_asym_id) for _, row in df.iterrows()]
+                    struct_asym_id=row.struct_asym_id) for row in df.to_records()]
         with Progress(*progress_bar_args) as p:
             res = ob.run(p.track).result()
         res_mapping_df = concat(res, sort=False, ignore_index=True)

@@ -24,6 +24,9 @@ from orm.models import NoMatch
 
 
 class Identifier(Abclog, IdentifierBase):
+    '''
+    Impl EBI Proteins API
+    '''
     auto_assign_when_seq_conflict = False
 
     @classmethod
@@ -171,8 +174,8 @@ class Identifier(Abclog, IdentifierBase):
                         ensemblTranscriptId=gnCoordinate['ensemblTranscriptId'], 
                         ensemblTranslationId=gnCoordinate['ensemblTranslationId'],
                         chromosome=gnCoordinate['genomicLocation']['chromosome'],
-                        start=gnCoordinate['genomicLocation']['start'],
-                        end=gnCoordinate['genomicLocation']['end'],
+                        #start=gnCoordinate['genomicLocation']['start'],
+                        #end=gnCoordinate['genomicLocation']['end'],
                         reverseStrand=gnCoordinate['genomicLocation']['reverseStrand'])
             for record in gnCoordinate['genomicLocation']['exon']:
                 to_flat = record.copy()
@@ -184,6 +187,12 @@ class Identifier(Abclog, IdentifierBase):
                 flatten_dict(to_flat, 'genomeLocation.end')
                 to_flat.update(info)
                 yield to_flat
+
+    @unsync
+    async def alignment_df(self, **kwargs):
+        assert self.source in ('Taxonomy', 'UniProt')
+        return DataFrame(self.yield_mapping(
+            await self.fetch_from_proteins_api('coordinates/', **kwargs).then(a_load_json))).rename(columns={'id': 'ensemblExonId'})
 
     @unsync
     async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0, **kwargs):
@@ -226,11 +235,20 @@ class Identifier(Abclog, IdentifierBase):
     @unsync
     async def get_all_ref_identifiers(self, to_dataframe:bool=True, **kwargs):
         if self.level == 'isoform':
-            query_args = {'isoform': self.raw_identifier}
+            if self.identifier_suffix == '':
+                c_ob = await self.get_canonical_isoform_ob()
+                if c_ob is None:
+                    query_args = {'accession': self.identifier}
+                else:
+                    query_args = {'isoform': c_ob.isoform}
+            else:
+                query_args = {'isoform': self.raw_identifier}
         else:
             query_args = {f"{self.level}__contains": self.identifier, 'type': self.source}
         query_args.update(kwargs)
         ret = await self.sqlite_api.DB_REFERENCES.objects.filter(**query_args).all()
+        if len(ret) == 0:
+            return None
         if to_dataframe:
             return DataFrame(ret)
         else:
@@ -350,8 +368,12 @@ class Identifier(Abclog, IdentifierBase):
 
     @unsync
     async def init(self):
-        await self.map2unp()
-        return self
+        if hasattr(self, 'inited'):
+            return self
+        else:
+            self.inited = True
+            await self.map2unp()
+            return self
 
     @unsync
     async def map2unp(self, **kwargs):
@@ -376,7 +398,9 @@ class Identifier(Abclog, IdentifierBase):
 
 
 class Identifiers(tuple):
-    def __new__(cls, iterable: Iterable):
+    '''immutable iterable class (tuple-like)'''
+
+    def __new__(cls, iterable: Iterable=tuple()):
         return super(Identifiers, cls).__new__(cls, (Identifier(i) if isinstance(i, str) else i for i in iterable))
 
     def __getitem__(self, slice):

@@ -5,6 +5,8 @@
 # @Last Modified: 2021-03-15 09:07:11 pm
 # @Copyright (c) 2021 MinghuiGroup, Soochow University
 from pdb_profiling import default_config
+from pdb_profiling.utils import a_load_json, a_concat
+from pdb_profiling.processors import *
 from rich.progress import track
 from pandas import DataFrame
 import pytest
@@ -20,13 +22,11 @@ def test_init():
 
 @pytest.mark.timeout(240)
 def test_single_select():
-    from pdb_profiling.processors import SIFTS
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
     demo.unp_is_canonical().result()
     demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
-    demo.pipe_select_mo().result()
-    #demo.pipe_select_smr_mo(sifts_mo_df=df1).result()
+    demo.pipe_scheduled_ranged_map_res_df().result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_ho_iso(run_as_completed=True).result()
@@ -35,7 +35,6 @@ def test_single_select():
 
 @pytest.mark.timeout(120)
 def test_identifiers():
-    from pdb_profiling.processors import Identifiers, Identifier
     demo = Identifiers([
         'ENSP00000491589', 'ENST00000379268',
         'ENSP00000427757', 'ENSP00000266732',
@@ -45,15 +44,13 @@ def test_identifiers():
         'ENSP00000387612'])
     demo.fetch('map2unp').run().result()
     Identifier('P21359-3').fetch_from_proteins_api('coordinates/location/', ':550').result()
-    Identifier('P21359-2').init().result().get_canonical_isoform_ob().result()
-    Identifier('P21359-2').get_isoform_ob().result()
-    Identifier('P21359-1').get_all_ref_identifiers().result()
+    Identifier('P21359-2').init().result().get_isoform_ob().result()
+    Identifier('P21359').get_all_ref_identifiers().result()
+    Identifier('P21359').alignment_df().result()
 
 
 @pytest.mark.timeout(120)
 def test_uniprots_alt():
-    from pdb_profiling.processors import UniProts, Identifiers
-    from pdb_profiling.utils import a_concat
     UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972'), via_txt=True).result()
     
     demo_unps = ('Q5VST9', 'Q5JWF2', 'P21359', 'P68871', 'P63092', 'Q29960')
@@ -62,7 +59,6 @@ def test_uniprots_alt():
 
 @pytest.mark.timeout(180)
 def test_other_api():
-    from pdb_profiling.processors import PDB, SIFTS, PDBAssembly
     from pdb_profiling.processors.pdbe.api import PDBVersioned, PDBeKBAnnotations
     pdb_ob = PDB('1a01')
     pdb_ob.status
@@ -87,7 +83,6 @@ def test_other_api():
 
 @pytest.mark.timeout(65)
 def test_pdbekdb_self_annotation():
-    from pdb_profiling.processors import SIFTS
     """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
     PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
     assert PDB('12ca').pipe_pdbekb_annotations('MetalPDB/').result() is not None
@@ -97,7 +92,6 @@ def test_pdbekdb_self_annotation():
 
 @pytest.mark.timeout(60)
 def test_fetch_residue_mapping():
-    from pdb_profiling.processors import SIFTS
     pdb_ob = SIFTS('1a01')
     pdb_ob.fetch_residue_mapping(entity_id=1, start=20, end=25).result()
     pdb_ob.fetch_residue_mapping(entity_id=1, start=24, end=27).result()
@@ -105,8 +99,6 @@ def test_fetch_residue_mapping():
 
 @pytest.mark.timeout(90)
 def test_rcsb_data_api():
-    from pdb_profiling.processors import PDB, PDBAssembly
-    from pdb_profiling.utils import a_load_json
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
     assembly_ids = ob.fetch_from_rcsb_api(
@@ -128,14 +120,12 @@ def test_rcsb_data_api():
 
 @pytest.mark.timeout(60)
 def test_rcsb_cluster_membership():
-    from pdb_profiling.processors import PDB
     PDB('2d4q').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
     PDB('2e2x').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
 
 
 @pytest.mark.timeout(60)
 def test_other_SIFTS_func():
-    from pdb_profiling.processors import SIFTS
     try:
         SIFTS('P21359').fetch_from_pdbe_api('api/mappings/all_isoforms/'
             ).then(SIFTS.to_dataframe
@@ -149,7 +139,6 @@ def test_other_SIFTS_func():
 
 @pytest.mark.timeout(60)
 def test_get_sequence():
-    from pdb_profiling.processors import PDB
     ob = PDB('4u2v')
     ob.get_sequence(entity_id=1).result()
     ob.get_sequence(mode='raw_seq', entity_id=1).result()
@@ -161,6 +150,5 @@ def test_get_sequence():
 
 @pytest.mark.timeout(20)
 def test_show_rcsb_error():
-    from pdb_profiling.processors import RCSB1DCoordinates
-    #assert RCSB1DCoordinates('6OB3.B').pipe_aln_df('NCBI_GENOME').result() is not None
-    assert RCSB1DCoordinates('P21359').pipe_aln_df('PDB_INSTANCE').result() is not None
+    #assert RCSB1DCoordinates('6OB3.B').alignment_df('NCBI_GENOME').result() is not None
+    assert RCSB1DCoordinates('P21359').alignment_df('PDB_INSTANCE').result() is not None
