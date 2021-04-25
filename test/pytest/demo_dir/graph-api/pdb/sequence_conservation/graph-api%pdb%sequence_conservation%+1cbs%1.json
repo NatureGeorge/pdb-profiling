@@ -1,0 +1,177 @@
+{
+    "1cbs": {
+        "entity_id": 1,
+        "length": 137,
+        "data": [
+            {
+                "start": 1,
+                "end": 1,
+                "conservation_score": 1,
+                "tooltipContent": "Conservation score:1",
+                "amino": [
+                    {
+                        "end": 1,
+                        "letter": "P",
+                        "proba": 0.428,
+                        "start": 1,
+                        "color": "#c0c000",
+                        "tooltipContent": "Amino acid:PRO<br/>Probability:42.80%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "A",
+                        "proba": 0.065,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:ALA<br/>Probability:6.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "S",
+                        "proba": 0.055,
+                        "start": 1,
+                        "color": "#15c015",
+                        "tooltipContent": "Amino acid:SER<br/>Probability:5.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "E",
+                        "proba": 0.042,
+                        "start": 1,
+                        "color": "#c048c0",
+                        "tooltipContent": "Amino acid:GLU<br/>Probability:4.20%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "T",
+                        "proba": 0.042,
+                        "start": 1,
+                        "color": "#15c015",
+                        "tooltipContent": "Amino acid:THR<br/>Probability:4.20%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "G",
+                        "proba": 0.041,
+                        "start": 1,
+                        "color": "#f09048",
+                        "tooltipContent": "Amino acid:GLY<br/>Probability:4.10%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "K",
+                        "proba": 0.039,
+                        "start": 1,
+                        "color": "#f01505",
+                        "tooltipContent": "Amino acid:LYS<br/>Probability:3.90%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "D",
+                        "proba": 0.035,
+                        "start": 1,
+                        "color": "#c048c0",
+                        "tooltipContent": "Amino acid:ASP<br/>Probability:3.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "L",
+                        "proba": 0.035,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:LEU<br/>Probability:3.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "V",
+                        "proba": 0.035,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:VAL<br/>Probability:3.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "N",
+                        "proba": 0.031,
+                        "start": 1,
+                        "color": "#15c015",
+                        "tooltipContent": "Amino acid:ASN<br/>Probability:3.10%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "R",
+                        "proba": 0.031,
+                        "start": 1,
+                        "color": "#f01505",
+                        "tooltipContent": "Amino acid:ARG<br/>Probability:3.10%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "Q",
+                        "proba": 0.027,
+                        "start": 1,
+                        "color": "#15c015",
+                        "tooltipContent": "Amino acid:GLN<br/>Probability:2.70%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "I",
+                        "proba": 0.024,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:ILE<br/>Probability:2.40%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "F",
+                        "proba": 0.015,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:PHE<br/>Probability:1.50%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "H",
+                        "proba": 0.014,
+                        "start": 1,
+                        "color": "#15a4a4",
+                        "tooltipContent": "Amino acid:HIS<br/>Probability:1.40%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "Y",
+                        "proba": 0.014,
+                        "start": 1,
+                        "color": "#15a4a4",
+                        "tooltipContent": "Amino acid:TYR<br/>Probability:1.40%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "M",
+                        "proba": 0.012,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:MET<br/>Probability:1.20%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "C",
+                        "proba": 0.011,
+                        "start": 1,
+                        "color": "#f08080",
+                        "tooltipContent": "Amino acid:CYS<br/>Probability:1.10%"
+                    },
+                    {
+                        "end": 1,
+                        "letter": "W",
+                        "proba": 0.005,
+                        "start": 1,
+                        "color": "#80a0f0",
+                        "tooltipContent": "Amino acid:TRP<br/>Probability:0.50%"
+                    }
+                ],
+                "labelColor": "rgb(211,211,211)"
+            }
+        ]
+    }
+}

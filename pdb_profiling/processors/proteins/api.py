@@ -50,7 +50,7 @@ class ProteinsAPI(Abclog):
             url=f'{BASE_URL}{suffix}' if identifier is None else f'{BASE_URL}{suffix}{quote(identifier)}',
             headers=cls.headers,
             params=params)
-        return 'get', args, folder/f'{slugify(identifier)+"_"+dumpsParams(params) if identifier is not None else dumpsParams(params)}.{cls.get_file_suffix()}'
+        return 'get', args, folder/(suffix if suffix[-1] == '/' else suffix+'_')/f'{slugify(identifier)+"_"+dumpsParams(params) if identifier is not None else dumpsParams(params)}.{cls.get_file_suffix()}'
 
     @classmethod
     def yieldTasks(cls, suffix: str, params_collection: Iterable[Dict], folder: Path, identifiers: Optional[Iterable[str]]) -> Generator:

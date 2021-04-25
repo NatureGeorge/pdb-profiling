@@ -13,7 +13,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.2.12',
+    version='0.3.2',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
@@ -46,10 +46,9 @@ setup(
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://github.com/NatureGeorge/pdb-profiling",
-    python_requires=">=3.6.*",
+    python_requires=">=3.7.*",
     classifiers=[
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8"
     ],

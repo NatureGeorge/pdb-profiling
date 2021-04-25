@@ -100,7 +100,7 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
 @click.option('--column', type=str, default=None)
 @click.option('--sep', type=str, default='\t')
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
-@click.option('--auto_assign/--no-auto_assign', default=True, is_flag=True)
+@click.option('--auto_assign/--no-auto_assign', default=False, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.pass_context
 def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):
@@ -283,7 +283,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
                    na_values=['NULL', 'null', ''], chunksize=chunksize)
     sqlite_api = ctx.obj['custom_db']
     if output is not None:
-        output = Path(output)
+        output = ctx.obj['folder']/output
     done = 0
     for df in dfs:
         for col in ('new_pdb_range_raw', 'new_unp_range_raw', 'conflict_pdb_index'):
@@ -294,7 +294,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
                     row.new_unp_range_raw,
                     row.new_pdb_range_raw,
                     conflict_pdb_index=row.conflict_pdb_index,
-                    struct_asym_id=row.struct_asym_id) for _, row in df.iterrows()]
+                    struct_asym_id=row.struct_asym_id) for row in df.to_records()]
         with Progress(*progress_bar_args) as p:
             res = ob.run(p.track).result()
         res_mapping_df = concat(res, sort=False, ignore_index=True)
@@ -442,7 +442,7 @@ def export_residue_remapping(ctx, with_id, sele, output):
             if df.shape[0] == 0:
                 continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, mode='a+', sep='\t', header=not output_path.exists())
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
 
 
@@ -524,7 +524,7 @@ def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, s
             if df.shape[0] == 0:
                 continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, mode='a+', sep='\t',header=not output_path.exists())
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
     #full_df = read_csv(output_path, sep='\t', keep_default_na=False)
     #best_indexes = full_df.groupby(['UniProt','Pos', 'Alt']).select_rank.idxmin()

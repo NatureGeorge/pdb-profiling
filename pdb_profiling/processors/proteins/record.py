@@ -4,13 +4,14 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-09-28 05:43:34 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
+from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.ensembl.api import EnsemblAPI
 from pdb_profiling.processors.eutils.api import EutilsAPI
 from pdb_profiling.processors.proteins.api import ProteinsAPI
 from pdb_profiling.processors.proteins import ProteinsDB
 from pdb_profiling.log import Abclog
 from pdb_profiling.warnings import PossibleObsoletedUniProtWarning, SequenceConflictWarning
-from pdb_profiling.utils import init_folder_from_suffix, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run
+from pdb_profiling.utils import init_folder_from_suffix, init_folder_from_suffixes, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run, flatten_dict
 from re import compile as re_compile
 from pathlib import Path
 from typing import Union, Optional, Tuple, Iterable, Callable, List
@@ -19,32 +20,18 @@ from asyncio import as_completed
 from pandas import DataFrame, concat
 from collections import OrderedDict
 from warnings import warn
+from orm.models import NoMatch
 
 
-class Identifier(Abclog):
-    suffix = r'[0-9]+)[\.]*([0-9]*)'
-    pats = OrderedDict({
-        ('RefSeq', 'model'): re_compile('(X[A-Z]{1}_%s' % suffix),
-        ('RefSeq', 'transcript'): re_compile(f'(NM_{suffix}'),
-        ('RefSeq', 'protein'): re_compile(f'(NP_{suffix}'),
-        ('Ensembl', 'gene'): re_compile(f'(ENS[A-Z]*G{suffix}'),
-        ('Ensembl', 'transcript'): re_compile(f'(ENS[A-Z]*T{suffix}'),
-        ('Ensembl', 'protein'): re_compile(f'(ENS[A-Z]*P{suffix}'),
-        ('UniProt', 'isoform'): re_compile(r'^((?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,})[\-]*([0-9]*)$')
-        })
-
+class Identifier(Abclog, IdentifierBase):
+    '''
+    Impl EBI Proteins API
+    '''
     auto_assign_when_seq_conflict = False
 
     @classmethod
     @unsync
-    async def set_web_semaphore(cls, *web_semaphore_values):
-        if len(web_semaphore_values) == 0:
-            proteins_api, ensembl_api, eutils_api = 20, 20, 20
-        elif len(web_semaphore_values) < 3:
-            num = web_semaphore_values[0]
-            proteins_api, ensembl_api, eutils_api = num, num, num
-        else:
-            proteins_api, ensembl_api, eutils_api = web_semaphore_values[:3]
+    async def set_web_semaphore(cls, proteins_api=20, ensembl_api=20, eutils_api=20):
         cls.proteins_api_web_semaphore = await init_semaphore(proteins_api)
         cls.ensembl_api_web_semaphore = await init_semaphore(ensembl_api)
         cls.eutils_api_web_semaphore = await init_semaphore(eutils_api)
@@ -54,38 +41,23 @@ class Identifier(Abclog):
         cls.folder = Path(folder)
         cls.sqlite_api = ProteinsDB(
             "sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"proteinsAPI.db"))
-        cls.proteins_api_folder = init_folder_from_suffix(
-            cls.folder, 'proteins/api/proteins')
+        cls.proteins_api_folder = cls.folder/'proteins/api/'
+        tuple(init_folder_from_suffixes(
+            cls.proteins_api_folder, ((i if i[-1] == '/' else i+'_') for i in ProteinsAPI.api_set)))
         cls.seq_folder = dict(
             RefSeq=init_folder_from_suffix(cls.folder, 'eutils/efetch'),
             Ensembl=init_folder_from_suffix(cls.folder, 'ensembl/sequence/id'))
         cls.ensembl_archive_folder = init_folder_from_suffix(
             cls.folder, 'ensembl/archive/id')
 
-    @classmethod
-    def get_type(cls, identifier: str):
-        for key, pat in cls.pats.items():
-            res = pat.fullmatch(identifier)
-            if bool(res):
-                return key, res.groups()
-
-    def __init__(self, identifier: str, folder: Optional[Union[Path, str]] = None):
-        try:
-            (self.source, self.level), (self.identifier,
-                                        self.version) = self.get_type(identifier)
-            self.raw_identifier = identifier
-            if folder is not None:
-                self.set_folder(folder)
-            getattr(self, 'sqlite_api')
-        except TypeError:
-            raise ValueError(f"Unexpected identifier type: {identifier}")
-        except AttributeError:
-            raise AttributeError(
-                "Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")
+    def __post_init__(self):
+        super().__post_init__()
+        if not hasattr(self, 'sqlite_api'):
+            raise AttributeError("Please specify class variable `folder` via set_folder() first or pass `folder` in this method!")
         self.status = None
 
     def __repr__(self):
-        return f'<{self.source} {self.level} {self.identifier} {self.version}>'
+        return f'<{self.source} {self.level} {self.identifier} {self.identifier_suffix}>'
 
     @unsync
     async def set_status(self):
@@ -176,31 +148,111 @@ class Identifier(Abclog):
             return dbReferences_df, other_dbReferences_df, iso_df, features_df, int_df
             '''
 
-    @classmethod
     @unsync
-    async def fetch_from_proteins_api(cls, suffix, identifier=None, params={}, rate=1.5):
+    async def fetch_from_proteins_api(self, suffix, id_suffix='', with_source:bool=False, params={}, rate=1.5):
         return await ProteinsAPI.single_retrieve(
             suffix=suffix, 
             params=params, 
-            folder=cls.proteins_api_folder,
-            semaphore=cls.proteins_api_web_semaphore,
-            identifier=identifier,
+            folder=self.proteins_api_folder,
+            semaphore=self.proteins_api_web_semaphore,
+            identifier=(f"{self.source}:" if with_source else '')+(self.raw_identifier if self.source in ('UniProt', 'Taxonomy') else self.identifier)+id_suffix,
             rate=rate)
 
+    @classmethod
+    def yield_mapping(cls, data):
+        if isinstance(data, list):
+            for sub in data:
+                yield from cls.yield_mapping_unit(sub)
+        elif isinstance(data, dict):
+            yield from cls.yield_mapping_unit(data)
+
+    @staticmethod
+    def yield_mapping_unit(data):
+        for gnCoordinate in data['gnCoordinate']:
+            info = dict(accession=data['accession'],
+                        ensemblGeneId=gnCoordinate['ensemblGeneId'], 
+                        ensemblTranscriptId=gnCoordinate['ensemblTranscriptId'], 
+                        ensemblTranslationId=gnCoordinate['ensemblTranslationId'],
+                        chromosome=gnCoordinate['genomicLocation']['chromosome'],
+                        #start=gnCoordinate['genomicLocation']['start'],
+                        #end=gnCoordinate['genomicLocation']['end'],
+                        reverseStrand=gnCoordinate['genomicLocation']['reverseStrand'])
+            for record in gnCoordinate['genomicLocation']['exon']:
+                to_flat = record.copy()
+                flatten_dict(to_flat, 'proteinLocation')
+                flatten_dict(to_flat, 'proteinLocation.begin')
+                flatten_dict(to_flat, 'proteinLocation.end')
+                flatten_dict(to_flat, 'genomeLocation')
+                flatten_dict(to_flat, 'genomeLocation.begin')
+                flatten_dict(to_flat, 'genomeLocation.end')
+                to_flat.update(info)
+                yield to_flat
+
     @unsync
-    async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0):
-        res = await ProteinsAPI.pipe_summary(await ProteinsAPI.single_retrieve(
+    async def alignment_df(self, **kwargs):
+        assert self.source in ('Taxonomy', 'UniProt')
+        return DataFrame(self.yield_mapping(
+            await self.fetch_from_proteins_api('coordinates/', **kwargs).then(a_load_json))).rename(columns={'id': 'ensemblExonId'})
+
+    @unsync
+    async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0, **kwargs):
+        res = await ProteinsAPI.pipe_summary(await self.fetch_from_proteins_api(
             'proteins/',
-            dict(offset=0, size=-1, reviewed=reviewed, isoform=isoform),
-            self.proteins_api_folder,
-            self.proteins_api_web_semaphore,
-            identifier=f'{self.source}:{self.identifier}'
+            with_source=True,
+            params=dict(offset=0, size=-1, reviewed=reviewed, isoform=isoform),
+            **kwargs
         ).then(a_load_json))
         if res is None:
             return
         else:
             self.save_ProteinsAPI_data_to_DB(res, identifier=self.identifier)
             return res
+
+    @unsync
+    async def get_isoform_ob(self):
+        assert self.level == 'isoform'
+        try:
+            if self.identifier_suffix == '':
+                query_ob = await self.get_canonical_isoform_ob()
+                if query_ob is None:
+                    return
+                else:
+                    query_id = query_ob.isoform
+            else:
+                query_id = self.raw_identifier
+            return await self.sqlite_api.ALTERNATIVE_PRODUCTS.objects.get(isoform=query_id, sequenceStatus__in=('displayed', 'described'))
+        except NoMatch:
+            pass
+
+    @unsync
+    async def get_canonical_isoform_ob(self):
+        assert self.level == 'isoform'
+        try:
+            return await self.sqlite_api.ALTERNATIVE_PRODUCTS.objects.get(accession=self.identifier, sequenceStatus='displayed')
+        except NoMatch:
+            pass
+
+    @unsync
+    async def get_all_ref_identifiers(self, to_dataframe:bool=True, **kwargs):
+        if self.level == 'isoform':
+            if self.identifier_suffix == '':
+                c_ob = await self.get_canonical_isoform_ob()
+                if c_ob is None:
+                    query_args = {'accession': self.identifier}
+                else:
+                    query_args = {'isoform': c_ob.isoform}
+            else:
+                query_args = {'isoform': self.raw_identifier}
+        else:
+            query_args = {f"{self.level}__contains": self.identifier, 'type': self.source}
+        query_args.update(kwargs)
+        ret = await self.sqlite_api.DB_REFERENCES.objects.filter(**query_args).all()
+        if len(ret) == 0:
+            return None
+        if to_dataframe:
+            return DataFrame(ret)
+        else:
+            return ret
 
     @unsync
     async def get_all_level_identifiers(self):
@@ -210,7 +262,9 @@ class Identifier(Abclog):
             return dict(zip(('protein', 'transcript', 'gene'), await self.sqlite_api.database.fetch_one(
                 query=f"""
                     SELECT protein,transcript,gene FROM dbReferences
-                    WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")))
+                    WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' 
+                    OR substr({self.level}, 0, instr({self.level}, '.')) == '{cur_id}'
+                    )""")))
         except TypeError:
             return
 
@@ -224,7 +278,9 @@ class Identifier(Abclog):
         res = await self.sqlite_api.database.fetch_one(
             query=f"""
                 SELECT accession,isoform FROM dbReferences
-                WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' OR {self.level} LIKE '{cur_id}%')""")
+                WHERE type == '{self.source}' AND ({self.level} == '{cur_id}' 
+                OR substr({self.level}, 0, instr({self.level}, '.')) == '{cur_id}'
+                )""")
         if res is None:
             return
         else:
@@ -293,11 +349,37 @@ class Identifier(Abclog):
                 self.ensembl_api_web_semaphore).then(a_seq_reader)
 
     @unsync
+    async def unp_is_canonical(self):
+        res = await self.query_from_DB_with_unp('ALTERNATIVE_PRODUCTS', columns='isoform,sequenceStatus')
+        if self.identifier_suffix == '':
+            return True
+        if res is None or res.shape[0] == 0:
+            if self.identifier_suffix != '1':
+                self.logger.warning(f'Possbile invalid isoform identifier {self.raw_identifier}')
+            return True
+        else:
+            focus = res[res.isoform.eq(self.raw_identifier) & res.sequenceStatus.isin(('described','displayed'))]
+            if focus.shape[0] == 0:
+                self.logger.error(f'Invalid isoform identifier {self.raw_identifier}')
+                return False
+            else:
+                assert focus.shape[0] == 1
+                return focus.iloc[0]['sequenceStatus'] == 'displayed'
+
+    @unsync
+    async def init(self):
+        if hasattr(self, 'inited'):
+            return self
+        else:
+            self.inited = True
+            await self.map2unp()
+            return self
+
+    @unsync
     async def map2unp(self, **kwargs):
-        if self.level == 'model':
-            return self.raw_identifier, 'NaN', 'NaN', False
-        elif self.source == 'UniProt':
-            return self.raw_identifier, self.identifier, self.raw_identifier, (self.raw_identifier == self.identifier)
+        if self.source == 'UniProt':
+            is_canonical = await self.unp_is_canonical()
+            return self.raw_identifier, self.identifier, (self.identifier if is_canonical else self.raw_identifier), is_canonical
         try:
             res = await self.map2unp_from_DB()
         except AssertionError:
@@ -316,7 +398,9 @@ class Identifier(Abclog):
 
 
 class Identifiers(tuple):
-    def __new__(cls, iterable: Iterable):
+    '''immutable iterable class (tuple-like)'''
+
+    def __new__(cls, iterable: Iterable=tuple()):
         return super(Identifiers, cls).__new__(cls, (Identifier(i) if isinstance(i, str) else i for i in iterable))
 
     def __getitem__(self, slice):

@@ -14,7 +14,7 @@ from collections import defaultdict
 from unsync import unsync, Unfuture
 from random import choice
 from hashlib import sha1
-from pdb_profiling.processors.pdbe import default_id_tag
+from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.utils import related_dataframe, flatten_dict, pipe_out, dumpsParams
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
@@ -42,6 +42,16 @@ PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/d
 
 FUNCS = []
 
+
+def mask_ib(i, default='', raise_error=False):
+    if i.source == 'PDB' and i.level == 'entry':
+        return 'pdb_id'
+    elif i.source == 'UniProt':
+        return 'UniProt'
+    elif raise_error:
+        raise AssertionError('Unexpected Case!')
+    else:
+        return default
 
 def str_number_converter(x):
     try:
@@ -207,7 +217,7 @@ class PDBeDecoder(object):
                 for key in value:
                     if isinstance(value[key], (Dict, List)):
                         value[key] = json.dumps(value[key]).decode('utf-8')
-            yield values, (default_id_tag(pdb, '_code_'),), (pdb,)
+            yield values, (mask_ib(IdentifierBase(pdb), '_code_'),), (pdb,)
 
     @staticmethod
     @dispatch_on_set('api/pdb/entry/polymer_coverage/')
@@ -348,8 +358,7 @@ class PDBeDecoder(object):
                                     continue
                                 chain[key] = json.dumps(value).decode(
                                     'utf-8') if isinstance(value, Dict) else value
-                            chain[default_id_tag(
-                                top_root, raise_error=True)] = top_root
+                            chain[mask_ib(IdentifierBase(top_root), raise_error=True)] = top_root
                             chain[sec_root] = annotation
                         yield chains, None
             elif len(data[top_root].keys()) == 1 and 'PDB' in data[top_root].keys():

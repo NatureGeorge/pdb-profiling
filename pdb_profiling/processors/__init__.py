@@ -7,12 +7,13 @@
 from pdb_profiling.processors.pdbe.record import (
     Base, 
     PDB, 
-    PDBAssemble,
+    PDBAssembly,
     PDBInterface,
     SIFTS,
     Compounds,
     PDBs,
-    SIFTSs
+    SIFTSs,
+    RCSB1DCoordinates,
     )
 from pdb_profiling.processors.pdbe.api import PDBeModelServer, PDBArchive, PDBVersioned
 from pdb_profiling.processors.uniprot.api import UniProtINFO, UniProtAPI

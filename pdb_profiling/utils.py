@@ -25,6 +25,7 @@ from io import StringIO
 from operator import itemgetter
 from textdistance import overlap, sorensen
 from collections import Counter, OrderedDict
+from warnings import warn
 
 
 """def to_interval(lyst: Union[Iterable, Iterator]) -> List:
@@ -798,9 +799,12 @@ def overlap_range(obs_range:Union[str, Iterable], unk_range: Union[str, Iterable
     return tuple(unit(obs_range, unk_range))"""
 
 
-def get_seq_seg(seq, ranges):
+def get_seq_seg(seq, ranges, **kwargs):
     for start,end in ranges:
-        yield start, seq[start-1:end]
+        if end >= start:
+            yield start, seq[start-1:end]
+        else:
+            warn(f"{kwargs} -> Invalid Order: {ranges}, skip")
 
 
 def get_diff_index(lseq, lrange, rseq, rrange):

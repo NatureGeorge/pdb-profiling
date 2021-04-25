@@ -9,16 +9,17 @@ from pdb_profiling.commands.command import Interface
 
 def test_command():
     runner = CliRunner()
+    dargs = ['--folder', 'test/pytest/demo_dir']
     for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
-                 'id-mapping',
+                 'id-mapping --auto_assign',
                  'check-muta-conflict',
                  'sifts-mapping --chunksize 15',
-                 'insert-sele-mapping --input pipe_select_mo.tsv',
-                 'residue-mapping --input pipe_select_mo.tsv',
+                 'insert-sele-mapping --input test/pytest/demo_dir/pipe_select_mo.tsv',
+                 'residue-mapping --input test/pytest/demo_dir/pipe_select_mo.tsv',
                  'export-mutation-mapping -o e_resmap.tsv --sele',
-                 'insert-sele-mutation-mapping -i e_resmap.tsv',
+                 'insert-sele-mutation-mapping -i test/pytest/demo_dir/e_resmap.tsv',
                  'sifts-mapping --func pipe_select_smr_mo --chunksize 10',
-                 'insert-smr-mapping -i pipe_select_smr_mo.tsv',
+                 'insert-smr-mapping -i test/pytest/demo_dir/pipe_select_smr_mo.tsv',
                  'export-smr-mutation-mapping -o e_smr_resmap.tsv --sele',
                  'insert-sifts-meta --input test/pytest/data/pdb_demo.tsv --api_suffix api/mappings/pfam/',
                  'insert-isoform-range',
@@ -32,5 +33,5 @@ def test_command():
                  '-m', 'post',
                  '-t', 'A_90_B_10'],
                  ):
-        result = runner.invoke(Interface, task.split(' ') if not isinstance(task, list) else task)
+        result = runner.invoke(Interface, dargs+task.split(' ') if not isinstance(task, list) else dargs+task)
         assert result.exit_code == 0, str(task)
