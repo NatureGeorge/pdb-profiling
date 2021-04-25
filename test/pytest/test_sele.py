@@ -14,17 +14,16 @@ import pytest
 default_config()
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(60)
 def test_init():
     from pdb_profiling.processors.i3d.api import Interactome3D
     Interactome3D.pipe_init_interaction_meta().result()
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(200)
 def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
-    demo.unp_is_canonical().result()
     demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
     demo.pipe_scheduled_ranged_map_res_df().result()
     demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
@@ -33,7 +32,7 @@ def test_single_select():
     demo.pipe_select_else(func='pipe_protein_ligand_interface', css_cutoff=0.5, run_as_completed=True).result()
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(90)
 def test_identifiers():
     demo = Identifiers([
         'ENSP00000491589', 'ENST00000379268',
@@ -49,7 +48,7 @@ def test_identifiers():
     Identifier('P21359').alignment_df().result()
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(60)
 def test_uniprots_alt():
     UniProts.fetch_VAR_SEQ_from_DB(('Q5VST9', 'Q5JWF2', 'P08631', 'O92972'), via_txt=True).result()
     
@@ -57,7 +56,7 @@ def test_uniprots_alt():
     Identifiers(demo_unps).query_from_DB_with_unps('ALTERNATIVE_PRODUCTS').run().then(a_concat).result()
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(120)
 def test_other_api():
     from pdb_profiling.processors.pdbe.api import PDBVersioned, PDBeKBAnnotations
     pdb_ob = PDB('1a01')
@@ -81,7 +80,7 @@ def test_other_api():
     PDBAssembly('1a01/1').add_args().assembly_summary
 
 
-@pytest.mark.timeout(65)
+@pytest.mark.timeout(60)
 def test_pdbekdb_self_annotation():
     """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
     PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
@@ -97,7 +96,7 @@ def test_fetch_residue_mapping():
     pdb_ob.fetch_residue_mapping(entity_id=1, start=24, end=27).result()
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(60)
 def test_rcsb_data_api():
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
@@ -118,13 +117,13 @@ def test_rcsb_data_api():
     assert (df1.merge(df2).shape) == df1.shape
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(40)
 def test_rcsb_cluster_membership():
     PDB('2d4q').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
     PDB('2e2x').rcsb_cluster_membership(entity_id=1, identity_cutoff=100).result()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(40)
 def test_other_SIFTS_func():
     try:
         SIFTS('P21359').fetch_from_pdbe_api('api/mappings/all_isoforms/'
@@ -137,7 +136,7 @@ def test_other_SIFTS_func():
         pass
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(30)
 def test_get_sequence():
     ob = PDB('4u2v')
     ob.get_sequence(entity_id=1).result()
