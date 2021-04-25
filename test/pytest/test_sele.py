@@ -20,7 +20,7 @@ def test_init():
     Interactome3D.pipe_init_interaction_meta().result()
 
 
-@pytest.mark.timeout(200)
+@pytest.mark.timeout(240)
 def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
