@@ -80,7 +80,7 @@ def test_other_api():
     PDBAssembly('1a01/1').add_args().assembly_summary
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(70)
 def test_pdbekdb_self_annotation():
     """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
     PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
