@@ -9,6 +9,7 @@ from pdb_profiling.commands.command import Interface
 
 def test_command():
     runner = CliRunner()
+    dargs = ['--folder', 'test/pytest/demo_dir']
     for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
                  'id-mapping',
                  'check-muta-conflict',
@@ -32,5 +33,5 @@ def test_command():
                  '-m', 'post',
                  '-t', 'A_90_B_10'],
                  ):
-        result = runner.invoke(Interface, task.split(' ') if not isinstance(task, list) else task)
+        result = runner.invoke(Interface, dargs+task.split(' ') if not isinstance(task, list) else dargs+task)
         assert result.exit_code == 0, str(task)

@@ -11,7 +11,7 @@ from rich.progress import track
 from pandas import DataFrame
 import pytest
 
-default_config()
+default_config('test/pytest/demo_dir')
 
 
 @pytest.mark.timeout(60)
@@ -67,7 +67,7 @@ def test_other_api():
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/secondary_structure/').result()
     pdb_ob.fetch_from_pdbe_api('api/pdb/entry/files/').result()
     pdb_ob.fetch_from_pdbe_api('graph-api/pdb/funpdbe_annotation/').result()
-    pdb_ob.fetch_from_pdbe_api('graph-api/pdb/sequence_conservation/').result()
+    pdb_ob.fetch_from_pdbe_api('graph-api/pdb/sequence_conservation/', mask_id='1cbs/1').result()
     pdb_ob.fetch_from_pdbe_api('api/validation/RNA_pucker_suite_outliers/entry/').result()
     pdb_ob.fetch_from_pdbe_api('api/validation/rama_sidechain_listing/entry/').result()
     PDB('4zai').fetch_from_PDBArchive('obsolete/mmCIF/', PDB.cif2residue_listing).result()
@@ -91,9 +91,9 @@ def test_pdbekdb_self_annotation():
 
 @pytest.mark.timeout(60)
 def test_fetch_residue_mapping():
-    pdb_ob = SIFTS('1a01')
-    pdb_ob.fetch_residue_mapping(entity_id=1, start=20, end=25).result()
-    pdb_ob.fetch_residue_mapping(entity_id=1, start=24, end=27).result()
+    pdb_ob = SIFTS('3pg7')
+    pdb_ob.fetch_residue_mapping(entity_id=1, start=251, end=256).result()
+    pdb_ob.fetch_residue_mapping(entity_id=1, start=252, end=255).result()
 
 
 @pytest.mark.timeout(60)
