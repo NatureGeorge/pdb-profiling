@@ -283,7 +283,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
                    na_values=['NULL', 'null', ''], chunksize=chunksize)
     sqlite_api = ctx.obj['custom_db']
     if output is not None:
-        output = Path(output)
+        output = ctx.obj['folder']/output
     done = 0
     for df in dfs:
         for col in ('new_pdb_range_raw', 'new_unp_range_raw', 'conflict_pdb_index'):
@@ -442,7 +442,7 @@ def export_residue_remapping(ctx, with_id, sele, output):
             if df.shape[0] == 0:
                 continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, mode='a+', sep='\t', header=not output_path.exists())
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
 
 
@@ -524,7 +524,7 @@ def export_smr_residue_remapping(ctx, identity_cutoff, length_cutoff, with_id, s
             if df.shape[0] == 0:
                 continue
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
-                output, index=False, mode='a+', sep='\t',header=not output_path.exists())
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
     #full_df = read_csv(output_path, sep='\t', keep_default_na=False)
     #best_indexes = full_df.groupby(['UniProt','Pos', 'Alt']).select_rank.idxmin()
