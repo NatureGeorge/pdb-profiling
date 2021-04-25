@@ -11,7 +11,7 @@ def test_command():
     runner = CliRunner()
     dargs = ['--folder', 'test/pytest/demo_dir']
     for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
-                 'id-mapping',
+                 'id-mapping --auto_assign',
                  'check-muta-conflict',
                  'sifts-mapping --chunksize 15',
                  'insert-sele-mapping --input test/pytest/demo_dir/pipe_select_mo.tsv',
