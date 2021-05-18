@@ -28,7 +28,7 @@ setup(
         'pandas>=1.1.5',
         'numpy>=1.19.2',
         'textdistance>=4.2.0',
-        'databases[sqlite]>=0.3.2',
+        'databases[sqlite]>=0.4.3',
         'rich>=9.5.0',
         'orm>=0.1.5',
         'scikit-learn>=0.23.2',

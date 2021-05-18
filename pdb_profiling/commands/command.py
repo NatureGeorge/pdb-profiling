@@ -198,7 +198,7 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
 
-    kwargs = dict(sub.split('=') for item in kwargs for sub in item.split(','))
+    kwargs = dict(sub.split('=') for item in kwargs for sub in item.split(';'))
     if len(kwargs) > 0:
         for key,value in kwargs.items():
             kwargs[key] = eval(value)

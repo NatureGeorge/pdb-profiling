@@ -128,7 +128,7 @@ def test_other_SIFTS_func():
     try:
         SIFTS('P21359').fetch_from_pdbe_api('api/mappings/all_isoforms/'
             ).then(SIFTS.to_dataframe
-            ).then(SIFTS.check_pdb_status
+            #).then(SIFTS.check_pdb_status
             ).then(SIFTS.check_identity
             ).then(SIFTS.reformat
             ).then(SIFTS.deal_with_identical_entity_seq).result()

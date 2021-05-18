@@ -49,14 +49,15 @@ class SMR(Abclog):
     async def set_web_semaphore(cls, web_semaphore_values):
         cls.web_semaphore = await init_semaphore(web_semaphore_values)
 
-    @staticmethod
-    def yieldSMR(data: Dict):
+    @classmethod
+    def yieldSMR(cls, data: Dict):
         cols = ('sequence_length',
                 'ac', 'id', 'isoid')
         uniprot_entries = data['result']['uniprot_entries']
-
-        assert len(
-            uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
+        if len(uniprot_entries) == 0:
+            cls.logger.warning(f'{data}: Zero length of uniprot_entries')
+            return
+        assert len(uniprot_entries) == 1, f"Unexpected length of uniprot_entries: {uniprot_entries}"
 
         for col in ('ac', 'id', 'isoid'):
             data['result'][col] = uniprot_entries[0].get(col, None)

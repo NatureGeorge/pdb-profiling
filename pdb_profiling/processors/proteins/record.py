@@ -149,9 +149,9 @@ class Identifier(Abclog, IdentifierBase):
             '''
 
     @unsync
-    async def fetch_from_proteins_api(self, suffix, id_suffix='', with_source:bool=False, params={}, rate=1.5):
+    async def fetch_from_proteins_api(self, api_suffix, id_suffix='', with_source:bool=False, params={}, rate=1.5):
         return await ProteinsAPI.single_retrieve(
-            suffix=suffix, 
+            suffix=api_suffix, 
             params=params, 
             folder=self.proteins_api_folder,
             semaphore=self.proteins_api_web_semaphore,
@@ -189,10 +189,10 @@ class Identifier(Abclog, IdentifierBase):
                 yield to_flat
 
     @unsync
-    async def alignment_df(self, **kwargs):
-        assert self.source in ('Taxonomy', 'UniProt')
+    async def alignment_df(self, api_suffix='coordinates/', **kwargs):
+        #assert self.source in ('Taxonomy', 'UniProt')
         return DataFrame(self.yield_mapping(
-            await self.fetch_from_proteins_api('coordinates/', **kwargs).then(a_load_json))).rename(columns={'id': 'ensemblExonId'})
+            await self.fetch_from_proteins_api(api_suffix, **kwargs).then(a_load_json))).rename(columns={'id': 'ensemblExonId'})
 
     @unsync
     async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0, **kwargs):

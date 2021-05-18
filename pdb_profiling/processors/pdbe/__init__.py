@@ -101,7 +101,7 @@ class PDBeDB(SqliteDB):
         
         
         class PISAInterfaceDict(orm.Model):
-            __tablename__ = 'PISAInterface'
+            __tablename__ = 'PISAInterfaceDict'
             __metadata__ = self.metadata
             __database__ = self.database
             entity_id_1 = orm.Integer()
@@ -127,6 +127,8 @@ class PDBeDB(SqliteDB):
             interface_id = orm.Integer(primary_key=True)
             use_au = orm.Boolean()
             css = orm.Float()
+            is_polymer_1 = orm.Boolean()
+            is_polymer_2 = orm.Boolean()
 
         self.ResidueMapping = ResidueMapping
         self.StatsProteinEntitySeq = StatsProteinEntitySeq
