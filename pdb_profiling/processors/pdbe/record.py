@@ -2313,7 +2313,7 @@ class SIFTS(PDB):
     async def check_whether_pdbe_api_lag(dfrm):
         if isawaitable(dfrm):
             dfrm = await dfrm
-        elif dfrm is None:
+        if dfrm is None:
             return
         elif isinstance(dfrm, DataFrame):
             pass

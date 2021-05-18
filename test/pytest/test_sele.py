@@ -20,7 +20,7 @@ def test_init():
     Interactome3D.pipe_init_interaction_meta().result()
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(300)
 def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
@@ -80,7 +80,7 @@ def test_other_api():
     PDBAssembly('1a01/1').add_args().assembly_summary
 
 
-@pytest.mark.timeout(70)
+@pytest.mark.timeout(80)
 def test_pdbekdb_self_annotation():
     """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
     PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
@@ -96,7 +96,7 @@ def test_fetch_residue_mapping():
     pdb_ob.fetch_residue_mapping(entity_id=1, start=252, end=255).result()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(80)
 def test_rcsb_data_api():
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
