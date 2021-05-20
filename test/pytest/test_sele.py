@@ -26,7 +26,6 @@ def test_single_select():
     demo = SIFTS('P21359-2')
     demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
     demo.pipe_scheduled_ranged_map_res_df().result()
-    demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_ho_iso(run_as_completed=True).result()
     demo.pipe_select_else(func='pipe_protein_ligand_interface', css_cutoff=0.5, run_as_completed=True).result()

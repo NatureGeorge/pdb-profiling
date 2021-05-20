@@ -32,6 +32,9 @@ def test_command():
                  '-d', 'label_asym_id=B,label_seq_id=100',
                  '-m', 'post',
                  '-t', 'A_90_B_10'],
+                 'sifts-mapping --func pipe_select_ho --chunksize 5',
+                 'insert-interaction -i test/pytest/demo_dir/pipe_select_ho.tsv',
+                 'export-interaction-mapping -o e_interaction_resmap.tsv',
                  ):
         result = runner.invoke(Interface, dargs+task.split(' ') if not isinstance(task, list) else dargs+task)
         assert result.exit_code == 0, str(task)

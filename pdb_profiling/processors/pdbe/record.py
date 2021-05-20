@@ -25,7 +25,7 @@ from operator import itemgetter
 from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import *
-from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, interval2set, subtract_range, add_range, overlap_range, outside_range, trim_range
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, subtract_range, add_range, overlap_range, outside_range, trim_range
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, unsync_wrap,
                                  related_dataframe, slice_series, 
@@ -519,8 +519,7 @@ class PDB(Base):
         col_dict = dict(zip(cols, new_cols))
         col_dict['data_'] = 'pdb_id'
         dfrm.rename(columns=col_dict, inplace=True)
-        assert all(dfrm['residue_number'] == dfrm['residue_number?']
-                   ), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
+        assert (dfrm['residue_number'] == dfrm['residue_number?']).all(), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
         dfrm.drop(columns=['residue_number?'], inplace=True)
         for col in ('residue_number', 'authore_residue_number'):
             dfrm[col] = dfrm[col].astype(int)
@@ -1161,7 +1160,7 @@ class PDB(Base):
     @unsync
     async def set_subset_assembly_from_df(self, profile_id_df):
         mask = profile_id_df.assembly_id.ne(0)
-        if not any(mask):
+        if not mask.any():
             self.subset_assembly = frozenset()
         else:
             if not hasattr(self, 'assembly'):
@@ -1216,7 +1215,7 @@ class PDB(Base):
         if assg_oper_df is not None:
             focus_assg_oper_df = assg_oper_df[assg_oper_df.struct_asym_id.isin(focus_res2eec_df.struct_asym_id)]
             new_focus_assg_oper_df = concat([add_0_assg_oper_df, focus_assg_oper_df.merge(focus_res2eec_df, how='left')], ignore_index=True, sort=False)
-            assert any(new_focus_assg_oper_df.isnull().sum()) is False, f"Unexpected Cases {new_focus_assg_oper_df}"
+            assert not new_focus_assg_oper_df.isnull().sum().any(), f"Unexpected Cases {new_focus_assg_oper_df}"
             if not hasattr(self, 'assembly'):
                 await self.set_assembly()
             new_focus_assg_oper_df = new_focus_assg_oper_df[new_focus_assg_oper_df.assembly_id.isin(self.assembly.keys())].reset_index(drop=True)
@@ -1312,7 +1311,7 @@ class PDB(Base):
             (~res_map_df_full.residue_name.isin(SEQ_DICT)) |
             res_map_df_full.conflict_code.notnull())
         demo_record = res_map_df_full.iloc[0]
-        if all(~mask):
+        if (~mask).all():
             range_df = self.three_range2range_df(*lyst32interval(
                 res_map_df_full.unp_residue_number, res_map_df_full.residue_number, res_map_df_full.author_residue_number))
             for col in ('pdb_id', 'entity_id', 'struct_asym_id', 'chain_id'):
@@ -1324,7 +1323,7 @@ class PDB(Base):
             range_df['multiple_conformers'] = nan
             range_df['conflict_code'] = nan
             return range_df
-        elif all(mask):
+        elif mask.all():
             res_map_df_full['UniProt'] = UniProt
             final_df = res_map_df_full.rename(
                 columns={'unp_residue_number': 'unp_beg', 'residue_number': 'pdb_beg', 'author_residue_number': 'auth_pdb_beg'})
@@ -1413,7 +1412,7 @@ class PDB(Base):
                 return ret
 
     @unsync
-    async def pipe_interface_res_dict_ic(self, include_chains=None, use_copies:bool=True, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, chains_count_cutoff=2, **kwargs):
+    async def pipe_interface_res_dict_ic(self, include_chains=None, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, chains_count_cutoff=2, allow_not_polymer=False, **kwargs):
         # ic: include_chains version
         if include_chains is not None:
             include_chains = include_chains[self.pdb_id]
@@ -1427,18 +1426,24 @@ class PDB(Base):
                 continue
             if len(assembly.interface) == 0:
                 continue
-            if use_copies and include_chains is not None:
+            if include_chains is not None:
                 tr = await assembly.get_assemble_eec_as_df()
                 cur_include_chains = frozenset(tr[tr.struct_asym_id.isin(include_chains)].struct_asym_id_in_assembly)
             else:
                 cur_include_chains = include_chains
             for interface in assembly.interface.values():
                 if ((cur_include_chains is None) or bool(interface.chain_set & cur_include_chains)) and interface.info['css'] > css_cutoff and len(interface.chain_set) >= chains_count_cutoff:
+                    if func == 'pipe_protein_protein_interface' or func == 'pipe_protein_nucleotide_interface':
+                        if not allow_not_polymer and not (interface.info['chains'][0][1] is None and interface.info['chains'][1][1] is None):
+                            continue
+                    elif func == 'pipe_protein_ligand_interface':
+                        if not allow_not_polymer and not (interface.info['chains'][0][1] is None or interface.info['chains'][1][1] is None):
+                            continue
                     res.append(interface)
         return res
 
     @unsync
-    async def pipe_interface_res_dict(self, chain_pairs=None, au2bu:bool=True, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, chains_count_cutoff=2, **kwargs):
+    async def pipe_interface_res_dict(self, chain_pairs=None, focus_assembly_ids=None, func='set_interface', discard_multimer_chains_cutoff=21, discard_multimer_chains_cutoff_for_au=None, omit_peptide_length:int=20, css_cutoff=-1, chains_count_cutoff=2, allow_not_polymer=False, **kwargs):
         # maybe the name `au2bu` should be changed since its actual behavior is to use copied chains
         if chain_pairs is not None:
             chain_pairs = chain_pairs[self.pdb_id]
@@ -1452,7 +1457,7 @@ class PDB(Base):
                 continue
             if len(assembly.interface) == 0:
                 continue
-            if au2bu and chain_pairs is not None:
+            if chain_pairs is not None:
                 tr = await assembly.get_assemble_eec_as_df()
                 tr_info = tr.groupby('struct_asym_id').struct_asym_id_in_assembly.apply(frozenset).to_dict()
                 tr_info = defaultdict(frozenset, tr_info)
@@ -1468,6 +1473,12 @@ class PDB(Base):
                 cur_chain_pairs = chain_pairs
             for interface in assembly.interface.values():
                 if ((cur_chain_pairs is None) or (interface.chain_set in cur_chain_pairs)) and interface.info['css'] > css_cutoff and len(interface.chain_set) >= chains_count_cutoff:
+                    if func == 'pipe_protein_protein_interface' or func == 'pipe_protein_nucleotide_interface':
+                        if not allow_not_polymer and not (interface.info['chains'][0][1] is None and interface.info['chains'][1][1] is None):
+                            continue
+                    elif func == 'pipe_protein_ligand_interface':
+                        if not allow_not_polymer and not (interface.info['chains'][0][1] is None or interface.info['chains'][1][1] is None):
+                            continue
                     res.append(interface)
         return res
     
@@ -2102,10 +2113,10 @@ class PDBInterface(PDBAssembly):
         record1['is_polymer_1'] = True
         if record1['struct_asym_id_in_assembly_1'] == struct_asym_id_in_assembly_1:
             the_other_sele = struct_asym_id_in_assembly_2
-            the_other_interface_range = f'[[{residue_number_2}, {residue_number_2}]]' if residue_number_2 is not None else None
+            the_other_interface_range = f'[[{residue_number_2},{residue_number_2}]]' if residue_number_2 is not None else None
         else:
             the_other_sele = struct_asym_id_in_assembly_1
-            the_other_interface_range = f'[[{residue_number_1}, {residue_number_1}]]'if residue_number_1 is not None else None
+            the_other_interface_range = f'[[{residue_number_1},{residue_number_1}]]'if residue_number_1 is not None else None
         if len(records) == 2:
             record2 = {f"{key}_2": value for key,
                     value in records[1].items() if key not in common_keys}
@@ -2253,7 +2264,7 @@ class SIFTS(PDB):
     chain_filter = 'UNK_COUNT < SEQRES_COUNT and ca_p_only == False and new_identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20'
     entry_filter = '(experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR"'
 
-    complete_chains_run_as_completed = False
+    # complete_chains_run_as_completed = False
 
     # weight = array([1, -1, -1, -1.79072623, -2.95685934, -4.6231746])
 
@@ -2298,14 +2309,14 @@ class SIFTS(PDB):
     async def complete_chains(cls, dfrm: Union[DataFrame, Unfuture, Coroutine]):
         if isawaitable(dfrm):
             dfrm = await dfrm
-        if cls.complete_chains_run_as_completed:
-            res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
-                            api_suffix='api/mappings/all_isoforms/',
-                            then_func=Base.to_dataframe).run()
-        else:
-            res = [await task for task in SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
-                            api_suffix='api/mappings/all_isoforms/',
-                            then_func=Base.to_dataframe).tasks]
+        #if cls.complete_chains_run_as_completed:
+        #    res = await SIFTSs(dfrm.pdb_id.unique()).fetch('fetch_from_pdbe_api', 
+        #                    api_suffix='api/mappings/all_isoforms/',
+        #                    then_func=Base.to_dataframe).run()
+        #else:
+        res = [await task for task in SIFTSs(frozenset(dfrm.pdb_id)).fetch('fetch_from_pdbe_api', 
+                    api_suffix='api/mappings/all_isoforms/',
+                    then_func=Base.to_dataframe).tasks]
         return concat(res, sort=False, ignore_index=True)
 
     @staticmethod
@@ -2319,12 +2330,12 @@ class SIFTS(PDB):
             pass
         else:
             return
-        pdbs = PDBs(dfrm.pdb_id.unique())
+        pdbs = PDBs(frozenset(dfrm.pdb_id))
         tasks = [await task for task in pdbs.fetch('fetch_from_pdbe_api', api_suffix='api/pdb/entry/molecules/').tasks]
         pass_pdbs = [i.name[-8:-4] for i in tasks if i is not None]
         mask = dfrm.pdb_id.isin(pass_pdbs)
-        if any(mask):
-            if any(~mask):
+        if mask.any():
+            if (~mask).any():
                 warn(f"{dfrm[~mask].pdb_id.tolist()}: either obsoleted or API lag update", PossibleObsoletedPDBEntryWarning)
             return dfrm[mask].reset_index(drop=True)
         else:
@@ -2366,7 +2377,7 @@ class SIFTS(PDB):
             unp_range_col = 'new_unp_range'
         new_pdb_range_len = dfrm[pdb_range_col].apply(range_len)
         new_unp_range_len = dfrm[unp_range_col].apply(range_len) # TODO: drop
-        assert all(new_pdb_range_len==new_unp_range_len) # TODO: drop
+        assert (new_pdb_range_len==new_unp_range_len).all() # TODO: drop
         conflict_range_len = dfrm.conflict_pdb_range.apply(range_len)
         pdb_gaps = dfrm[pdb_range_col].apply(get_gap_list)
         unp_gaps = dfrm[unp_range_col].apply(get_gap_list)
@@ -2405,7 +2416,7 @@ class SIFTS(PDB):
                 [[19, 264], [1107, 387]]
             """
             pass_mask = (dfrm.pdb_start <= dfrm.pdb_end) & (dfrm.unp_start <= dfrm.unp_end)
-            if not all(pass_mask):
+            if not pass_mask.all():
                 warn(f"Drop:\n{dfrm[~pass_mask][['UniProt','pdb_id','struct_asym_id','pdb_start','pdb_end','unp_start','unp_end']]}")
                 dfrm = dfrm[pass_mask].reset_index(drop=True)
         '''
@@ -2426,38 +2437,39 @@ class SIFTS(PDB):
         return dfrm
     
     @staticmethod
+    def add_tage_to_range(df: DataFrame, tage_name: str):
+        # ADD TAGE FOR SIFTS
+        df[tage_name] = 'Safe'
+        # No Insertion But Deletion[Pure Deletion]
+        df.loc[df[(df['group_info'] == 1) & (
+            df['diff+'] > 0)].index, tage_name] = 'Deletion'
+        # Insertion & No Deletion
+        df.loc[df[
+            (df['group_info'] == 1) &
+            (df['diff-'] > 0)].index, tage_name] = 'Insertion_Undivided'
+        df.loc[df[
+            (df['group_info'] > 1) &
+            (df['diff0'] == df['group_info']) &
+            (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'Insertion'
+        # Insertion & Deletion
+        df.loc[df[
+            (df['group_info'] > 1) &
+            (df['diff0'] == df['group_info']) &
+            (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_1'
+        df.loc[df[
+            (df['group_info'] > 1) &
+            (df['diff0'] != df['group_info']) &
+            (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_2'
+        df.loc[df[
+            (df['group_info'] > 1) &
+            (df['diff0'] != df['group_info']) &
+            (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'InDel_3'
+
+    @classmethod
     @unsync
-    def dealWithInDel(dfrm: Union[DataFrame, Unfuture], sort_by_unp: bool = True) -> DataFrame:
+    def dealWithInDel(cls, dfrm: Union[DataFrame, Unfuture], sort_by_unp: bool = True) -> DataFrame:
         if isinstance(dfrm, Unfuture):
             dfrm = dfrm.result()
-
-        def add_tage_to_range(df: DataFrame, tage_name: str):
-            # ADD TAGE FOR SIFTS
-            df[tage_name] = 'Safe'
-            # No Insertion But Deletion[Pure Deletion]
-            df.loc[df[(df['group_info'] == 1) & (
-                df['diff+'] > 0)].index, tage_name] = 'Deletion'
-            # Insertion & No Deletion
-            df.loc[df[
-                (df['group_info'] == 1) &
-                (df['diff-'] > 0)].index, tage_name] = 'Insertion_Undivided'
-            df.loc[df[
-                (df['group_info'] > 1) &
-                (df['diff0'] == df['group_info']) &
-                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'Insertion'
-            # Insertion & Deletion
-            df.loc[df[
-                (df['group_info'] > 1) &
-                (df['diff0'] == df['group_info']) &
-                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_1'
-            df.loc[df[
-                (df['group_info'] > 1) &
-                (df['diff0'] != df['group_info']) &
-                (df['unp_gaps0'] != (df['group_info'] - 1))].index, tage_name] = 'InDel_2'
-            df.loc[df[
-                (df['group_info'] > 1) &
-                (df['diff0'] != df['group_info']) &
-                (df['unp_gaps0'] == (df['group_info'] - 1))].index, tage_name] = 'InDel_3'
 
         dfrm.pdb_range = dfrm.pdb_range.apply(json.loads)
         dfrm.unp_range = dfrm.unp_range.apply(json.loads)
@@ -2482,7 +2494,7 @@ class SIFTS(PDB):
         dfrm['diff-'] = dfrm.range_diff.apply(
             lambda x: count_nonzero(x < 0))
         dfrm['unp_gaps0'] = dfrm.unp_gaps.apply(lambda x: x.count(0))
-        add_tage_to_range(dfrm, tage_name='sifts_range_tag')
+        cls.add_tage_to_range(dfrm, tage_name='sifts_range_tag')
         dfrm['repeated'] = dfrm.apply(
             lambda x: x['diff-'] > 0 and x['sifts_range_tag'] != 'Insertion_Undivided', axis=1)
         dfrm['repeated'] = dfrm.apply(
@@ -2510,7 +2522,7 @@ class SIFTS(PDB):
             return res
 
         def min_unp(info_dict):
-            return min(len(set(res)) for res in product(*info_dict.values()))
+            return min(len(frozenset(res)) for res in product(*info_dict.values()))
         
         mol_df = await self.fetch_from_pdbe_api('api/pdb/entry/molecules/', Base.to_dataframe)
         mol_df = mol_df[mol_df.molecule_type.eq('polypeptide(L)')]
@@ -3218,7 +3230,7 @@ class SIFTS(PDB):
         store_2 = i3d_df.loc[swap_index, cols_2].rename(columns=dict(zip(cols_2, [col.replace('_2', '_1') for col in cols_2])))
         i3d_df.loc[swap_index, cols_1] = store_2
         i3d_df.loc[swap_index, cols_2] = store_1
-        assert all((i3d_df.struct_asym_id_1 < i3d_df.struct_asym_id_2) | ((i3d_df.struct_asym_id_1 == i3d_df.struct_asym_id_2) & (i3d_df.model_id_1 < i3d_df.model_id_2)))
+        assert ((i3d_df.struct_asym_id_1 < i3d_df.struct_asym_id_2) | ((i3d_df.struct_asym_id_1 == i3d_df.struct_asym_id_2) & (i3d_df.model_id_1 < i3d_df.model_id_2))).all()
         return i3d_df
 
     '''
@@ -3543,7 +3555,7 @@ class SIFTS(PDB):
     @unsync
     async def pisa_interact_protein_else(self, sele_df, include_chains, func:str, run_as_completed:bool=False, progress_bar=None, **kwargs):
         # TODO: check
-        ob = PDBs(include_chains.index).fetch('pipe_interface_res_dict_ic', include_chains=include_chains, use_copies=True, func=func, **kwargs)
+        ob = PDBs(include_chains.index).fetch('pipe_interface_res_dict_ic', include_chains=include_chains, func=func, **kwargs)
         interact_df = await self.schedule_interface_tasks(ob, run_as_completed, progress_bar)
         if len(interact_df) == 0:
             return
@@ -3552,7 +3564,7 @@ class SIFTS(PDB):
             if col not in interact_df.columns:
                 interact_df[col] = nan
         check_mask = interact_df.molecule_type_1.isin(('polypeptide(L)', 'polypeptide(D)'))
-        if not all(check_mask):
+        if not check_mask.all():
             # EXAMPLE: 5b0y/0/78
             warn('Outdated PISA chain identifier! Current data could be ligand related: ' +
                  str(interact_df[~check_mask].head(1).to_dict('records')[0]), PISAErrorWarning)
@@ -3571,7 +3583,7 @@ class SIFTS(PDB):
 
     @unsync
     async def pisa_interact_integrate_with_i3d(self, sele_df, chain_pairs, interaction_type:str, run_as_completed:bool=False, progress_bar=None, **kwargs):
-        ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_dict', chain_pairs=chain_pairs, au2bu=True, func='pipe_protein_protein_interface', **kwargs)
+        ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_dict', chain_pairs=chain_pairs, func='pipe_protein_protein_interface', **kwargs)
         interact_df = await self.schedule_interface_tasks(ob, run_as_completed, progress_bar)
         if len(interact_df) == 0:
             return

@@ -145,6 +145,7 @@ def id_mapping(ctx, input, column, sep, chunksize, auto_assign, sleep):
             if sleep:
                 tsleep(uniform(1, 10))
 
+
 @Interface.command('check-muta-conflict')
 @click.option('--chunksize', type=int, default=100000)
 @click.pass_context
@@ -305,7 +306,7 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
             sqlite_api.sync_insert(sqlite_api.ResidueMappingRange, res_mapping_df.to_dict('records'))
         console.log(f'Done: {done}')
         if sleep:
-            tsleep(uniform(0, 3))
+            tsleep(uniform(0, 2))
 
 
 @Interface.command('insert-sele-mapping')
@@ -383,6 +384,52 @@ def insert_iso_range(ctx, chunksize):
         console.log(f'Done: {len(res)+chunksize*i}')
 
 
+def pi2records(dfrm: DataFrame, usecols: list, pair_cols: list):
+    yield from yield_interact_records(dfrm[usecols[:13]].rename(columns=dict(zip(usecols[6:13], pair_cols))))
+    yield from yield_interact_records(dfrm[usecols[:6]+usecols[13:]].rename(columns=dict(zip(usecols[13:], pair_cols))))
+
+def yield_interact_records(dfrm: DataFrame):
+    if 'UniProt' in dfrm.columns:
+        for row in dfrm.itertuples(index=False):
+            for beg, end in eval(row.interface_range):
+                yield dict(UniProt=row.UniProt, pdb_id=row.pdb_id, entity_id=row.entity_id, 
+                           struct_asym_id=row.struct_asym_id, chain_id=row.chain_id, 
+                           assembly_id=row.assembly_id, model_id=row.model_id,
+                           struct_asym_id_in_assembly=row.struct_asym_id_in_assembly,
+                           interface_id=row.interface_id, css=row.css,
+                           i_select_tag=row.i_select_tag, i_select_rank=row.i_select_rank,
+                           pdb_beg=beg, pdb_end=end)
+    else:
+        for row in dfrm.itertuples(index=False):
+            for beg, end in eval(row.interface_range):
+                yield dict(UniProt='NaN', pdb_id=row.pdb_id, entity_id=row.entity_id,
+                           struct_asym_id=row.struct_asym_id, chain_id=row.chain_id,
+                           assembly_id=row.assembly_id, model_id=row.model_id,
+                           struct_asym_id_in_assembly=row.struct_asym_id_in_assembly,
+                           interface_id=row.interface_id, css=row.css,
+                           i_select_tag=row.i_select_tag, i_select_rank=row.i_select_rank,
+                           pdb_beg=beg, pdb_end=end)
+
+@Interface.command('insert-interaction')
+@click.option('-i', '--input', type=click.Path())
+@click.option('--chunksize', type=int, help="the chunksize parameter", default=5000)
+@click.option('--ppi/--no-ppi', is_flag=True, default=True)
+@click.pass_context
+def insert_interaction(ctx, input, chunksize, ppi):
+    custom_db = ctx.obj['custom_db']
+    common_cols = ['pdb_id', 'assembly_id', 'interface_id', 'css', 'i_select_tag', 'i_select_rank']
+    pair_cols = ['entity_id', 'struct_asym_id', 'chain_id', 'model_id', 'struct_asym_id_in_assembly', 'interface_range', 'UniProt']
+    usecols = common_cols + [col+'_1' for col in pair_cols] + [col+'_2' for col in pair_cols]
+    df_usecols = usecols if ppi else usecols[:-1]
+    dfs = read_csv(input, sep='\t', keep_default_na=False, na_values=[''], chunksize=chunksize, usecols=df_usecols)
+    done: int = 0
+    with console.status("[bold green]inserting..."):
+        for df in dfs:
+            custom_db.sync_insert(custom_db.PI, list(pi2records(df[df.i_select_rank.ne(-1)], usecols, pair_cols)))
+            done += df.shape[0]
+    console.log(f'Done: {done}')
+
+
 @Interface.command('export-mutation-mapping')
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('--sele/--no-sele', is_flag=True, default=True)
@@ -436,6 +483,67 @@ def export_residue_remapping(ctx, with_id, sele, output):
             query = query.format('MIN(SelectedMappingMeta.after_select_rank)', 'GROUP BY ResidueMappingRange.UniProt, Mutation.Pos, Mutation.Alt')
         else:
             query = query.format('SelectedMappingMeta.after_select_rank', '')
+    with console.status("[bold green]query..."):
+        dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
+        for df in dfs:
+            if df.shape[0] == 0:
+                continue
+            df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
+    console.log(f'result saved in {output_path}')
+
+
+@Interface.command('export-interaction-mapping')
+@click.option('--with_id/--no-with_id', is_flag=True, default=False)
+@click.option('-o', '--output', type=str, help='filename of output file')
+@click.pass_context
+def export_interface_mapping(ctx, with_id, output):
+    output_path = ctx.obj['folder']/output
+    query = """
+        SELECT DISTINCT 
+                    %s
+                    CASE IDMapping.is_canonical
+                        WHEN 1
+                        THEN IDMapping.Entry
+                        ELSE IDMapping.isoform
+                    END edUniProt, Mutation.Ref, Mutation.Pos, Mutation.Alt,
+                    Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg AS residue_number,
+                    Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg AS author_residue_number,
+                    ResidueMappingRange.author_insertion_code,
+                    ResidueMappingRange.observed_ratio,
+                    ResidueMappingRange.pdb_id,
+                    ResidueMappingRange.entity_id,
+                    ResidueMappingRange.struct_asym_id,
+                    ResidueMappingRange.chain_id,
+                    PI.assembly_id,
+                    PI.model_id,
+                    PI.struct_asym_id_in_assembly,
+                    PI.interface_id,
+                    PI.css,
+                    PI.i_select_tag,
+                    PI.i_select_rank,
+                    (Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg >= PI.pdb_beg AND Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg <= PI.pdb_end) AS is_interface_residue
+        FROM Mutation,ResidueMappingRange
+            INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
+            INNER JOIN UniProtSeq ON UniProtSeq.isoform = IDMapping.isoform 
+                                AND UniProtSeq.Pos = Mutation.Pos 
+                                AND UniProtSeq.Ref = Mutation.Ref
+            INNER JOIN SelectedMappingMeta ON SelectedMappingMeta.UniProt = ResidueMappingRange.UniProt
+                                        AND SelectedMappingMeta.pdb_id = ResidueMappingRange.pdb_id
+                                        AND SelectedMappingMeta.struct_asym_id = ResidueMappingRange.struct_asym_id
+            INNER JOIN PI ON PI.UniProt = ResidueMappingRange.UniProt
+                         AND PI.pdb_id = ResidueMappingRange.pdb_id
+                         AND PI.struct_asym_id = ResidueMappingRange.struct_asym_id
+        WHERE ResidueMappingRange.UniProt = edUniProt
+        AND Mutation.Pos >= ResidueMappingRange.unp_beg
+        AND Mutation.Pos <= ResidueMappingRange.unp_end
+        AND ResidueMappingRange.conflict_code IS NULL
+        AND ResidueMappingRange.observed_ratio > 0
+        AND (ResidueMappingRange.residue_name = '' OR ResidueMappingRange.residue_name IN (SELECT three_letter_code FROM AAThree2one))
+        AND SelectedMappingMeta.select_rank != -1
+        ;
+    """
+    query = query % ('Mutation.ftId,' if with_id else '')
     with console.status("[bold green]query..."):
         dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
         for df in dfs:
