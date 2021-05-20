@@ -3653,7 +3653,7 @@ class SIFTS(PDB):
         df['resource'] = resource_col
         return df[['pdb_id', 'entity_id', 'struct_asym_id', 'chain_id', 'resource', resource_col, 'start', 'end']].rename(columns={
             resource_col: 'resource_id',
-            'start': 'pdb_start',
+            'start': 'pdb_beg',
             'end': 'pdb_end'})
 
     @staticmethod
