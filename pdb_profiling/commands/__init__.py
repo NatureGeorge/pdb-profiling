@@ -108,7 +108,7 @@ class CustomDB(SqliteDB):
             chain_id = orm.String(max_length=10)
             resource = orm.String(max_length=100, primary_key=True)
             resource_id = orm.String(max_length=200, primary_key=True)
-            pdb_start = orm.Integer()
+            pdb_beg = orm.Integer()
             pdb_end = orm.Integer()
 
         class UniProtAnnotation(orm.Model):
@@ -118,7 +118,7 @@ class CustomDB(SqliteDB):
             UniProt = orm.String(max_length=50, primary_key=True)
             resource = orm.String(max_length=100, primary_key=True)
             resource_id = orm.String(max_length=200, primary_key=True)
-            unp_start = orm.Integer()
+            unp_beg = orm.Integer()
             unp_end = orm.Integer()
         
         class SMRModel(orm.Model):
@@ -145,7 +145,29 @@ class CustomDB(SqliteDB):
             Ref = orm.String(max_length=3, primary_key=True)
             Pos = orm.Integer(primary_key=True)
             Alt = orm.String(max_length=3, primary_key=True)
-        
+
+
+        class PI(orm.Model):
+            __tablename__ = 'PI'
+            __metadata__ = self.metadata
+            __database__ = self.database
+
+            UniProt = orm.String(max_length=50, primary_key=True)
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            chain_id = orm.String(max_length=10)
+            assembly_id = orm.Integer(primary_key=True)
+            model_id = orm.Integer()
+            struct_asym_id_in_assembly = orm.String(max_length=10, primary_key=True)
+            interface_id = orm.Integer(primary_key=True)
+            css = orm.Float()
+            i_select_tag = orm.Boolean()
+            i_select_rank = orm.Integer()
+            pdb_beg = orm.Integer()
+            pdb_end = orm.Integer()
+
+
         self.AAThree2one = AAThree2one
         self.UniProtSeq = UniProtSeq
         self.Mutation = Mutation
@@ -156,3 +178,4 @@ class CustomDB(SqliteDB):
         self.ResidueAnnotation = ResidueAnnotation
         self.SMRModel = SMRModel
         self.MappedMutation = MappedMutation
+        self.PI = PI

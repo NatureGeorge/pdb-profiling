@@ -13,7 +13,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.3.2',
+    version='0.3.3',
 
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
@@ -28,7 +28,7 @@ setup(
         'pandas>=1.1.5',
         'numpy>=1.19.2',
         'textdistance>=4.2.0',
-        'databases[sqlite]>=0.3.2',
+        'databases[sqlite]>=0.4.3',
         'rich>=9.5.0',
         'orm>=0.1.5',
         'scikit-learn>=0.23.2',

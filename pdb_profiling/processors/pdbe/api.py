@@ -401,10 +401,7 @@ class PDBeDecoder(object):
             for record in records:
                 flatten_dict(record, 'structure_1')
                 flatten_dict(record, 'structure_2')
-            flatten_dict(data[pdb], 'page_title', False)
-            cols = sorted(i for i in data[pdb].keys()
-                          if i != 'interfaceentries')
-            yield records, cols, tuple(data[pdb][col] for col in cols)
+            yield records, ('pdb_id', 'assembly_id'), (pdb, data[pdb]['page_title']['assemble_code'])
 
     @staticmethod
     @dispatch_on_set('api/pisa/interfacedetail/')

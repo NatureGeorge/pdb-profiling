@@ -20,13 +20,12 @@ def test_init():
     Interactome3D.pipe_init_interaction_meta().result()
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(300)
 def test_single_select():
     # SIFTS.chain_filter, SIFTS.entry_filter = '', ''
     demo = SIFTS('P21359-2')
     demo.pipe_base().then(SIFTS.double_check_conflict_and_range).result()
     demo.pipe_scheduled_ranged_map_res_df().result()
-    demo.pipe_select_ho(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_he(run_as_completed=True, progress_bar=track).result()
     demo.pipe_select_ho_iso(run_as_completed=True).result()
     demo.pipe_select_else(func='pipe_protein_ligand_interface', css_cutoff=0.5, run_as_completed=True).result()
@@ -80,7 +79,7 @@ def test_other_api():
     PDBAssembly('1a01/1').add_args().assembly_summary
 
 
-@pytest.mark.timeout(70)
+@pytest.mark.timeout(80)
 def test_pdbekdb_self_annotation():
     """from pdb_profiling.processors.pdbe.api import PDBeKBAnnotations
     PDBeKBAnnotations.root = PDBeKBAnnotations.ftp_root
@@ -96,7 +95,7 @@ def test_fetch_residue_mapping():
     pdb_ob.fetch_residue_mapping(entity_id=1, start=252, end=255).result()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(80)
 def test_rcsb_data_api():
     pdb_id = '3hl2'
     ob = PDB(pdb_id)
@@ -128,7 +127,7 @@ def test_other_SIFTS_func():
     try:
         SIFTS('P21359').fetch_from_pdbe_api('api/mappings/all_isoforms/'
             ).then(SIFTS.to_dataframe
-            ).then(SIFTS.check_pdb_status
+            #).then(SIFTS.check_pdb_status
             ).then(SIFTS.check_identity
             ).then(SIFTS.reformat
             ).then(SIFTS.deal_with_identical_entity_seq).result()
