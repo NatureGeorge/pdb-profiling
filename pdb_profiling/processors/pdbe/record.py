@@ -3149,14 +3149,13 @@ class SIFTS(PDB):
 
     @staticmethod
     def select_mo(sele_df, OC_cutoff=0.2, sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col:bool=False, ascending=False, allow_mask=None):
-        sele_df = sele_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
         sele_df['select_tag'] = False
         sele_df['select_rank'] = -1
         if infer_new_col:
             for col in sort_cols:
                 if (col not in sele_df.columns) and (col[1:] in sele_df.columns) and (col[0] == '-'):
                     sele_df[col] = -sele_df[col[1:]]
-        
+        sele_df = sele_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
         if allow_mask is True:
             allow_sele_df = sele_df
         elif allow_mask is None:
@@ -3522,9 +3521,9 @@ class SIFTS(PDB):
         return DataFrame(j for j in res if j is not None)
 
     @unsync
-    async def pipe_scheduled_ranged_map_res_df(self, chunksize=100, func_for_unp='pipe_select_mo', default_mask=True, with_sele_cols_for_unp=False, **kwargs):
+    async def pipe_scheduled_ranged_map_res_df(self, chunksize=100, func_for_this='pipe_select_mo', default_mask=True, with_sele_cols_for_unp=False, **kwargs):
         if self.source == 'UniProt':
-            df = await getattr(self, func_for_unp)(**kwargs)
+            df = await getattr(self, func_for_this)(**kwargs)
             if default_mask:
                 records = df[df.select_rank.ne(-1)].to_records()
             else:
@@ -3542,7 +3541,7 @@ class SIFTS(PDB):
                         struct_asym_id=row.struct_asym_id) for row in records[index:index+chunksize]]
             res.extend([await i for i in tasks])
         ret = concat(res, sort=False, ignore_index=True)
-        if with_sele_cols_for_unp and (self.source == 'UniProt') and (func_for_unp == 'pipe_select_mo'):
+        if with_sele_cols_for_unp and (self.source == 'UniProt') and (func_for_this == 'pipe_select_mo'):
             ret = ret.merge(df[['UniProt','pdb_id','struct_asym_id','bs_score','select_tag','select_rank','after_select_rank']], how='left')
             assert ret.select_tag.isnull().sum() == 0
         return ret

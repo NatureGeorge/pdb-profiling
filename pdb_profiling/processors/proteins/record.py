@@ -12,13 +12,11 @@ from pdb_profiling.processors.proteins import ProteinsDB
 from pdb_profiling.log import Abclog
 from pdb_profiling.warnings import PossibleObsoletedUniProtWarning, SequenceConflictWarning
 from pdb_profiling.utils import init_folder_from_suffix, init_folder_from_suffixes, a_seq_reader, a_load_json, init_semaphore, unsync_wrap, unsync_run, flatten_dict
-from re import compile as re_compile
 from pathlib import Path
-from typing import Union, Optional, Tuple, Iterable, Callable, List
+from typing import Union, Optional, Iterable, Callable, List
 from unsync import unsync
 from asyncio import as_completed
-from pandas import DataFrame, concat
-from collections import OrderedDict
+from pandas import DataFrame
 from warnings import warn
 from orm.models import NoMatch
 
@@ -130,7 +128,11 @@ class Identifier(Abclog, IdentifierBase):
                 warn(repr(self), PossibleObsoletedUniProtWarning)
                 return
             res = dict(zip(default_tables, res))
-            return res[table_name]
+            ret = res[table_name]
+            if ret is None:
+                return DataFrame([])
+            else:
+                return ret
         else:
             if columns == '*':
                 return DataFrame(
@@ -351,9 +353,11 @@ class Identifier(Abclog, IdentifierBase):
     @unsync
     async def unp_is_canonical(self):
         res = await self.query_from_DB_with_unp('ALTERNATIVE_PRODUCTS', columns='isoform,sequenceStatus')
+        if res is None:
+            return
         if self.identifier_suffix == '':
             return True
-        if res is None or res.shape[0] == 0:
+        if res.shape[0] == 0:
             if self.identifier_suffix != '1':
                 self.logger.warning(f'Possbile invalid isoform identifier {self.raw_identifier}')
             return True
@@ -379,6 +383,8 @@ class Identifier(Abclog, IdentifierBase):
     async def map2unp(self, **kwargs):
         if self.source == 'UniProt':
             is_canonical = await self.unp_is_canonical()
+            if is_canonical is None:
+                return self.raw_identifier, 'NaN', 'NaN', False
             return self.raw_identifier, self.identifier, (self.identifier if is_canonical else self.raw_identifier), is_canonical
         try:
             res = await self.map2unp_from_DB()

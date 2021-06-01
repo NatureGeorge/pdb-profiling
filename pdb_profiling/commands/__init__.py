@@ -35,6 +35,31 @@ class CustomDB(SqliteDB):
             Pos = orm.Integer(primary_key=True)
             Alt = orm.String(max_length=3, primary_key=True)
 
+        class PDBMutation(orm.Model):
+            __tablename__ = 'PDBMutation'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(allow_null=True)
+            chain_id = orm.String(max_length=10, allow_null=True)
+            struct_asym_id = orm.String(max_length=10, allow_null=True)
+            Ref = orm.String(max_length=1, primary_key=True)
+            Alt = orm.String(max_length=1, primary_key=True)
+            residue_number = orm.Integer(primary_key=True)
+
+        class PDBAuthMutation(orm.Model):
+            __tablename__ = 'PDBAuthMutation'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=4, primary_key=True)
+            entity_id = orm.Integer(allow_null=True)
+            chain_id = orm.String(max_length=10, allow_null=True)
+            struct_asym_id = orm.String(max_length=10, allow_null=True)
+            Ref = orm.String(max_length=1, primary_key=True)
+            Alt = orm.String(max_length=1, primary_key=True)
+            author_residue_number = orm.Integer(primary_key=True)
+            author_insertion_code = orm.String(primary_key=True, max_length=3, allow_blank=True, default='')
+
         class IDMapping(orm.Model):
             __tablename__ = 'IDMapping'
             __metadata__ = self.metadata
@@ -179,3 +204,5 @@ class CustomDB(SqliteDB):
         self.SMRModel = SMRModel
         self.MappedMutation = MappedMutation
         self.PI = PI
+        self.PDBMutation = PDBMutation
+        self.PDBAuthMutation = PDBAuthMutation
