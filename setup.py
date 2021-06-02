@@ -14,7 +14,7 @@ with open("README.md", "rt") as f:
 setup(
     name="pdb_profiling",
     version='0.3.3',
-
+    include_package_data=True,
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[

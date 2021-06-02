@@ -686,14 +686,19 @@ def flat_dict_in_df(dfrm:DataFrame, targetCol:Union[str, Series], cols:List):
             dfrm[targetCol].apply(lambda x: list(x[col] for col in cols)).to_list(),
             columns=new_cols)
         return dfrm.drop(columns=[targetCol])
-    
 
-SEQ_DICT = {
+
+class AAThree2One(dict):
+    def __missing__(self, key):
+        return 'X'
+
+aa_three2one = AAThree2One({
     "GLY": "G", "ALA": "A", "SER": "S", "THR": "T", "CYS": "C", "VAL": "V", "LEU": "L",
     "ILE": "I", "MET": "M", "PRO": "P", "PHE": "F", "TYR": "Y", "TRP": "W", "ASP": "D",
-    "GLU": "E", "ASN": "N", "GLN": "Q", "HIS": "H", "LYS": "K", "ARG": "R"}
+    "GLU": "E", "ASN": "N", "GLN": "Q", "HIS": "H", "LYS": "K", "ARG": "R"})
 
-standardAA = list(SEQ_DICT.keys())
+
+standardAA = list(aa_three2one.keys())
 
 standardNu = ['DA', 'DT', 'DC', 'DG', 'DI', 'A', 'U', 'C', 'G', 'I']
 

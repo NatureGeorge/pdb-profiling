@@ -26,6 +26,19 @@ class CustomDB(SqliteDB):
             Pos = orm.Integer(primary_key=True)
             Ref = orm.String(max_length=1, primary_key=True)
         
+        """class PDBSeq(orm.Model):
+            __tablename__ = 'PDBSeq'
+            __metadata__ = self.metadata
+            __database__ = self.database
+            pdb_id = orm.String(max_length=20, primary_key=True)
+            entity_id = orm.Integer(primary_key=True)
+            chain_id = orm.String(max_length=10)
+            struct_asym_id = orm.String(max_length=10, primary_key=True)
+            residue_number = orm.Integer(primary_key=True)
+            author_residue_number = orm.Integer(primary_key=True)
+            author_insertion_code = orm.String(primary_key=True, max_length=3, allow_blank=True, default='')
+            Ref = orm.String(max_length=1, primary_key=True)"""
+
         class Mutation(orm.Model):
             __tablename__ = 'Mutation'
             __metadata__ = self.metadata
@@ -206,3 +219,4 @@ class CustomDB(SqliteDB):
         self.PI = PI
         self.PDBMutation = PDBMutation
         self.PDBAuthMutation = PDBAuthMutation
+        #self.PDBSeq = PDBSeq

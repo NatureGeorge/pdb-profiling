@@ -36,7 +36,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  select_range, expand_interval,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader, dumpsParams, get_str_dict_len, SEQ_DICT)
+                                 a_seq_reader, dumpsParams, get_str_dict_len, aa_three2one)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -1308,7 +1308,7 @@ class PDB(Base):
             res_map_df_full.author_insertion_code.ne('') |
             res_map_df_full.multiple_conformers.notnull() |
             res_map_df_full.observed_ratio.lt(1) |
-            (~res_map_df_full.residue_name.isin(SEQ_DICT)) |
+            (~res_map_df_full.residue_name.isin(aa_three2one)) |
             res_map_df_full.conflict_code.notnull())
         demo_record = res_map_df_full.iloc[0]
         if (~mask).all():

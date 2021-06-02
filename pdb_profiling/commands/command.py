@@ -7,7 +7,7 @@
 from pdb_profiling import default_config
 from pdb_profiling.commands import CustomDB
 from pdb_profiling.processors import Identifiers, Identifier, SIFTSs, SIFTS, PDB, PDBs
-from pdb_profiling.utils import unsync_run, SEQ_DICT
+from pdb_profiling.utils import unsync_run, aa_three2one, a_concat
 from pdb_profiling.fetcher.webfetch import ensure
 import click
 from unsync import unsync
@@ -46,7 +46,7 @@ def Interface(ctx, folder, custom_db, dropall, initaa):
     default_config(folder)
     ctx.obj['custom_db'] = CustomDB("sqlite:///%s" % (folder/'local_db'/custom_db), dropall)
     if initaa:
-        ctx.obj['custom_db'].sync_insert(ctx.obj['custom_db'].AAThree2one, [dict(three_letter_code=three, one_letter_code=one) for three, one in SEQ_DICT.items()])
+        ctx.obj['custom_db'].sync_insert(ctx.obj['custom_db'].AAThree2one, [dict(three_letter_code=three, one_letter_code=one) for three, one in aa_three2one.items()])
 
 
 @Interface.command("init")
@@ -588,7 +588,15 @@ def export_residue_remapping(ctx, auth, output):
         for df in dfs:
             if df.shape[0] == 0:
                 continue
-            df.to_csv(output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
+            reslist = PDBs(frozenset(df.pdb_id)).fetch(
+                'fetch_from_pdbe_api',
+                api_suffix='api/pdb/entry/residue_listing/',
+                then_func=PDB.to_dataframe).run().then(a_concat).result()
+            newdf = df.merge(reslist, how='left')
+            newdf['pdb_one_letter_code'] = newdf.residue_name.map(aa_three2one)
+            newdf['unp_one_letter_code'] = newdf.apply(lambda x: x['conflict_code'] if isinstance(x['conflict_code'], str) and x['conflict_code'] != '' else x['pdb_one_letter_code'], axis=1)
+            newdf.drop(columns=['conflict_code']).to_csv(
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
 
 @Interface.command('export-interaction-mapping')
