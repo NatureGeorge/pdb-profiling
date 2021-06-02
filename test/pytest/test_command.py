@@ -47,7 +47,7 @@ def test_command2():
                  "sifts-mapping --func pipe_base --autotype from_PDBAuthMutation -o task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
                  "residue-mapping -i test/pytest/demo_dir/task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
                  "export-pdb-mutation-mapping --auth -o task_20210602_pdb2unp_RESIDUE-MAPPING.tsv",
-                 "insert-mutation -i unp2pdb.csv --sep , --usecols ftId,Ref,Pos,Alt id-mapping check-muta-conflict",
+                 "insert-mutation -i test/pytest/data/unp2pdb.csv --sep , --usecols ftId,Ref,Pos,Alt id-mapping check-muta-conflict",
                  "sifts-mapping --func pipe_base -o task_20210602_unp2pdb_SIFTS-MAPPING.tsv residue-mapping -i test/pytest/demo_dir/task_20210602_unp2pdb_SIFTS-MAPPING.tsv",
                  #pypath=$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())')
                  #sqlite3 - header - cmd ".mode tabs" ./local_db/task_20210602.db < $pypath/pdb_profiling/sql/export_mutation_mapping_all.sql > task_20210602_unp2pdb_RESIDUE-MAPPING.tsv
