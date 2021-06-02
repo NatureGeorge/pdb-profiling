@@ -7,7 +7,7 @@
 from click.testing import CliRunner
 from pdb_profiling.commands.command import Interface
 
-def test_command():
+def test_command1():
     runner = CliRunner()
     dargs = ['--folder', 'test/pytest/demo_dir']
     for task in ('insert-mutation --input test/pytest/data/mutation.tsv --usecols Alt,Pos,Ref,ftId',
@@ -37,4 +37,20 @@ def test_command():
                  'export-interaction-mapping -o e_interaction_resmap.tsv',
                  ):
         result = runner.invoke(Interface, dargs+task.split(' ') if not isinstance(task, list) else dargs+task)
+        assert result.exit_code == 0, str(task)
+
+
+def test_command2():
+    runner = CliRunner()
+    dargs = ['--folder', 'test/pytest/demo_dir', '--custom_db', 'pdb2unp_unp2pdb.db']
+    for task in ("insert-pdb-mutation -i test/pytest/data/pdb2unp.csv --sep ',' --usecols 'pdb_id,Ref,Alt,author_residue_number,author_insertion_code' --auth",
+                 "sifts-mapping --func pipe_base --autotype from_PDBAuthMutation -o task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
+                 "residue-mapping -i test/pytest/demo_dir/task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
+                 "export-pdb-mutation-mapping --auth -o task_20210602_pdb2unp_RESIDUE-MAPPING.tsv",
+                 "insert-mutation -i unp2pdb.csv --sep ',' --usecols 'ftId,Ref,Pos,Alt' id-mapping check-muta-conflict",
+                 "sifts-mapping --func pipe_base -o task_20210602_unp2pdb_SIFTS-MAPPING.tsv residue-mapping -i test/pytest/demo_dir/task_20210602_unp2pdb_SIFTS-MAPPING.tsv",
+                 #pypath=$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())')
+                 #sqlite3 - header - cmd ".mode tabs" ./local_db/task_20210602.db < $pypath/pdb_profiling/sql/export_mutation_mapping_all.sql > task_20210602_unp2pdb_RESIDUE-MAPPING.tsv
+                 ):
+        result = runner.invoke(Interface, dargs+task.split(' '))
         assert result.exit_code == 0, str(task)

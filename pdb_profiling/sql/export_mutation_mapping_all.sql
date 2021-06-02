@@ -3,7 +3,7 @@ SELECT DISTINCT
                         WHEN 1
                         THEN IDMapping.Entry
                         ELSE IDMapping.isoform
-                    END edUniProt,Mutation.Ref, Mutation.Pos, Mutation.Alt,
+                    END UniProt,Mutation.Ref, Mutation.Pos, Mutation.Alt,
                     Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.pdb_beg AS residue_number,
                     Mutation.Pos - ResidueMappingRange.unp_beg + ResidueMappingRange.auth_pdb_beg AS author_residue_number,
                     ResidueMappingRange.author_insertion_code,
@@ -36,7 +36,7 @@ SELECT DISTINCT
             INNER JOIN IDMapping ON Mutation.ftId = IDMapping.ftId
             INNER JOIN UniProtSeq ON UniProtSeq.isoform = IDMapping.isoform 
                                 AND UniProtSeq.Pos = Mutation.Pos 
-        WHERE ResidueMappingRange.UniProt = edUniProt
+        WHERE ResidueMappingRange.UniProt = UniProt
         AND Mutation.Pos >= ResidueMappingRange.unp_beg
         AND Mutation.Pos <= ResidueMappingRange.unp_end
         ;
