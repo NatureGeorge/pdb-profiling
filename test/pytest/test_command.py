@@ -43,7 +43,7 @@ def test_command1():
 def test_command2():
     runner = CliRunner()
     dargs = ['--folder', 'test/pytest/demo_dir', '--custom_db', 'pdb2unp_unp2pdb.db']
-    for task in ("insert-pdb-mutation -i test/pytest/data/pdb2unp.csv --sep , --usecols pdb_id,Ref,Alt,author_residue_number,author_insertion_code --auth",
+    for task in ("insert-pdb-mutation -i test/pytest/data/pdb2unp.csv --sep , --usecols pdb_id,chain_id,Ref,Alt,author_residue_number,author_insertion_code --auth",
                  "sifts-mapping --func pipe_base --autotype from_PDBAuthMutation -o task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
                  "residue-mapping -i test/pytest/demo_dir/task_20210602_pdb2unp_SIFTS-MAPPING.tsv",
                  "export-pdb-mutation-mapping --auth -o task_20210602_pdb2unp_RESIDUE-MAPPING.tsv",

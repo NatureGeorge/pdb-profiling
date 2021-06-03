@@ -12,7 +12,6 @@ SELECT DISTINCT
                     ResidueMappingRange.entity_id,
                     ResidueMappingRange.struct_asym_id,
                     ResidueMappingRange.chain_id,
-                    ResidueMappingRange.observed_ratio,
                     (CASE
                         WHEN ResidueMappingRange.residue_name == ''
                         THEN (SELECT three_letter_code FROM AAThree2one WHERE one_letter_code == UniProtSeq.Ref)
