@@ -1723,17 +1723,25 @@ class PDBAssembly(PDB):
             range_check_yes = range_check.apply(bool)
             check_m = range_check_yes | (interfacelist_df['structure_1.original_range']=='{-}')
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
-            to_df_index = interfacelist_df[range_check_yes].index
-            interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
-            interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'struct_asym_id_in_assembly_1'] = interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'structure_1.range']
+            if range_check_yes.any():
+                to_df_index = interfacelist_df[range_check_yes].index
+                interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+            range_check_no = ~range_check_yes
+            if range_check_no.any():
+                no_index = interfacelist_df[range_check_no].index
+                interfacelist_df.loc[no_index, 'struct_asym_id_in_assembly_1'] = interfacelist_df.loc[no_index, 'structure_1.range']
             #
             range_check = interfacelist_df['structure_2.range'].apply(cls.struct_range_pattern.fullmatch)
             range_check_yes = range_check.apply(bool)
             check_m = range_check_yes | (interfacelist_df['structure_2.original_range']=='{-}')
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
-            to_df_index = interfacelist_df[range_check_yes].index
-            interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_2', 'auth_seq_id_2']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
-            interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'struct_asym_id_in_assembly_2'] = interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'structure_2.range']
+            if range_check_yes.any():
+                to_df_index = interfacelist_df[range_check_yes].index
+                interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_2', 'auth_seq_id_2']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+            range_check_no = ~range_check_yes
+            if range_check_no.any():
+                no_index = interfacelist_df[range_check_no].index
+                interfacelist_df.loc[no_index, 'struct_asym_id_in_assembly_2'] = interfacelist_df.loc[no_index, 'structure_2.range']
         interfacelist_df[['author_residue_number_1', 'author_insertion_code_1']] = interfacelist_df.auth_seq_id_1.apply(cls.fix_auth_seq_id).apply(Series)
         interfacelist_df[['author_residue_number_2', 'author_insertion_code_2']] = interfacelist_df.auth_seq_id_2.apply(cls.fix_auth_seq_id).apply(Series)
         return interfacelist_df.drop(columns=['auth_seq_id_1', 'auth_seq_id_2'])
