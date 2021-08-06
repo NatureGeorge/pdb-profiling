@@ -195,6 +195,89 @@ cpdef list overlap_range(object obs_range, object unk_range):
     return sorted(ret, key=itemgetter(0))
 
 
+cpdef tuple overlap_range_2(object obs_range, object pdb_range, object unp_range):
+    cdef:
+        int start1, start2, start3, end1, end2, end3, start_a, start_b, end_a, end_b
+        bint sl, sr, el, er, s_in, e_in, ini, cov
+        list ret_a = []
+        list ret_b = []
+    obs_range = convert_range(obs_range)
+    pdb_range = convert_range(pdb_range)
+    unp_range = convert_range(unp_range)
+    
+    for start1, end1 in obs_range:
+        for (start2, end2),(start3, end3) in zip(pdb_range, unp_range):
+            sl = start2 >= start1
+            sr = start2 <= end1
+            el = end2 >= start1
+            er = end2 <= end1
+            s_in = sl and sr
+            e_in = el and er
+            ini = s_in or e_in
+            cov = (not sl) and (not er)
+            if s_in:
+                start_a = start2
+                start_b = start3
+            else:
+                start_a = start1
+                start_b = start1 - start2 + start3
+            if e_in:
+                end_a = end2
+                end_b = end3
+            else:
+                end_a = end1
+                end_b = end1 - end2 + end3
+            if ini or cov:
+                ret_a.append((start_a, end_a))
+                ret_b.append((start_b, end_b))
+    return ret_a, ret_b
+
+
+cpdef tuple overlap_range_3(object unp_range_1, object unp_range_2, object pdb_range_1, object pdb_range_2):
+    cdef:
+        int start1, start2, start3, start4, end1, end2, end3, end4, start_a, start_b, start_c, end_a, end_b, end_c
+        bint sl, sr, el, er, s_in, e_in, ini, cov
+        list ret_unp = []
+        list ret_pdb_1 = []
+        list ret_pdb_2 = []
+    unp_range_1 = convert_range(unp_range_1)
+    unp_range_2 = convert_range(unp_range_2)
+    pdb_range_1 = convert_range(pdb_range_1)
+    pdb_range_2 = convert_range(pdb_range_2)
+    
+    for (start1, end1), (start4, end4) in zip(unp_range_1, pdb_range_1):
+        for (start2, end2),(start3, end3) in zip(unp_range_2, pdb_range_2):
+            sl = start2 >= start1
+            sr = start2 <= end1
+            el = end2 >= start1
+            er = end2 <= end1
+            s_in = sl and sr
+            e_in = el and er
+            ini = s_in or e_in
+            cov = (not sl) and (not er)
+            if s_in:
+                start_a = start2
+                start_b = start3
+                start_c = start4
+            else:
+                start_a = start1
+                start_b = start1 - start2 + start3
+                start_c = start1 - start2 + start4
+            if e_in:
+                end_a = end2
+                end_b = end3
+                end_c = end4
+            else:
+                end_a = end1
+                end_b = end1 - end2 + end3
+                end_c = end1 - end2 + end4
+            if ini or cov:
+                ret_unp.append((start_a, end_a))
+                ret_pdb_2.append((start_b, end_b))
+                ret_pdb_1.append((start_c, end_c))
+    return ret_unp, ret_pdb_1, ret_pdb_2
+
+
 cpdef tuple outside_range(object pdb_range, int seqres_len):
     pdb_range = convert_range(pdb_range)
     cdef:

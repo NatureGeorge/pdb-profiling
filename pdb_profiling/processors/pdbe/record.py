@@ -482,14 +482,25 @@ class PDB(Base):
     async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
         if isawaitable(path):
             path = await path
+        cols = ('_atom_site.type_symbol', '_atom_site.label_atom_id',
+                '_atom_site.label_comp_id', '_atom_site.label_seq_id',
+                '_atom_site.label_asym_id', '_atom_site.Cartn_x',
+                '_atom_site.Cartn_y', '_atom_site.Cartn_z')
         async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.read()
-            mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
+            handle = await file_io.readlines()
+            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
-        cols = [key for key in mmcif_dict.keys() if key.startswith('_atom_site.')]
-        dfrm = DataFrame(list(zip(*[mmcif_dict[col] for col in cols])), columns=cols)
+        dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
         return dfrm
+
+    @staticmethod
+    def get_coordinates(x):
+        return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
+
+    @classmethod
+    def get_coordinates_dict(cls, df):
+        return df.groupby(['_atom_site.label_asym_id', '_atom_site.label_seq_id']).apply(cls.get_coordinates).to_dict()
 
     @classmethod
     @unsync
@@ -2996,8 +3007,6 @@ class SIFTS(PDB):
             except TypeError:
                 raise AssertionError(f"{pdb_id} {struct_asym_id} {residue_number}")
         df = df[df['_atom_site.label_comp_id'].ne('HOH') & df['_atom_site.type_symbol'].ne('H')].reset_index(drop=True)
-        for col in ('_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z'):
-            df[col] = df[col].astype(float)
         '''
         # for some ligand | carbohydrate
         df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(int)
@@ -3010,14 +3019,6 @@ class SIFTS(PDB):
             distances, _ = nbrs.kneighbors(coordinates_dict[key])
             total += cls.exp_score(distances.min(), d)
         return total
-
-    @staticmethod
-    def get_coordinates(x):
-        return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy()
-
-    @classmethod
-    def get_coordinates_dict(cls, df):
-        return df.groupby(['_atom_site.label_asym_id', '_atom_site.label_seq_id']).apply(cls.get_coordinates).to_dict()
     
     @staticmethod
     def exp_score(x, d):

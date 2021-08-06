@@ -386,6 +386,8 @@ class Identifier(Abclog, IdentifierBase):
             if is_canonical is None:
                 return self.raw_identifier, 'NaN', 'NaN', False
             return self.raw_identifier, self.identifier, (self.identifier if is_canonical else self.raw_identifier), is_canonical
+        elif self.source not in ('RefSeq', 'Ensembl'):
+            res = None
         try:
             res = await self.map2unp_from_DB()
         except AssertionError:
