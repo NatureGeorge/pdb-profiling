@@ -173,7 +173,7 @@ class SMR(Abclog):
             df.drop(columns=['qmean']),
             df.qmean.apply(lambda x: json.loads(x) if not isna(x) else default_qmean).apply(Series)), axis=1)
         ret_cols = ret.columns
-        for col in ('found_by', 'ligand_chains') + tuple(default_qmean.keys()):
+        for col in ('in_complex_with', 'found_by', 'ligand_chains') + tuple(default_qmean.keys()):
             if col not in ret_cols:
                 ret[col] = nan
         return ret

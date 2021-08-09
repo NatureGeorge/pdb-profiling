@@ -169,17 +169,30 @@ def add_range(object left, object right):
 
 
 cpdef list overlap_range(object obs_range, object unk_range):
+    """
+    * assumption: segment does not overlap with each other given a segment set
+    * feature: overlap algorithm between two segment sets require no order in each segment set
+    """
     if isinstance(unk_range, float) or unk_range is None:
         return []
     cdef:
+        size_t index_obs, index_unk
+        int[2] seg_obs, seg_unk
         int start1, start2, end1, end2, start, end
         bint sl, sr, el, er, s_in, e_in, ini, cov
         list ret = []
     obs_range = convert_range(obs_range)
     unk_range = convert_range(unk_range)
+    cdef size_t unk_len = len(unk_range)
     
-    for start1, end1 in obs_range:
-        for start2, end2 in unk_range:
+    for index_obs in range(len(obs_range)):
+        seg_obs = obs_range[index_obs]
+        start1 = seg_obs[0]
+        end1 = seg_obs[1]
+        for index_unk in range(unk_len):
+            seg_unk = unk_range[index_unk]
+            start2 = seg_unk[0]
+            end2 = seg_unk[1]
             sl = start2 >= start1
             sr = start2 <= end1
             el = end2 >= start1
@@ -201,12 +214,24 @@ cpdef tuple overlap_range_2(object obs_range, object pdb_range, object unp_range
         bint sl, sr, el, er, s_in, e_in, ini, cov
         list ret_a = []
         list ret_b = []
+        size_t index_pdb_unp, index_obs
+        int[2] seg_pdb, seg_unp, seg_obs
     obs_range = convert_range(obs_range)
     pdb_range = convert_range(pdb_range)
     unp_range = convert_range(unp_range)
-    
-    for start1, end1 in obs_range:
-        for (start2, end2),(start3, end3) in zip(pdb_range, unp_range):
+    cdef size_t obs_len = len(obs_range)
+
+    for index_pdb_unp in range(len(pdb_range)):
+        seg_pdb = pdb_range[index_pdb_unp]
+        seg_unp = unp_range[index_pdb_unp]
+        start1 = seg_pdb[0]
+        end1 = seg_pdb[1]
+        start3 = seg_unp[0]
+        end3 = seg_unp[1]
+        for index_obs in range(obs_len):
+            seg_obs = obs_range[index_obs]
+            start2 = seg_obs[0]
+            end2 = seg_obs[1]
             sl = start2 >= start1
             sr = start2 <= end1
             el = end2 >= start1
@@ -217,16 +242,16 @@ cpdef tuple overlap_range_2(object obs_range, object pdb_range, object unp_range
             cov = (not sl) and (not er)
             if s_in:
                 start_a = start2
-                start_b = start3
+                start_b = start2 - start1 + start3
             else:
                 start_a = start1
-                start_b = start1 - start2 + start3
+                start_b = start3
             if e_in:
                 end_a = end2
-                end_b = end3
+                end_b = end2 - end1 + end3
             else:
                 end_a = end1
-                end_b = end1 - end2 + end3
+                end_b = end3
             if ini or cov:
                 ret_a.append((start_a, end_a))
                 ret_b.append((start_b, end_b))
@@ -240,13 +265,29 @@ cpdef tuple overlap_range_3(object unp_range_1, object unp_range_2, object pdb_r
         list ret_unp = []
         list ret_pdb_1 = []
         list ret_pdb_2 = []
+        size_t index_pdb_unp_1, index_pdb_unp_2
+        int[2] seg_unp_1, seg_unp_2, seg_pdb_1, seg_pdb_2
     unp_range_1 = convert_range(unp_range_1)
     unp_range_2 = convert_range(unp_range_2)
     pdb_range_1 = convert_range(pdb_range_1)
     pdb_range_2 = convert_range(pdb_range_2)
-    
-    for (start1, end1), (start4, end4) in zip(unp_range_1, pdb_range_1):
-        for (start2, end2),(start3, end3) in zip(unp_range_2, pdb_range_2):
+    cdef size_t pdb_unp_len_1 = len(unp_range_1)
+    cdef size_t pdb_unp_len_2 = len(unp_range_2)
+
+    for index_pdb_unp_1 in range(pdb_unp_len_1):
+        seg_unp_1 = unp_range_1[index_pdb_unp_1]
+        seg_pdb_1 = pdb_range_1[index_pdb_unp_1]
+        start1 = seg_unp_1[0]
+        end1 = seg_unp_1[1]
+        start3 = seg_pdb_1[0]
+        end3 = seg_pdb_1[1]
+        for index_pdb_unp_2 in range(pdb_unp_len_2):
+            seg_unp_2 = unp_range_2[index_pdb_unp_2]
+            seg_pdb_2 = pdb_range_2[index_pdb_unp_2]
+            start2 = seg_unp_2[0]
+            end2 = seg_unp_2[1]
+            start4 = seg_pdb_2[0]
+            end4 = seg_pdb_2[1]
             sl = start2 >= start1
             sr = start2 <= end1
             el = end2 >= start1
@@ -257,24 +298,24 @@ cpdef tuple overlap_range_3(object unp_range_1, object unp_range_2, object pdb_r
             cov = (not sl) and (not er)
             if s_in:
                 start_a = start2
-                start_b = start3
+                start_b = start2 - start1 + start3
                 start_c = start4
             else:
                 start_a = start1
-                start_b = start1 - start2 + start3
+                start_b = start3
                 start_c = start1 - start2 + start4
             if e_in:
                 end_a = end2
-                end_b = end3
+                end_b = end2 - end1 + end3
                 end_c = end4
             else:
                 end_a = end1
-                end_b = end1 - end2 + end3
+                end_b = end3
                 end_c = end1 - end2 + end4
             if ini or cov:
                 ret_unp.append((start_a, end_a))
-                ret_pdb_2.append((start_b, end_b))
-                ret_pdb_1.append((start_c, end_c))
+                ret_pdb_1.append((start_b, end_b))
+                ret_pdb_2.append((start_c, end_c))
     return ret_unp, ret_pdb_1, ret_pdb_2
 
 
