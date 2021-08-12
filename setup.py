@@ -37,6 +37,7 @@ setup(
         'click>=7.1.2',
         'parasail>=1.2.4'
      ],
+    dependency_links=['https://gitee.com/zhuzefeng/py_qcprot.git#egg=py_qcprot'],
     ext_modules=cythonize([Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"])]),
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",

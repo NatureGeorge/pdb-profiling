@@ -25,7 +25,7 @@ from operator import itemgetter
 from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import *
-from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, subtract_range, add_range, overlap_range, outside_range, trim_range
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, subtract_range, add_range, overlap_range, outside_range, trim_range, overlap_range_2, overlap_range_3
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, unsync_wrap,
                                  related_dataframe, slice_series, 
@@ -59,6 +59,7 @@ from sklearn.neighbors import NearestNeighbors
 from random import choice
 from tenacity import retry, wait_random, stop_after_attempt, RetryError
 from parasail import nw_trace_scan_sat, blosum62
+import py_qcprot as qcp
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -386,10 +387,10 @@ class PDB(Base):
         self.register_task((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), task)
         return task
 
-    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='subset', kwargs=dict(), **params) -> Unfuture:
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='_subset', kwargs=dict(), **params) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
         dparams = dumpsParams(params) if len(params) > 0 else None
-        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), None)
+        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func, filename), None)
         if task is not None:
             return task
         task = PDBeModelServer.single_retrieve(
@@ -497,6 +498,25 @@ class PDB(Base):
     @staticmethod
     def get_coordinates(x):
         return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
+
+    @unsync
+    async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = ' CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
+        df = (await self.fetch_from_modelServer_api('atoms',
+                                                    method='get',
+                                                    filename=f'.{struct_asym_id}({label_atom_id})',
+                                                    label_asym_id=struct_asym_id,
+                                                    label_atom_id=label_atom_id,
+                                                    model_nums=model_nums,
+                                                    encoding='cif',
+                                                    copy_all_categories=False
+                                                    ).then(PDB.cif2atom_sites_df)
+              ).drop_duplicates(subset='_atom_site.label_seq_id', keep='first')
+        df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(
+            int)
+        if overlap_range is not None:
+            return self.get_coordinates(df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))})))
+        else:
+            return self.get_coordinates(df)
 
     @classmethod
     def get_coordinates_dict(cls, df):
@@ -3170,7 +3190,7 @@ class SIFTS(PDB):
         elif allow_mask is None:
             allow_sele_df = sele_df[sele_df.bs_score > 0]
         else:
-            sele_df[allow_mask]
+            allow_sele_df = sele_df[allow_mask]
 
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3193,6 +3213,64 @@ class SIFTS(PDB):
             return
         else:
             return self.select_mo(sele_df, OC_cutoff, **select_mo_kwargs)
+
+    @unsync
+    async def pipe_3dcluster_mo(self, exclude_pdbs=frozenset(), oc_cutoff: float = 0.8, rmsd_cutoff: float = 2.5,sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col: bool = False, ascending: bool = False, **kwargs):
+        sifts_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
+        if sifts_df is None:
+            return
+        else:
+            sifts_df['select_tag'] = False
+            sifts_df['select_rank'] = -1
+            if infer_new_col:
+                for col in sort_cols:
+                    if (col not in sifts_df.columns) and (col[1:] in sifts_df.columns) and (col[0] == '-'):
+                        sifts_df[col] = -sifts_df[col[1:]]
+            sifts_df = sifts_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
+            #if allow_mask is True:
+            #    allow_sele_index = sifts_df.index
+            #elif allow_mask is None:
+            #    allow_sele_index = sifts_df[sifts_df.bs_score > 0].index
+            #else:
+            #    allow_sele_index = sifts_df[allow_mask].index
+            sifts_df['select_rank'] = range(1, sifts_df.shape[0]+1)
+        pdbekb_cluster = await self.fetch_from_pdbe_api('graph-api/uniprot/superposition/', Base.to_dataframe)
+        if pdbekb_cluster is not None:
+            pdbekb_cluster = pdbekb_cluster.filter(items=('UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'pdbekb_cluster', 'is_representative'))
+            sifts_df = sifts_df.merge(pdbekb_cluster, how='left')
+            fill_index = sifts_df[sifts_df.pdbekb_cluster.isnull()].index
+            # NOTE: for cases like 2l53 2lqp
+            sifts_df.loc[fill_index, 'pdbekb_cluster'] = list(f'multiple_model_{iclu}' for iclu in range(len(fill_index)))
+            focus = sifts_df.loc[sifts_df.groupby('pdbekb_cluster').select_rank.idxmin().sort_values()].filter(items=('pdb_id', 'struct_asym_id', 'OBS_INDEX', 'OBS_COUNT', 'new_pdb_range_raw', 'new_unp_range_raw', 'select_rank', 'pdbekb_cluster'))
+        else:
+            sifts_df['pdbekb_cluster'] = list(f'none_assigned_{iclu}' for iclu in range(sifts_df.shape[0]))
+            focus = sifts_df.filter(items=('pdb_id', 'struct_asym_id', 'OBS_INDEX', 'OBS_COUNT', 'new_pdb_range_raw', 'new_unp_range_raw', 'select_rank', 'pdbekb_cluster'))
+        focus[['new_pdb_range_obs', 'new_unp_range_obs']] = focus[['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']].apply(
+            lambda x: overlap_range_2(*x), axis=1).apply(Series)
+        select_index = []
+        selected_ranges = []
+        for cur_index in focus.index:
+            cur_record = focus.loc[cur_index]
+            cur_pdb = cur_record['pdb_id']
+            cur_chain = cur_record['struct_asym_id']
+            cur_unp_obs = cur_record['new_unp_range_obs']
+            cur_pdb_obs = cur_record['new_pdb_range_obs']
+            cur_obs = cur_record['OBS_COUNT']
+            for sele_pdb, sele_chain, sele_unp_obs, sele_pdb_obs, sele_obs in selected_ranges:
+                overlap_unp_segs, overlap_sele_pdb_segs, overlap_cur_pdb_segs = overlap_range_3(
+                    sele_unp_obs, 
+                    cur_unp_obs,
+                    sele_pdb_obs,
+                    cur_pdb_obs)
+                oc_score = range_len(overlap_unp_segs) / min(sele_obs, cur_obs)
+                if oc_score >= oc_cutoff:
+                    rmsd_score = qcp.rmsd(
+                        PDB(sele_pdb).get_representative_atoms(sele_chain, overlap_pdb_segs=overlap_sele_pdb_segs), 
+                        PDB(cur_pdb).get_representative_atoms(cur_chain, overlap_pdb_segs=overlap_cur_pdb_segs))
+                    if rmsd_score <= rmsd_cutoff:
+                        pass
+            #select_index.append(cur_index)
+            #selected_ranges.append(cur_range)
 
     @staticmethod
     @unsync
@@ -3741,15 +3819,23 @@ class PDBs(tuple):
     @unsync
     async def fetch_exp_pipe(pdb_ob:PDB):
         exp_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/experiment/', a_load_json, json=True)
-        multi_method = len(exp_data[pdb_ob.pdb_id]) > 1
-        return ((pdb_ob.pdb_id, 
-                i.get('resolution', None), 
-                i['experimental_method_class'], 
-                i['experimental_method'],
-                multi_method,
-                -i.get('r_factor', nan) if i.get('r_factor', nan) is not None else nan,
-                -i.get('r_free', nan) if i.get('r_free', nan) is not None else nan,
-                ) for i in exp_data[pdb_ob.pdb_id])
+        assert exp_data is not None, f"{pdb_ob}: no data for 'api/pdb/entry/experiment/'"
+        methods = set(lyst['experimental_method'] for lyst in exp_data[pdb_ob.pdb_id])
+        multi_method = len(methods) > 1
+        ret = []
+        for i in exp_data[pdb_ob.pdb_id]:
+            if i['experimental_method'] in methods:
+                methods.remove(i['experimental_method'])
+                ret.append((
+                    pdb_ob.pdb_id, 
+                    i.get('resolution', None), 
+                    i['experimental_method_class'], 
+                    i['experimental_method'],
+                    multi_method,
+                    -i.get('r_factor', nan) if i.get('r_factor', nan) is not None else nan,
+                    -i.get('r_free', nan) if i.get('r_free', nan) is not None else nan
+                ))
+        return ret
     
     @staticmethod
     @unsync

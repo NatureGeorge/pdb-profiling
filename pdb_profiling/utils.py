@@ -202,8 +202,8 @@ async def a_load_json(path):
             return None
         async with aiofiles_open(path) as inFile:
             return json.loads(await inFile.read())
-    except Exception:
-        raise ValueError(str(path))
+    except Exception as e:
+        raise ValueError(f"Exception {e} ({path})")
 
 
 async def pipe_out(df, path, **kwargs):

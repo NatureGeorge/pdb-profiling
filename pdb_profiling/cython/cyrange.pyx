@@ -361,8 +361,16 @@ cpdef bint isin_range(object input_range, int value):
 
 cdef int convert_index(object lrange, object rrange, int site) except *:
     # convert from rrange to lrange
-    cdef int lstart, rstart, lend, rend
-    for (lstart, lend), (rstart, rend) in zip(lrange, rrange):
+    cdef:
+        int lstart, rstart, lend, rend, index
+        int[2] lseg, rseg
+    for index in range(len(lrange)):
+        lseg = lrange[index]
+        rseg = rrange[index]
+        lstart = lseg[0]
+        lend = lseg[1]
+        rstart = rseg[0]
+        rend = rseg[1]
         assert lstart - lend == rstart - rend
         if (site >= rstart) and (site <= rend):
             return site + lstart - rstart

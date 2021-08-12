@@ -580,7 +580,7 @@ class PDBeModelServer(object):
                          'residueSurroundings', 'symmetryMates', 'query-many'))
 
     @classmethod
-    def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='subset'):
+    def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='_subset'):
         if data_collection is None:
             assert method == 'get', 'Invalid method!'
             args = dict(
@@ -592,10 +592,10 @@ class PDBeModelServer(object):
                 url=f'{cls.root}{pdb}/{suffix}?{dumpsParams(params)}',
                 headers=cls.headers,
                 data=data_collection)
-        return method, args, folder/f'{pdb}_{filename}.{params.get("encoding", "cif")}'
+        return method, args, folder/f'{pdb}{filename}.{params.get("encoding", "cif")}'
 
     @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, params=None, data_collection=None, rate: float = 1.5, filename='subset'):
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, params=None, data_collection=None, rate: float = 1.5, filename='_subset'):
         if params is None or len(params) == 0:
             params = {'model_nums': 1, 'encoding': 'cif'}
         return UnsyncFetch.single_task(
