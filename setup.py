@@ -13,8 +13,8 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.3.3',
-
+    version='0.3.4',
+    include_package_data=True,
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
     install_requires=[
@@ -37,6 +37,7 @@ setup(
         'click>=7.1.2',
         'parasail>=1.2.4'
      ],
+    dependency_links=['https://gitee.com/zhuzefeng/py_qcprot.git#egg=py_qcprot'],
     ext_modules=cythonize([Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"])]),
     license="MIT",
     author_email="1730416009@stu.suda.edu.cn",

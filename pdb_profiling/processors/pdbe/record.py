@@ -4,7 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
+from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
 from functools import partial, reduce
 from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
@@ -25,7 +25,7 @@ from operator import itemgetter
 from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import *
-from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, subtract_range, add_range, overlap_range, outside_range, trim_range
+from pdb_profiling.cython.cyrange import to_interval, lyst22interval, lyst32interval, range_len, subtract_range, add_range, overlap_range, outside_range, trim_range, overlap_range_2, overlap_range_3
 from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix, 
                                  a_read_csv, split_df_by_chain, unsync_wrap,
                                  related_dataframe, slice_series, 
@@ -36,7 +36,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  select_range, expand_interval,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
-                                 a_seq_reader, dumpsParams, get_str_dict_len, SEQ_DICT)
+                                 a_seq_reader, dumpsParams, get_str_dict_len, aa_three2one)
 from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
 from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
@@ -59,6 +59,7 @@ from sklearn.neighbors import NearestNeighbors
 from random import choice
 from tenacity import retry, wait_random, stop_after_attempt, RetryError
 from parasail import nw_trace_scan_sat, blosum62
+import py_qcprot as qcp
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -386,10 +387,10 @@ class PDB(Base):
         self.register_task((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), task)
         return task
 
-    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='subset', kwargs=dict(), **params) -> Unfuture:
+    def fetch_from_modelServer_api(self, api_suffix: str, method: str = 'post', data_collection=None, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, filename='_subset', kwargs=dict(), **params) -> Unfuture:
         assert api_suffix in PDBeModelServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeModelServer.api_set}"
         dparams = dumpsParams(params) if len(params) > 0 else None
-        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func), None)
+        task = self.tasks.get((repr(self), PDBeModelServer.root, api_suffix, method, data_collection, dparams, then_func, filename), None)
         if task is not None:
             return task
         task = PDBeModelServer.single_retrieve(
@@ -455,7 +456,7 @@ class PDB(Base):
         dfrm.author_residue_number = dfrm.author_residue_number.astype(int)
         if merge_residue_listing:
             dfrm = dfrm.merge(await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe), how='left')
-            assert dfrm.aa_type.isnull().sum() == 0
+            assert not dfrm.aa_type.isnull().any()
             '''
             Exception Case:  (not 'X' but raw code)
             ---------------------------------------
@@ -482,14 +483,42 @@ class PDB(Base):
     async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
         if isawaitable(path):
             path = await path
+        cols = ('_atom_site.type_symbol', '_atom_site.label_atom_id',
+                '_atom_site.label_comp_id', '_atom_site.label_seq_id',
+                '_atom_site.label_asym_id', '_atom_site.Cartn_x',
+                '_atom_site.Cartn_y', '_atom_site.Cartn_z')
         async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.read()
-            mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
+            handle = await file_io.readlines()
+            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
-        cols = [key for key in mmcif_dict.keys() if key.startswith('_atom_site.')]
-        dfrm = DataFrame(list(zip(*[mmcif_dict[col] for col in cols])), columns=cols)
+        dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
         return dfrm
+
+    @staticmethod
+    def get_coordinates(x):
+        return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
+
+    @unsync
+    async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
+        df = (await self.fetch_from_modelServer_api('atoms',
+                                                    method='get',
+                                                    filename=f'.{struct_asym_id}({label_atom_id})',
+                                                    label_asym_id=struct_asym_id,
+                                                    label_atom_id=label_atom_id,
+                                                    model_nums=model_nums,
+                                                    encoding='cif',
+                                                    copy_all_categories=False
+                                                    ).then(PDB.cif2atom_sites_df)
+              ).drop_duplicates(subset='_atom_site.label_seq_id', keep='first')
+        if overlap_range is not None:
+            return self.get_coordinates(df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))}, dtype=str)))
+        else:
+            return self.get_coordinates(df)
+
+    @classmethod
+    def get_coordinates_dict(cls, df):
+        return df.groupby(['_atom_site.label_asym_id', '_atom_site.label_seq_id']).apply(cls.get_coordinates).to_dict()
 
     @classmethod
     @unsync
@@ -1308,7 +1337,7 @@ class PDB(Base):
             res_map_df_full.author_insertion_code.ne('') |
             res_map_df_full.multiple_conformers.notnull() |
             res_map_df_full.observed_ratio.lt(1) |
-            (~res_map_df_full.residue_name.isin(SEQ_DICT)) |
+            (~res_map_df_full.residue_name.isin(aa_three2one)) |
             res_map_df_full.conflict_code.notnull())
         demo_record = res_map_df_full.iloc[0]
         if (~mask).all():
@@ -1723,17 +1752,25 @@ class PDBAssembly(PDB):
             range_check_yes = range_check.apply(bool)
             check_m = range_check_yes | (interfacelist_df['structure_1.original_range']=='{-}')
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
-            to_df_index = interfacelist_df[range_check_yes].index
-            interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
-            interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'struct_asym_id_in_assembly_1'] = interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'structure_1.range']
+            if range_check_yes.any():
+                to_df_index = interfacelist_df[range_check_yes].index
+                interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+            range_check_no = ~range_check_yes
+            if range_check_no.any():
+                no_index = interfacelist_df[range_check_no].index
+                interfacelist_df.loc[no_index, 'struct_asym_id_in_assembly_1'] = interfacelist_df.loc[no_index, 'structure_1.range']
             #
             range_check = interfacelist_df['structure_2.range'].apply(cls.struct_range_pattern.fullmatch)
             range_check_yes = range_check.apply(bool)
             check_m = range_check_yes | (interfacelist_df['structure_2.original_range']=='{-}')
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
-            to_df_index = interfacelist_df[range_check_yes].index
-            interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_2', 'auth_seq_id_2']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
-            interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'struct_asym_id_in_assembly_2'] = interfacelist_df.loc[interfacelist_df[~range_check_yes].index, 'structure_2.range']
+            if range_check_yes.any():
+                to_df_index = interfacelist_df[range_check_yes].index
+                interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_2', 'auth_seq_id_2']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+            range_check_no = ~range_check_yes
+            if range_check_no.any():
+                no_index = interfacelist_df[range_check_no].index
+                interfacelist_df.loc[no_index, 'struct_asym_id_in_assembly_2'] = interfacelist_df.loc[no_index, 'structure_2.range']
         interfacelist_df[['author_residue_number_1', 'author_insertion_code_1']] = interfacelist_df.auth_seq_id_1.apply(cls.fix_auth_seq_id).apply(Series)
         interfacelist_df[['author_residue_number_2', 'author_insertion_code_2']] = interfacelist_df.auth_seq_id_2.apply(cls.fix_auth_seq_id).apply(Series)
         return interfacelist_df.drop(columns=['auth_seq_id_1', 'auth_seq_id_2'])
@@ -2988,8 +3025,6 @@ class SIFTS(PDB):
             except TypeError:
                 raise AssertionError(f"{pdb_id} {struct_asym_id} {residue_number}")
         df = df[df['_atom_site.label_comp_id'].ne('HOH') & df['_atom_site.type_symbol'].ne('H')].reset_index(drop=True)
-        for col in ('_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z'):
-            df[col] = df[col].astype(float)
         '''
         # for some ligand | carbohydrate
         df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(int)
@@ -3002,14 +3037,6 @@ class SIFTS(PDB):
             distances, _ = nbrs.kneighbors(coordinates_dict[key])
             total += cls.exp_score(distances.min(), d)
         return total
-
-    @staticmethod
-    def get_coordinates(x):
-        return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy()
-
-    @classmethod
-    def get_coordinates_dict(cls, df):
-        return df.groupby(['_atom_site.label_asym_id', '_atom_site.label_seq_id']).apply(cls.get_coordinates).to_dict()
     
     @staticmethod
     def exp_score(x, d):
@@ -3149,20 +3176,19 @@ class SIFTS(PDB):
 
     @staticmethod
     def select_mo(sele_df, OC_cutoff=0.2, sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col:bool=False, ascending=False, allow_mask=None):
-        sele_df = sele_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
         sele_df['select_tag'] = False
         sele_df['select_rank'] = -1
         if infer_new_col:
             for col in sort_cols:
                 if (col not in sele_df.columns) and (col[1:] in sele_df.columns) and (col[0] == '-'):
                     sele_df[col] = -sele_df[col[1:]]
-        
+        sele_df = sele_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
         if allow_mask is True:
             allow_sele_df = sele_df
         elif allow_mask is None:
             allow_sele_df = sele_df[sele_df.bs_score > 0]
         else:
-            sele_df[allow_mask]
+            allow_sele_df = sele_df[allow_mask]
 
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3185,6 +3211,117 @@ class SIFTS(PDB):
             return
         else:
             return self.select_mo(sele_df, OC_cutoff, **select_mo_kwargs)
+
+    @unsync
+    async def pipe_cluster3d_mo(self, exclude_pdbs=frozenset(), oc_cutoff: float = 0.8, rmsd_cutoff: float = 2.5, sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col: bool = False, ascending: bool = False, **kwargs):
+        assert oc_cutoff >= 0 and oc_cutoff <= 1 and rmsd_cutoff >= 0
+        sifts_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
+        if sifts_df is None:
+            return
+        else:
+            sifts_df['oc_rmsd_select_tag'] = False
+            sifts_df['oc_select_tag'] = False
+            sifts_df['select_rank'] = -1
+            if infer_new_col:
+                for col in sort_cols:
+                    if (col not in sifts_df.columns) and (col[1:] in sifts_df.columns) and (col[0] == '-'):
+                        sifts_df[col] = -sifts_df[col[1:]]
+            sifts_df = sifts_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
+            sifts_df['select_rank'] = range(1, sifts_df.shape[0]+1)
+        pdbekb_cluster = await self.fetch_from_pdbe_api('graph-api/uniprot/superposition/', Base.to_dataframe)
+        if pdbekb_cluster is not None:
+            pdbekb_cluster = pdbekb_cluster.filter(items=('UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'pdbekb_cluster'))  # , 'is_representative'
+            sifts_df = sifts_df.merge(pdbekb_cluster, how='left')
+            fill_index = sifts_df[sifts_df.pdbekb_cluster.isnull()].index
+            # NOTE: for cases like 2l53 2lqp
+            sifts_df.loc[fill_index, 'pdbekb_cluster'] = list(f'multiple_model_{iclu}' for iclu in range(len(fill_index)))
+            focus = sifts_df.loc[sifts_df.groupby('pdbekb_cluster').select_rank.idxmin().sort_values()].filter(items=('pdb_id', 'struct_asym_id', 'OBS_INDEX', 'OBS_COUNT', 'new_pdb_range_raw', 'new_unp_range_raw', 'select_rank', 'pdbekb_cluster'))
+        else:
+            sifts_df['pdbekb_cluster'] = list(f'none_assigned_{iclu}' for iclu in range(sifts_df.shape[0]))
+            focus = sifts_df.filter(items=('pdb_id', 'struct_asym_id', 'OBS_INDEX', 'OBS_COUNT', 'new_pdb_range_raw', 'new_unp_range_raw', 'select_rank', 'pdbekb_cluster'))
+        assert focus.shape[0] > 0
+        focus[['new_pdb_range_obs', 'new_unp_range_obs']] = focus[['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']].apply(
+            lambda x: overlap_range_2(*x), axis=1).apply(Series)
+        cluster = await self.cluster3d_mo_algorithm(focus.drop(columns=['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']).itertuples(), oc_cutoff, rmsd_cutoff)
+        selected_indexes = cluster.groupby(['oc_cluster', 'rmsd_cluster']).Index.min().sort_values()
+        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}))
+        assert not cluster.pdbekb_cluster.isnull().any()
+        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']))
+        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
+        sifts_df.loc[selected_indexes, 'oc_rmsd_select_tag'] = True
+        focus_oc_cluster = cluster.drop_duplicates(subset='oc_cluster', keep='first')
+        selected_oc_indexes = cluster.loc[select_range(focus_oc_cluster.new_unp_range_obs, focus_oc_cluster.index, cutoff=1-oc_cutoff)].Index
+        sifts_df.loc[selected_oc_indexes, 'oc_select_tag'] = True
+        return sifts_df
+    
+    @staticmethod
+    @unsync
+    async def cluster3d_mo_algorithm(rows: Iterator, oc_cutoff: float, rmsd_cutoff: float) -> DataFrame:
+        """
+        # Monomer 3D Cluster (impl Greedy Algorithm)
+        
+        ## Data Structure
+
+            [
+                [
+                    # one oc cluster
+                    
+                    [next(rows), ], # one rmsd cluster
+                    
+                    [],           # another rmsd cluster
+                ],
+                [
+                    # another oc cluster
+                ]
+            ]
+        """
+        cluster = [[[next(rows)]]]
+        for cur_row in rows:
+            stop_sub_for_loop = False
+            to_append_oc_index = -1
+            to_append_rmsd_index = -1
+            for oc_cluster_index, oc_cluster in enumerate(cluster):
+                if stop_sub_for_loop: break
+                for rmsd_cluster_index, rmsd_cluster in enumerate(oc_cluster):
+                    if stop_sub_for_loop: break
+                    for sele_row in rmsd_cluster:
+                        overlap_unp_segs, overlap_sele_pdb_segs, overlap_cur_pdb_segs = overlap_range_3(
+                            sele_row.new_unp_range_obs, 
+                            cur_row.new_unp_range_obs,
+                            sele_row.new_pdb_range_obs,
+                            cur_row.new_pdb_range_obs)
+                        oc_score = range_len(overlap_unp_segs) / min(sele_row.OBS_COUNT, cur_row.OBS_COUNT)
+                        if oc_score >= oc_cutoff:
+                            # same oc_cluster
+                            rmsd_score = qcp.rmsd(
+                                await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs), 
+                                await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs))
+                            if rmsd_score <= rmsd_cutoff:
+                                # same oc_cluster & same rmsd_cluster
+                                to_append_oc_index = oc_cluster_index
+                                to_append_rmsd_index = rmsd_cluster_index
+                                stop_sub_for_loop = True
+                                break
+                            else:
+                                # same oc_cluster & possible different rmsd_cluster
+                                to_append_oc_index = oc_cluster_index
+                        else:
+                            # possible different oc_cluster
+                            pass
+            # to append
+            if to_append_oc_index < 0:
+                cluster.append([[cur_row]])
+            else:
+                if to_append_rmsd_index < 0:
+                    cluster[to_append_oc_index].append([cur_row])
+                else:
+                    cluster[to_append_oc_index][to_append_rmsd_index].append(cur_row)
+        # to index
+        return DataFrame((
+            {'Index': sele_row.Index, 'oc_cluster': oc_cluster_index, 'rmsd_cluster': rmsd_cluster_index
+            } for oc_cluster_index, oc_cluster in enumerate(cluster) for rmsd_cluster_index, rmsd_cluster in enumerate(oc_cluster) for sele_row in rmsd_cluster
+        ))
+                    
 
     @staticmethod
     @unsync
@@ -3522,9 +3659,9 @@ class SIFTS(PDB):
         return DataFrame(j for j in res if j is not None)
 
     @unsync
-    async def pipe_scheduled_ranged_map_res_df(self, chunksize=100, func_for_unp='pipe_select_mo', default_mask=True, with_sele_cols_for_unp=False, **kwargs):
+    async def pipe_scheduled_ranged_map_res_df(self, chunksize=100, func_for_this='pipe_select_mo', default_mask=True, with_sele_cols_for_unp=False, **kwargs):
         if self.source == 'UniProt':
-            df = await getattr(self, func_for_unp)(**kwargs)
+            df = await getattr(self, func_for_this)(**kwargs)
             if default_mask:
                 records = df[df.select_rank.ne(-1)].to_records()
             else:
@@ -3542,9 +3679,9 @@ class SIFTS(PDB):
                         struct_asym_id=row.struct_asym_id) for row in records[index:index+chunksize]]
             res.extend([await i for i in tasks])
         ret = concat(res, sort=False, ignore_index=True)
-        if with_sele_cols_for_unp and (self.source == 'UniProt') and (func_for_unp == 'pipe_select_mo'):
+        if with_sele_cols_for_unp and (self.source == 'UniProt') and (func_for_this == 'pipe_select_mo'):
             ret = ret.merge(df[['UniProt','pdb_id','struct_asym_id','bs_score','select_tag','select_rank','after_select_rank']], how='left')
-            assert ret.select_tag.isnull().sum() == 0
+            assert not ret.select_tag.isnull().any()
         return ret
 
     @staticmethod
@@ -3733,15 +3870,23 @@ class PDBs(tuple):
     @unsync
     async def fetch_exp_pipe(pdb_ob:PDB):
         exp_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/experiment/', a_load_json, json=True)
-        multi_method = len(exp_data[pdb_ob.pdb_id]) > 1
-        return ((pdb_ob.pdb_id, 
-                i.get('resolution', None), 
-                i['experimental_method_class'], 
-                i['experimental_method'],
-                multi_method,
-                -i.get('r_factor', nan) if i.get('r_factor', nan) is not None else nan,
-                -i.get('r_free', nan) if i.get('r_free', nan) is not None else nan,
-                ) for i in exp_data[pdb_ob.pdb_id])
+        assert exp_data is not None, f"{pdb_ob}: no data for 'api/pdb/entry/experiment/'"
+        methods = set(lyst['experimental_method'] for lyst in exp_data[pdb_ob.pdb_id])
+        multi_method = len(methods) > 1
+        ret = []
+        for i in exp_data[pdb_ob.pdb_id]:
+            if i['experimental_method'] in methods:
+                methods.remove(i['experimental_method'])
+                ret.append((
+                    pdb_ob.pdb_id, 
+                    i.get('resolution', None), 
+                    i['experimental_method_class'], 
+                    i['experimental_method'],
+                    multi_method,
+                    -i.get('r_factor', nan) if i.get('r_factor', nan) is not None else nan,
+                    -i.get('r_free', nan) if i.get('r_free', nan) is not None else nan
+                ))
+        return ret
     
     @staticmethod
     @unsync

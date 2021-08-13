@@ -7,7 +7,7 @@
 from pdb_profiling import default_config
 from pdb_profiling.commands import CustomDB
 from pdb_profiling.processors import Identifiers, Identifier, SIFTSs, SIFTS, PDB, PDBs
-from pdb_profiling.utils import unsync_run, SEQ_DICT
+from pdb_profiling.utils import unsync_run, aa_three2one, a_concat
 from pdb_profiling.fetcher.webfetch import ensure
 import click
 from unsync import unsync
@@ -46,7 +46,7 @@ def Interface(ctx, folder, custom_db, dropall, initaa):
     default_config(folder)
     ctx.obj['custom_db'] = CustomDB("sqlite:///%s" % (folder/'local_db'/custom_db), dropall)
     if initaa:
-        ctx.obj['custom_db'].sync_insert(ctx.obj['custom_db'].AAThree2one, [dict(three_letter_code=three, one_letter_code=one) for three, one in SEQ_DICT.items()])
+        ctx.obj['custom_db'].sync_insert(ctx.obj['custom_db'].AAThree2one, [dict(three_letter_code=three, one_letter_code=one) for three, one in aa_three2one.items()])
 
 
 @Interface.command("init")
@@ -57,7 +57,7 @@ def init_folder():
 @Interface.command("insert-mutation")
 @click.option("-i", "--input", help="the file that contains sites info", type=click.Path())
 @click.option("--sep", default="\t", help="the seperator of input file", type=str)
-@click.option("--usecols", default='from_id,Ref,Pos,Alt', help="The comma-sep columns of site info", type=str)
+@click.option("--usecols", default='ftId,Ref,Pos,Alt', help="The comma-sep columns of site info", type=str)
 @click.option("--headers/--no-headers", default=True, is_flag=True)
 @click.option('--readchunk', type=int, help="the chunksize parameter of pandas.read_csv", default=100000)
 @click.option('--nrows', type=int, help="the nrows parameter of pandas.read_csv", default=None)
@@ -69,7 +69,7 @@ def insert_sites(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, 
     def do_nothing(dfrm):
         return dfrm.to_dict('records')
 
-    console.log(format_info("DB Mutation Insertion"))
+    console.log(format_info("DB: Mutation Insertion"))
     usecols = usecols.split(',')
     if functionfile is not None:
         spec = imp_util.spec_from_file_location("CustomFunc", functionfile)
@@ -193,8 +193,9 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
+@click.option('--autotype', type=str, default='from_IDMapping')
 @click.pass_context
-def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, omit, output, iteroutput, sleep):
+def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, omit, output, iteroutput, sleep, autotype):
     def get_unp_id(args):
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
@@ -216,28 +217,46 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
     output_path = ctx.obj['folder']/output
     
     if input is None:
-        total = unsync_run(sqlite_api.database.fetch_one(
-            query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0] - omit
-        console.log(f"Total {total} to query")
-        for i in range(ceil(total/chunksize)):
-            res = unsync_run(sqlite_api.database.fetch_all(
-                query=f"""
-                SELECT DISTINCT Entry,isoform,is_canonical FROM IDMapping
-                WHERE isoform != 'NaN'
-                LIMIT {chunksize} OFFSET {omit+chunksize*i}
-                """))
-            with Progress(*progress_bar_args) as p:
-                res = SIFTSs(map(get_unp_id, res)).fetch(func, **kwargs).run(p.track).result()
-            for dfrm in res:
-                if dfrm is None:
-                    continue
-                dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
-                            header=not output_path.exists(), mode='a+')
-            console.log(f'Done: {len(res)+chunksize*i}')
-            #if len(res) < chunksize:
-            #    break
-            if sleep and len(res) == chunksize:
-                tsleep(uniform(1, 10))
+        if autotype == 'from_IDMapping':
+            total = unsync_run(sqlite_api.database.fetch_one(
+                query="SELECT COUNT(DISTINCT isoform) FROM IDMapping WHERE isoform != 'NaN'"))[0] - omit
+            console.log(f"Total {total} to query")
+            for i in range(ceil(total/chunksize)):
+                res = unsync_run(sqlite_api.database.fetch_all(
+                    query=f"""
+                    SELECT DISTINCT Entry,isoform,is_canonical FROM IDMapping
+                    WHERE isoform != 'NaN'
+                    LIMIT {chunksize} OFFSET {omit+chunksize*i}
+                    """))
+                with Progress(*progress_bar_args) as p:
+                    res = SIFTSs(map(get_unp_id, res)).fetch(func, **kwargs).run(p.track).result()
+                for dfrm in res:
+                    if dfrm is None:
+                        continue
+                    dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
+                                header=not output_path.exists(), mode='a+')
+                console.log(f'Done: {len(res)+chunksize*i}')
+                #if len(res) < chunksize:
+                #    break
+                if sleep and len(res) == chunksize:
+                    tsleep(uniform(1, 10))
+        elif autotype.startswith('from_PDB'):
+            cur_db_table = autotype[5:]
+            total = unsync_run(sqlite_api.database.fetch_one(query=f"SELECT COUNT(DISTINCT pdb_id) FROM {cur_db_table}"))[0] - omit
+            console.log(f"Total {total} to query")
+            for i in range(ceil(total/chunksize)):
+                res = unsync_run(sqlite_api.database.fetch_all(query=f"SELECT DISTINCT pdb_id FROM {cur_db_table} LIMIT {chunksize} OFFSET {omit+chunksize*i}"))
+                with Progress(*progress_bar_args) as p:
+                    res = SIFTSs(pdbi[0] for pdbi in res).fetch(func, **kwargs).run(p.track).result()
+                for dfrm in res:
+                    if dfrm is None:
+                        continue
+                    dfrm[sorted(dfrm.columns)].to_csv(output_path, sep='\t', index=False,
+                                                      header=not output_path.exists(), mode='a+')
+                console.log(f'Done: {len(res)+chunksize*i}')
+        else:
+            console.log('Unknown autotype')
+            return
     else:
         if column is None:
             ids = read_csv(input, sep=sep, header=None, skiprows=omit if omit > 0 else None)[0].unique()
@@ -287,13 +306,17 @@ def residue_mapping(ctx, input, chunksize, output, sleep):
         output = ctx.obj['folder']/output
     done = 0
     for df in dfs:
-        for col in ('new_pdb_range_raw', 'new_unp_range_raw', 'conflict_pdb_index'):
+        if 'new_pdb_range_raw' in df.columns:
+            cur_columns = ('new_pdb_range_raw', 'new_unp_range_raw', 'conflict_pdb_index')
+        else:
+            cur_columns = ('new_pdb_range', 'new_unp_range', 'conflict_pdb_index')
+        for col in cur_columns:
             df[col] = df[col].apply(eval)
         ob = PDBs(())
         ob.tasks = [PDB(row.pdb_id).get_ranged_map_res_df(
                     row.UniProt,
-                    row.new_unp_range_raw,
-                    row.new_pdb_range_raw,
+                    getattr(row, cur_columns[1]),
+                    getattr(row, cur_columns[0]),
                     conflict_pdb_index=row.conflict_pdb_index,
                     struct_asym_id=row.struct_asym_id) for row in df.to_records()]
         with Progress(*progress_bar_args) as p:
@@ -493,6 +516,89 @@ def export_residue_remapping(ctx, with_id, sele, output):
     console.log(f'result saved in {output_path}')
 
 
+@Interface.command('export-pdb-mutation-mapping')
+@click.option('--auth/--no-auth', is_flag=True, default=True)
+@click.option('-o', '--output', type=str, help='filename of output file')
+@click.pass_context
+def export_residue_remapping(ctx, auth, output):
+    output_path = ctx.obj['folder']/output
+    if auth:
+        query = """
+        SELECT DISTINCT ResidueMappingRange.UniProt,
+                        PDBAuthMutation.pdb_id,
+                        ResidueMappingRange.entity_id,
+                        ResidueMappingRange.struct_asym_id,
+                        ResidueMappingRange.chain_id,
+                        PDBAuthMutation.Ref,
+                        PDBAuthMutation.Alt,
+                        PDBAuthMutation.author_residue_number,
+                        PDBAuthMutation.author_insertion_code,
+                        ResidueMappingRange.observed_ratio,
+                        ResidueMappingRange.conflict_code,
+                        PDBAuthMutation.author_residue_number - ResidueMappingRange.auth_pdb_beg + ResidueMappingRange.pdb_beg AS residue_number,
+                        PDBAuthMutation.author_residue_number - ResidueMappingRange.auth_pdb_beg + ResidueMappingRange.unp_beg AS unp_residue_number
+        FROM PDBAuthMutation,ResidueMappingRange
+        WHERE PDBAuthMutation.pdb_id == ResidueMappingRange.pdb_id
+        AND PDBAuthMutation.author_residue_number >= ResidueMappingRange.auth_pdb_beg
+        AND PDBAuthMutation.author_residue_number <= ResidueMappingRange.auth_pdb_end
+        AND PDBAuthMutation.author_insertion_code == ResidueMappingRange.author_insertion_code
+        AND 
+            CASE 
+                WHEN PDBAuthMutation.struct_asym_id IS NOT NULL
+                THEN PDBAuthMutation.struct_asym_id == ResidueMappingRange.struct_asym_id
+                WHEN PDBAuthMutation.chain_id IS NOT NULL
+                THEN PDBAuthMutation.chain_id == ResidueMappingRange.chain_id
+            ELSE
+                1
+            END
+        ;
+        """
+    else:
+        query = """
+        SELECT DISTINCT ResidueMappingRange.UniProt,
+                        PDBMutation.pdb_id,
+                        ResidueMappingRange.entity_id,
+                        ResidueMappingRange.struct_asym_id,
+                        ResidueMappingRange.chain_id,
+                        PDBMutation.Ref,
+                        PDBMutation.Alt,
+                        PDBMutation.residue_number,
+                        ResidueMappingRange.observed_ratio,
+                        ResidueMappingRange.conflict_code,
+                        PDBMutation.residue_number - ResidueMappingRange.pdb_beg + ResidueMappingRange.auth_pdb_beg AS author_residue_number,
+                        ResidueMappingRange.author_insertion_code,
+                        PDBMutation.residue_number - ResidueMappingRange.pdb_beg + ResidueMappingRange.unp_beg AS unp_residue_number
+        FROM PDBMutation,ResidueMappingRange
+        WHERE PDBMutation.pdb_id == ResidueMappingRange.pdb_id
+        AND PDBMutation.residue_number >= ResidueMappingRange.pdb_beg
+        AND PDBMutation.residue_number <= ResidueMappingRange.pdb_end
+        AND 
+            CASE 
+                WHEN PDBMutation.struct_asym_id IS NOT NULL
+                THEN PDBMutation.struct_asym_id == ResidueMappingRange.struct_asym_id
+                WHEN PDBMutation.chain_id IS NOT NULL
+                THEN PDBMutation.chain_id == ResidueMappingRange.chain_id
+            ELSE
+                1
+            END
+        ;
+        """
+    with console.status("[bold green]query..."):
+        dfs = read_sql_query(query, ctx.obj['custom_db'].engine, chunksize=10000)
+        for df in dfs:
+            if df.shape[0] == 0:
+                continue
+            reslist = PDBs(frozenset(df.pdb_id)).fetch(
+                'fetch_from_pdbe_api',
+                api_suffix='api/pdb/entry/residue_listing/',
+                then_func=PDB.to_dataframe).run().then(a_concat).result()
+            newdf = df.merge(reslist, how='left')
+            newdf['pdb_one_letter_code'] = newdf.residue_name.map(aa_three2one)
+            newdf['unp_one_letter_code'] = newdf.apply(lambda x: x['conflict_code'] if isinstance(x['conflict_code'], str) and x['conflict_code'] != '' else x['pdb_one_letter_code'], axis=1)
+            newdf.drop(columns=['conflict_code']).to_csv(
+                output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
+    console.log(f'result saved in {output_path}')
+
 @Interface.command('export-interaction-mapping')
 @click.option('--with_id/--no-with_id', is_flag=True, default=False)
 @click.option('-o', '--output', type=str, help='filename of output file')
@@ -549,6 +655,8 @@ def export_interface_mapping(ctx, with_id, output):
         for df in dfs:
             if df.shape[0] == 0:
                 continue
+            #df.sort()
+            #df.drop_duplicates(subset=df.columns[:-1], inplace=True)
             df.rename(columns={'edUniProt': 'UniProt'}).to_csv(
                 output_path, index=False, mode='a+', sep='\t', header=not output_path.exists())
     console.log(f'result saved in {output_path}')
@@ -691,6 +799,36 @@ def fetch1pdb(pdb, api, params, data_collection, method, tag, use_existing):
         res = pdb.fetch_from_modelServer_api(
             api_suffix=api, method=method, data_collection=data, filename=tag, **params).result()
     console.log(f"Result saved in {res}")
+
+
+@Interface.command("insert-pdb-mutation")
+@click.option("-i", "--input", help="the file that contains sites info", type=click.Path())
+@click.option("--sep", default="\t", help="the seperator of input file", type=str)
+@click.option("--usecols", help="The comma-sep columns of site info.", type=str)
+@click.option("--headers/--no-headers", default=True, is_flag=True)
+@click.option('--readchunk', type=int, help="the chunksize parameter of pandas.read_csv", default=100000)
+@click.option('--nrows', type=int, help="the nrows parameter of pandas.read_csv", default=None)
+@click.option('--skiprows', type=int, help="the skiprows parameter of pandas.read_csv", default=None)
+@click.option("--auth/--no-auth", default=True, is_flag=True)
+@click.pass_context
+def insert_pdb_mutation(ctx, input, sep, usecols, headers, readchunk, nrows, skiprows, auth):
+    console.log(format_info("DB: PDB Mutation Insertion"))
+    usecols = usecols.split(',')
+    if headers:
+        df = read_csv(input, sep=sep, usecols=usecols, chunksize=readchunk,
+                      nrows=nrows, skiprows=skiprows, keep_default_na=False)
+    else:
+        df = read_csv(input, sep=sep, header=None, names=usecols, chunksize=readchunk,
+                      nrows=nrows, skiprows=skiprows, keep_default_na=False)
+    sqlite_api = ctx.obj['custom_db']
+    db_table = sqlite_api.PDBAuthMutation if auth else sqlite_api.PDBMutation
+    start = 0
+    with console.status("[bold green]Trying to insert..."):
+        for index, dfrm in enumerate(df):
+            end = readchunk*(index+1)
+            console.log(f"{start}-{end}")
+            start = end+1
+            sqlite_api.sync_insert(db_table, dfrm.to_dict('records'))
 
 
 if __name__ == '__main__':

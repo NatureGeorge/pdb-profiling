@@ -561,10 +561,10 @@ class PDBeDecoder(object):
     @dispatch_on_set('graph-api/uniprot/superposition/')
     def yield_unp_pdb_struct_cluster(data):
         for unp in data:
-            for segment in data[unp]:
+            for segment_id, segment in enumerate(data[unp]):
                 clusters = segment['clusters']
                 for sub_cluster_id, sub_cluster in enumerate(clusters):
-                    yield sub_cluster, ('_index_', 'segment_start', 'segment_end', 'UniProt'), (sub_cluster_id, segment['segment_start'], segment['segment_end'], unp)
+                    yield sub_cluster, ('pdbekb_cluster', 'segment_start', 'segment_end', 'UniProt'), (f'{segment_id}_{sub_cluster_id}', segment['segment_start'], segment['segment_end'], unp)
 
 
 class PDBeModelServer(object):
@@ -572,13 +572,15 @@ class PDBeModelServer(object):
     Implement ModelServer API
     '''
 
-    root = f'{BASE_URL}model-server/v1/'
+    pdbe_root = f'{BASE_URL}model-server/v1/'
+    rcsb_root = 'https://models.rcsb.org/v1/'
+    root = rcsb_root
     headers = {'Connection': 'close', 'accept': 'text/plain', 'Content-Type': 'application/json'}
     api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
                          'residueSurroundings', 'symmetryMates', 'query-many'))
 
     @classmethod
-    def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='subset'):
+    def task_unit(cls, pdb, suffix, method, folder, data_collection, params, filename='_subset'):
         if data_collection is None:
             assert method == 'get', 'Invalid method!'
             args = dict(
@@ -590,10 +592,10 @@ class PDBeModelServer(object):
                 url=f'{cls.root}{pdb}/{suffix}?{dumpsParams(params)}',
                 headers=cls.headers,
                 data=data_collection)
-        return method, args, folder/f'{pdb}_{filename}.{params.get("encoding", "cif")}'
+        return method, args, folder/f'{pdb}{filename}.{params.get("encoding", "cif")}'
 
     @classmethod
-    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, params=None, data_collection=None, rate: float = 1.5, filename='subset'):
+    def single_retrieve(cls, pdb: str, suffix: str, method: str, folder: Union[Path, str], semaphore, params=None, data_collection=None, rate: float = 1.5, filename='_subset'):
         if params is None or len(params) == 0:
             params = {'model_nums': 1, 'encoding': 'cif'}
         return UnsyncFetch.single_task(

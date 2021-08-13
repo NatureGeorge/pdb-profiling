@@ -24,7 +24,7 @@ import aiofiles
 from tablib import Dataset
 import traceback
 from pdb_profiling.utils import (pipe_out, sort_sub_cols, slice_series, to_interval, 
-                                 lyst22interval, SEQ_DICT, standardAA, standardNu, range_len,
+                                 lyst22interval, aa_three2one, standardAA, standardNu, range_len,
                                  interval2set, lyst2range, subtract_range,
                                  add_range, overlap_range, outside_range_len, related_dataframe)
 from pdb_profiling.log import Abclog
@@ -264,7 +264,7 @@ class Entry(object):
         try:
             res = session.run(query, **kwargs)
             if three2one:
-                return ''.join(SEQ_DICT.get(r['residue_name'], 'X') for r in res)
+                return ''.join(aa_three2one.get(r['residue_name'], 'X') for r in res)
             else:
                 return res
         except AttributeError:
@@ -819,7 +819,7 @@ class SIFTS(Entry):
             # pdbSeq = cls.get_seqres(record['pdb_id'], record['entity_id'])
             query, kwargs = cls.get_seqres(record[0], record[1])
             res = await neo4j_api.afetch(query, **kwargs)
-            pdbSeq = ''.join(SEQ_DICT.get(r['residue_name'], 'X') for r in res)
+            pdbSeq = ''.join(aa_three2one.get(r['residue_name'], 'X') for r in res)
             # unpSeq = cls.get_unp_seq(record["UniProt"])
             query, kwargs = cls.get_unp_seq(record[2])
             res = await neo4j_api.afetch(query, **kwargs)

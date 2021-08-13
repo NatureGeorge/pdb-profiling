@@ -126,11 +126,18 @@ class ProteinsAPI(Abclog):
         if len(data) > 1:
             cls.logger.warning(f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}, {[data[i]['accession'] for i in range(len(data))]}")
             '''
-            Special Cases Like: P04745 (AMY1A_HUMAN)
+            Special Case Like: 
+                                P04745 (AMY1A_HUMAN)
                                 P0DTE7 (AMY1B_HUMAN)
                                 P0DTE8 (AMY1C_HUMAN)
                                 with identical sequence
                                 Causion from UniProt-KB: 'Three distinct genes (AMY1A, AMY1B and AMY1C), located in a gene cluster on 1p21, encode proteins sharing the same peptidic sequence.'
+            Another Special Case Like: NP_001316851
+                                P0DP23 (CALM1_HUMAN)
+                                P0DP24 (CALM2_HUMAN)
+                                P0DP25 (CALM3_HUMAN)
+                                with identical sequence
+            TODO: deal with these cases
             '''
             # raise AssertionError("With Unexpected length!")
         elif (len(data) == 0) or (data[0] is None):
