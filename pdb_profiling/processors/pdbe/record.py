@@ -4,7 +4,7 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-08-11 10:48:11 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Iterable, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
+from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
 from functools import partial, reduce
 from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
@@ -456,7 +456,7 @@ class PDB(Base):
         dfrm.author_residue_number = dfrm.author_residue_number.astype(int)
         if merge_residue_listing:
             dfrm = dfrm.merge(await self.fetch_from_pdbe_api('api/pdb/entry/residue_listing/', Base.to_dataframe), how='left')
-            assert dfrm.aa_type.isnull().sum() == 0
+            assert not dfrm.aa_type.isnull().any()
             '''
             Exception Case:  (not 'X' but raw code)
             ---------------------------------------
@@ -500,7 +500,7 @@ class PDB(Base):
         return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
 
     @unsync
-    async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = ' CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
+    async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
         df = (await self.fetch_from_modelServer_api('atoms',
                                                     method='get',
                                                     filename=f'.{struct_asym_id}({label_atom_id})',
@@ -511,10 +511,8 @@ class PDB(Base):
                                                     copy_all_categories=False
                                                     ).then(PDB.cif2atom_sites_df)
               ).drop_duplicates(subset='_atom_site.label_seq_id', keep='first')
-        df['_atom_site.label_seq_id'] = df['_atom_site.label_seq_id'].astype(
-            int)
         if overlap_range is not None:
-            return self.get_coordinates(df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))})))
+            return self.get_coordinates(df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))}, dtype=str)))
         else:
             return self.get_coordinates(df)
 
@@ -3215,28 +3213,24 @@ class SIFTS(PDB):
             return self.select_mo(sele_df, OC_cutoff, **select_mo_kwargs)
 
     @unsync
-    async def pipe_3dcluster_mo(self, exclude_pdbs=frozenset(), oc_cutoff: float = 0.8, rmsd_cutoff: float = 2.5,sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col: bool = False, ascending: bool = False, **kwargs):
+    async def pipe_cluster3d_mo(self, exclude_pdbs=frozenset(), oc_cutoff: float = 0.8, rmsd_cutoff: float = 2.5, sort_cols=['bs_score', '1/resolution', 'revision_date', 'id_score'], infer_new_col: bool = False, ascending: bool = False, **kwargs):
+        assert oc_cutoff >= 0 and oc_cutoff <= 1 and rmsd_cutoff >= 0
         sifts_df = await self.pipe_select_base(exclude_pdbs, **kwargs)
         if sifts_df is None:
             return
         else:
-            sifts_df['select_tag'] = False
+            sifts_df['oc_rmsd_select_tag'] = False
+            sifts_df['oc_select_tag'] = False
             sifts_df['select_rank'] = -1
             if infer_new_col:
                 for col in sort_cols:
                     if (col not in sifts_df.columns) and (col[1:] in sifts_df.columns) and (col[0] == '-'):
                         sifts_df[col] = -sifts_df[col[1:]]
             sifts_df = sifts_df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
-            #if allow_mask is True:
-            #    allow_sele_index = sifts_df.index
-            #elif allow_mask is None:
-            #    allow_sele_index = sifts_df[sifts_df.bs_score > 0].index
-            #else:
-            #    allow_sele_index = sifts_df[allow_mask].index
             sifts_df['select_rank'] = range(1, sifts_df.shape[0]+1)
         pdbekb_cluster = await self.fetch_from_pdbe_api('graph-api/uniprot/superposition/', Base.to_dataframe)
         if pdbekb_cluster is not None:
-            pdbekb_cluster = pdbekb_cluster.filter(items=('UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'pdbekb_cluster', 'is_representative'))
+            pdbekb_cluster = pdbekb_cluster.filter(items=('UniProt', 'pdb_id', 'entity_id', 'struct_asym_id', 'pdbekb_cluster'))  # , 'is_representative'
             sifts_df = sifts_df.merge(pdbekb_cluster, how='left')
             fill_index = sifts_df[sifts_df.pdbekb_cluster.isnull()].index
             # NOTE: for cases like 2l53 2lqp
@@ -3245,32 +3239,89 @@ class SIFTS(PDB):
         else:
             sifts_df['pdbekb_cluster'] = list(f'none_assigned_{iclu}' for iclu in range(sifts_df.shape[0]))
             focus = sifts_df.filter(items=('pdb_id', 'struct_asym_id', 'OBS_INDEX', 'OBS_COUNT', 'new_pdb_range_raw', 'new_unp_range_raw', 'select_rank', 'pdbekb_cluster'))
+        assert focus.shape[0] > 0
         focus[['new_pdb_range_obs', 'new_unp_range_obs']] = focus[['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']].apply(
             lambda x: overlap_range_2(*x), axis=1).apply(Series)
-        select_index = []
-        selected_ranges = []
-        for cur_index in focus.index:
-            cur_record = focus.loc[cur_index]
-            cur_pdb = cur_record['pdb_id']
-            cur_chain = cur_record['struct_asym_id']
-            cur_unp_obs = cur_record['new_unp_range_obs']
-            cur_pdb_obs = cur_record['new_pdb_range_obs']
-            cur_obs = cur_record['OBS_COUNT']
-            for sele_pdb, sele_chain, sele_unp_obs, sele_pdb_obs, sele_obs in selected_ranges:
-                overlap_unp_segs, overlap_sele_pdb_segs, overlap_cur_pdb_segs = overlap_range_3(
-                    sele_unp_obs, 
-                    cur_unp_obs,
-                    sele_pdb_obs,
-                    cur_pdb_obs)
-                oc_score = range_len(overlap_unp_segs) / min(sele_obs, cur_obs)
-                if oc_score >= oc_cutoff:
-                    rmsd_score = qcp.rmsd(
-                        PDB(sele_pdb).get_representative_atoms(sele_chain, overlap_pdb_segs=overlap_sele_pdb_segs), 
-                        PDB(cur_pdb).get_representative_atoms(cur_chain, overlap_pdb_segs=overlap_cur_pdb_segs))
-                    if rmsd_score <= rmsd_cutoff:
-                        pass
-            #select_index.append(cur_index)
-            #selected_ranges.append(cur_range)
+        cluster = await self.cluster3d_mo_algorithm(focus.drop(columns=['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']).itertuples(), oc_cutoff, rmsd_cutoff)
+        selected_indexes = cluster.groupby(['oc_cluster', 'rmsd_cluster']).Index.min().sort_values()
+        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}))
+        assert not cluster.pdbekb_cluster.isnull().any()
+        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']))
+        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
+        sifts_df.loc[selected_indexes, 'oc_rmsd_select_tag'] = True
+        focus_oc_cluster = cluster.drop_duplicates(subset='oc_cluster', keep='first')
+        selected_oc_indexes = cluster.loc[select_range(focus_oc_cluster.new_unp_range_obs, focus_oc_cluster.index, cutoff=1-oc_cutoff)].Index
+        sifts_df.loc[selected_oc_indexes, 'oc_select_tag'] = True
+        return sifts_df
+    
+    @staticmethod
+    @unsync
+    async def cluster3d_mo_algorithm(rows: Iterator, oc_cutoff: float, rmsd_cutoff: float) -> DataFrame:
+        """
+        # Monomer 3D Cluster (impl Greedy Algorithm)
+        
+        ## Data Structure
+
+            [
+                [
+                    # one oc cluster
+                    
+                    [next(rows), ], # one rmsd cluster
+                    
+                    [],           # another rmsd cluster
+                ],
+                [
+                    # another oc cluster
+                ]
+            ]
+        """
+        cluster = [[[next(rows)]]]
+        for cur_row in rows:
+            stop_sub_for_loop = False
+            to_append_oc_index = -1
+            to_append_rmsd_index = -1
+            for oc_cluster_index, oc_cluster in enumerate(cluster):
+                if stop_sub_for_loop: break
+                for rmsd_cluster_index, rmsd_cluster in enumerate(oc_cluster):
+                    if stop_sub_for_loop: break
+                    for sele_row in rmsd_cluster:
+                        overlap_unp_segs, overlap_sele_pdb_segs, overlap_cur_pdb_segs = overlap_range_3(
+                            sele_row.new_unp_range_obs, 
+                            cur_row.new_unp_range_obs,
+                            sele_row.new_pdb_range_obs,
+                            cur_row.new_pdb_range_obs)
+                        oc_score = range_len(overlap_unp_segs) / min(sele_row.OBS_COUNT, cur_row.OBS_COUNT)
+                        if oc_score >= oc_cutoff:
+                            # same oc_cluster
+                            rmsd_score = qcp.rmsd(
+                                await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs), 
+                                await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs))
+                            if rmsd_score <= rmsd_cutoff:
+                                # same oc_cluster & same rmsd_cluster
+                                to_append_oc_index = oc_cluster_index
+                                to_append_rmsd_index = rmsd_cluster_index
+                                stop_sub_for_loop = True
+                                break
+                            else:
+                                # same oc_cluster & possible different rmsd_cluster
+                                to_append_oc_index = oc_cluster_index
+                        else:
+                            # possible different oc_cluster
+                            pass
+            # to append
+            if to_append_oc_index < 0:
+                cluster.append([[cur_row]])
+            else:
+                if to_append_rmsd_index < 0:
+                    cluster[to_append_oc_index].append([cur_row])
+                else:
+                    cluster[to_append_oc_index][to_append_rmsd_index].append(cur_row)
+        # to index
+        return DataFrame((
+            {'Index': sele_row.Index, 'oc_cluster': oc_cluster_index, 'rmsd_cluster': rmsd_cluster_index
+            } for oc_cluster_index, oc_cluster in enumerate(cluster) for rmsd_cluster_index, rmsd_cluster in enumerate(oc_cluster) for sele_row in rmsd_cluster
+        ))
+                    
 
     @staticmethod
     @unsync
@@ -3630,7 +3681,7 @@ class SIFTS(PDB):
         ret = concat(res, sort=False, ignore_index=True)
         if with_sele_cols_for_unp and (self.source == 'UniProt') and (func_for_this == 'pipe_select_mo'):
             ret = ret.merge(df[['UniProt','pdb_id','struct_asym_id','bs_score','select_tag','select_rank','after_select_rank']], how='left')
-            assert ret.select_tag.isnull().sum() == 0
+            assert not ret.select_tag.isnull().any()
         return ret
 
     @staticmethod
