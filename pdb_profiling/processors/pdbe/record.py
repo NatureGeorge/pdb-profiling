@@ -52,6 +52,7 @@ from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning,
                                     PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning,
                                     PDBeKBResidueMappingErrorWarning)
 from pdb_profiling.ensure import aio_file_exists_stat
+from pdb_profiling.cython.py_qcprot import rmsd
 from textdistance import sorensen
 from warnings import warn
 from cachetools import LRUCache
@@ -59,7 +60,6 @@ from sklearn.neighbors import NearestNeighbors
 from random import choice
 from tenacity import retry, wait_random, stop_after_attempt, RetryError
 from parasail import nw_trace_scan_sat, blosum62
-import py_qcprot as qcp
 
 
 API_SET = {api for apiset in API_SET for api in apiset[1]}
@@ -3293,7 +3293,7 @@ class SIFTS(PDB):
                         oc_score = range_len(overlap_unp_segs) / min(sele_row.OBS_COUNT, cur_row.OBS_COUNT)
                         if oc_score >= oc_cutoff:
                             # same oc_cluster
-                            rmsd_score = qcp.rmsd(
+                            rmsd_score = rmsd(
                                 await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs), 
                                 await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs))
                             if rmsd_score <= rmsd_cutoff:

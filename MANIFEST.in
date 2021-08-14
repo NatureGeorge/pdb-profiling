@@ -1,2 +1,5 @@
 include pdb_profiling/cython/cyrange.pyx
+include pdb_profiling/cython/py_qcprot.pyx
+include pdb_profiling/cython/qcprot.c
+include pdb_profiling/cython/qcprot.h
 include pdb_profiling/sql/export_mutation_mapping_all.sql

@@ -35,7 +35,7 @@ Install by `pip` command.
 
 ```bash
 python -m pip install --upgrade pip
-``` 
+```
 
 ### Official Installation
 
@@ -53,6 +53,7 @@ python -m pip install --upgrade pdb-profiling
 
 ```bash
 python -m pip install cython
+python -m pip install numpy
 git clone https://github.com/NatureGeorge/pdb-profiling.git
 python setup.py build_ext --inplace  # Need GCC or Other Compiler For C
 python setup.py install              # or "sudo python setup.py install" or "python setup.py install --user"
@@ -105,3 +106,9 @@ python setup.py install              # or "sudo python setup.py install" or "pyt
 ## Copyright Notice
 
 This project is developed by [Zefeng Zhu](https://github.com/NatureGeorge) and hold by [Minghui Group](https://lilab.jysw.suda.edu.cn/).
+
+## License
+
+The `pdb_profiling.cython.py_qcprot` module is derived from the [cython wrapper contributed by Bernhard Thiel](https://github.com/Bernhard10/py_qcprot) and is distributed under the terms of a BSD-3-Clause License. And it also contains the dependent C-code from <http://theobald.brandeis.edu/QCP/> written by Pu Liu and Douglas Theobald (with slight modification by Bernhard Thiel) and is licensed under a BSD 3-clause license.
+
+The `pdb_profiling` is distributed under the terms of the MIT License.

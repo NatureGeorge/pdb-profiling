@@ -6,6 +6,7 @@
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
 from setuptools import setup, find_namespace_packages, Extension
 from Cython.Build import cythonize
+import numpy
 
 with open("README.md", "rt") as f:
     readme = f.read()
@@ -37,12 +38,15 @@ setup(
         'click>=7.1.2',
         'parasail>=1.2.4'
      ],
-    dependency_links=['https://gitee.com/zhuzefeng/py_qcprot.git#egg=py_qcprot'],
-    ext_modules=cythonize([Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"])]),
+    ext_modules=cythonize([
+        Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"]),
+        Extension("pdb_profiling.cython.py_qcprot", ["pdb_profiling/cython/py_qcprot.pyx", "pdb_profiling/cython/qcprot.c"]),
+        ]),
+    include_dirs=[numpy.get_include()],
     license="MIT",
-    author_email="1730416009@stu.suda.edu.cn",
+    author_email="hydrozzf@qq.com",
     maintainer="ZeFeng Zhu",
-    maintainer_email="1730416009@stu.suda.edu.cn",
+    maintainer_email="hydrozzf@qq.com",
     description="Profiling Protein Structures from Protein Data Bank and integrate various resources.🏄‍♂️",
     long_description=readme,
     long_description_content_type="text/markdown",
