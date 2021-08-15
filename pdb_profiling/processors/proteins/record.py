@@ -77,24 +77,16 @@ class Identifier(Abclog, IdentifierBase):
 
         cls.sqlite_api.sync_insert(
             cls.sqlite_api.INFO, [info_data])
-        if features_df is not None:
+        if features_df is not None and len(features_df) > 0:
             cls.sqlite_api.sync_insert(
                 cls.sqlite_api.FEATURES, features_df.to_dict('records'))
-
-        if (dbReferences_df is not None) and (len(dbReferences_df) > 0):
+        if dbReferences_df is not None and len(dbReferences_df) > 0:
             cls.sqlite_api.sync_insert(
                 cls.sqlite_api.DB_REFERENCES, dbReferences_df.to_dict('records'))
-            if iso_df is not None:
-                cls.sqlite_api.sync_insert(
-                    cls.sqlite_api.ALTERNATIVE_PRODUCTS, iso_df.to_dict('records'))
-            else:
-                cls.logger.info(
-                    f"Can't find ALTERNATIVE_PRODUCTS with {identifier}")
-        else:
-            cls.logger.info(
-                f"Can't find (reviewed) dbReference with {identifier}")
-
-        if len(other_dbReferences_df) > 0:
+        if iso_df is not None and len(iso_df) > 0:
+            cls.sqlite_api.sync_insert(
+                cls.sqlite_api.ALTERNATIVE_PRODUCTS, iso_df.to_dict('records'))
+        if other_dbReferences_df is not None and len(other_dbReferences_df) > 0:
             cls.sqlite_api.sync_insert(
                 cls.sqlite_api.OTHER_DB_REFERENCES, other_dbReferences_df.to_dict('records'))
         if int_df is not None and len(int_df) > 0:
