@@ -3244,14 +3244,14 @@ class SIFTS(PDB):
             lambda x: overlap_range_2(*x), axis=1).apply(Series)
         cluster = await self.cluster3d_mo_algorithm(focus.drop(columns=['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']).itertuples(), oc_cutoff, rmsd_cutoff)
         selected_indexes = cluster.groupby(['oc_cluster', 'rmsd_cluster']).Index.min().sort_values()
-        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}))
-        assert not cluster.pdbekb_cluster.isnull().any()
-        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']))
-        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
         sifts_df.loc[selected_indexes, 'oc_rmsd_select_tag'] = True
+        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}), how='left')
+        assert not cluster.pdbekb_cluster.isnull().any()
         focus_oc_cluster = cluster.drop_duplicates(subset='oc_cluster', keep='first')
         selected_oc_indexes = cluster.loc[select_range(focus_oc_cluster.new_unp_range_obs, focus_oc_cluster.index, cutoff=1-oc_cutoff)].Index
         sifts_df.loc[selected_oc_indexes, 'oc_select_tag'] = True
+        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']), how='left')
+        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
         return sifts_df
     
     @staticmethod
