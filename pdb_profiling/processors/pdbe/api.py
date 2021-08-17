@@ -333,7 +333,7 @@ class PDBeDecoder(object):
                      'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/',
                      'api/mappings/', 'api/nucleic_mappings/', 'api/nucleic_mappings/rfam/', 
-                     'api/nucleic_mappings/sequence_domains/'
+                     'api/nucleic_mappings/sequence_domains/', 'graph-api/mappings/ec/'
                      # 'graph-api/uniprot/'
                      )
     def yieldSIFTSAnnotation(data: Dict) -> Generator:
