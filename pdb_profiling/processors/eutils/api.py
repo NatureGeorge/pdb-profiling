@@ -41,7 +41,7 @@ class EutilsAPI(Abclog):
         for params in params_collection:
             yield cls.task_unit(suffix, params, folder)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, suffix: str, params_collection: Iterable[Dict], folder: Union[Path, str], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
@@ -51,7 +51,7 @@ class EutilsAPI(Abclog):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
 
     @classmethod
     def single_retrieve(cls, suffix: str, params: Dict, folder: Union[Path, str], semaphore, rate: float = 1.5):

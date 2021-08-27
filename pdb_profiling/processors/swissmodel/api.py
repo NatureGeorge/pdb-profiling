@@ -31,10 +31,6 @@ class SMR(Abclog):
 
         * <https://swissmodel.expasy.org/docs/smr_openapi>
         * <https://swissmodel.expasy.org/docs/repository_help#smr_api>
-    
-    >>> SMR.retrieve(
-        ('Q6NZ36', 'P12755'), 
-        init_folder_from_suffix(yourfolder, 'swissmodel/repository/uniprot/'))
     '''
 
     root = 'repository/uniprot/'
@@ -83,7 +79,7 @@ class SMR(Abclog):
         for unp in unps:
             yield cls.task_unit(unp, params, file_format, folder)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, unps, folder: Optional[Union[Path, str]]=None, params: Dict = dict(provider='swissmodel'), concur_req: int = 20, rate: float = 1.5, file_format: str = 'json', ret_res: bool = True, **kwargs):
         assert file_format in ('json', 'pdb'), "Invalid file format"
         res = UnsyncFetch.multi_tasks(
@@ -93,7 +89,7 @@ class SMR(Abclog):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', cls.web_semaphore))
-        return res
+        return res"""
 
     @classmethod
     def single_retrieve(cls, unp: str, folder: Optional[Union[Path, str]]=None, semaphore=None, params: Dict = dict(provider='swissmodel'), rate: float = 1.5, file_format: str = 'json'):

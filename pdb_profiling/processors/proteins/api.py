@@ -62,7 +62,7 @@ class ProteinsAPI(Abclog):
             for identifier, params in zip(identifiers, params_collection):
                 yield cls.task_unit(suffix, params, folder, identifier)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, suffix: str, params_collection: Iterable[Dict], folder: Union[Path, str], identifiers: Optional[Iterable[str]] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
@@ -72,7 +72,7 @@ class ProteinsAPI(Abclog):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
     
     @classmethod
     def single_retrieve(cls, suffix: str, params:Dict, folder: Union[Path, str], semaphore, identifier:Optional[str]=None, rate: float = 1.5):

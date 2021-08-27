@@ -682,7 +682,7 @@ class PDBArchive(object):
         for pdb in pdbs:
             yield cls.task_unit(pdb, suffix, file_suffix, folder)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: Optional[str] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, file_suffix, folder),
@@ -690,7 +690,7 @@ class PDBArchive(object):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
 
     @classmethod
     def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: Optional[str] = None, rate: float = 1.5):

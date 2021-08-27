@@ -17,7 +17,8 @@ from aiofiles.os import remove as aiofiles_os_remove
 from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
-from zlib import compress, decompress
+from io import StringIO
+import zlib
 from bisect import bisect_left
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
@@ -487,9 +488,14 @@ class PDB(Base):
                 '_atom_site.label_comp_id', '_atom_site.label_seq_id',
                 '_atom_site.label_asym_id', '_atom_site.Cartn_x',
                 '_atom_site.Cartn_y', '_atom_site.Cartn_z')
-        async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.readlines()
-            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
+        if path.suffix == '.gz':
+            async with aiofiles_open(path, 'rb') as file_io:
+                handle = StringIO(zlib.decompress((await file_io.read()), zlib.MAX_WBITS | 32).decode('utf-8'))
+                mmcif_dict = MMCIF2DictPlus(handle, cols+('_coordinate_server_result.has_error',))
+        else:
+            async with aiofiles_open(path, 'rt') as file_io:
+                handle = await file_io.readlines()
+                mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
         dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
@@ -522,12 +528,12 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    async def cif2residue_listing(cls, path: Union[Unfuture, Coroutine, str, Path]):
+    def cif2residue_listing(cls, path: Union[Unfuture, str, Path]):
         cols = ('_pdbx_poly_seq_scheme.asym_id',
                 '_pdbx_poly_seq_scheme.entity_id',
                 '_pdbx_poly_seq_scheme.seq_id',
                 '_pdbx_poly_seq_scheme.mon_id',
-                '_pdbx_poly_seq_scheme.ndb_seq_num',
+                #'_pdbx_poly_seq_scheme.ndb_seq_num', # NDB residue number
                 '_pdbx_poly_seq_scheme.pdb_seq_num',
                 '_pdbx_poly_seq_scheme.pdb_strand_id',
                 '_pdbx_poly_seq_scheme.pdb_ins_code')
@@ -535,12 +541,12 @@ class PDB(Base):
                     'entity_id',
                     'residue_number',
                     'residue_name',
-                    'residue_number?',
+                    #'residue_number?',
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        if isawaitable(path):
-            path = await path
+        if isinstance(path, Unfuture):
+            path = path.result()
         with gzip_open(path, 'rt') as handle:
             mmcif_dict = MMCIF2DictPlus(handle, cols)
             mmcif_dict['data_'] = mmcif_dict['data_'].lower()
@@ -548,8 +554,8 @@ class PDB(Base):
         col_dict = dict(zip(cols, new_cols))
         col_dict['data_'] = 'pdb_id'
         dfrm.rename(columns=col_dict, inplace=True)
-        assert (dfrm['residue_number'] == dfrm['residue_number?']).all(), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
-        dfrm.drop(columns=['residue_number?'], inplace=True)
+        #assert (dfrm['residue_number'] == dfrm['residue_number?']).all(), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
+        #dfrm.drop(columns=['residue_number?'], inplace=True)
         for col in ('residue_number', 'authore_residue_number'):
             dfrm[col] = dfrm[col].astype(int)
         dfrm.author_insertion_code = dfrm.author_insertion_code.apply(lambda x: '' if x == '.' else x)
@@ -565,8 +571,8 @@ class PDB(Base):
                     '_pdbx_struct_oper_list.symmetry_operation',
                     '_pdbx_struct_oper_list.name')
         async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.read()
-            mmcif_dict = MMCIF2DictPlus((i+'\n' for i in handle.split('\n')), assg_cols+oper_cols)
+            handle = await file_io.readlines()
+            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), assg_cols+oper_cols)
         if len(mmcif_dict) < 7:
             return None
         assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
@@ -966,7 +972,7 @@ class PDB(Base):
             if ratio > 0:
                 obs_index.append(index)
             obs_array.append(ratio)
-        return to_interval(obs_index), len(obs_index), compress(json.dumps(obs_array))
+        return to_interval(obs_index), len(obs_index), zlib.compress(json.dumps(obs_array))
 
     @unsync
     async def stats_chain_seq(self):
@@ -1095,8 +1101,8 @@ class PDB(Base):
                 b'_pdbe_chain_remapping')
         try:
             async with aiofiles_open(target_file, 'rt') as file_io:
-                handle = await file_io.read()
-                mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
+                handle = await file_io.readlines()
+                mmcif_dict = MMCIF2DictPlus(iline for iline in handle)
                 if (len(mmcif_dict) == 0) or (not handle.endswith('\n#\n')):
                     raise PossibleConnectionError(target_file)
                 del mmcif_dict['data_']
@@ -2699,7 +2705,7 @@ class SIFTS(PDB):
         dfrm['pdb_sequence'] = b''
         dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
         for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
-            dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
+            dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = zlib.compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
             """if (pdb_id, entity_id) in already:
                 continue
             cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
@@ -3061,7 +3067,7 @@ class SIFTS(PDB):
         else:
             raise TypeError("bs_score_base() with invalid positional arguments")
         new_pdb_range = json.loads(new_pdb_range) if isinstance(new_pdb_range, str) else new_pdb_range
-        OBS_RATIO_ARRAY = array(json.loads(decompress(OBS_RATIO_ARRAY))) if isinstance(OBS_RATIO_ARRAY, bytes) else OBS_RATIO_ARRAY
+        OBS_RATIO_ARRAY = array(json.loads(zlib.decompress(OBS_RATIO_ARRAY))) if isinstance(OBS_RATIO_ARRAY, bytes) else OBS_RATIO_ARRAY
         aligned_part = cls.bs_score_aligned_part(new_pdb_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, NON_INDEX, OBS_RATIO_ARRAY)
         CN_terminal_part, outside_range_ignore_artifact = cls.bs_score_CN_terminal_part(new_pdb_range, ARTIFACT_INDEX, SEQRES_COUNT, OBS_RATIO_ARRAY)
         insertion_part = cls.bs_score_insertion_part(new_pdb_range, OBS_RATIO_ARRAY)

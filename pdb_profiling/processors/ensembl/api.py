@@ -48,7 +48,7 @@ class EnsemblAPI(Abclog):
         for identifier, params in zip(identifiers, params_collection):
             yield cls.task_unit(suffix, identifier, params, folder, headers)
     
-    @classmethod
+    """@classmethod
     def retrieve(cls, suffix: str, identifiers: Iterable[str], params_collection: Iterable[Optional[Dict]], folder: Union[Path, str], concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, headers: Optional[Dict] = None, **kwargs):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
@@ -58,7 +58,7 @@ class EnsemblAPI(Abclog):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
 
     @classmethod
     def single_retrieve(cls, suffix: str, identifier: str, params: Optional[Dict], folder: Union[Path, str], semaphore, rate: float = 1.5, headers: Optional[Dict] = None):
