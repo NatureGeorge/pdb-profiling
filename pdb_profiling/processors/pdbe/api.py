@@ -30,9 +30,11 @@ BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
 
 FTP_URL: str = 'ftp://ftp.ebi.ac.uk/'
 
+HTTP_FTP_URL = 'https://ftp.ebi.ac.uk/'
+
 FTP_DEFAULT_PATH: str = 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz'
 
-PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
+PDB_ARCHIVE_URL_EBI: str = f'{HTTP_FTP_URL}pub/databases/pdb/data/structures/'
 PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
 PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/'
 
@@ -726,7 +728,7 @@ class PDBVersioned(PDBArchive):
 
 class PDBeKBAnnotations(object):
     ftp_root = f"{FTP_URL}pub/databases/pdbe-kb/annotations/"
-    https_root = ftp_root.replace('ftp:', 'https:')
+    https_root = f"{HTTP_FTP_URL}pub/databases/pdbe-kb/annotations/"
     root = https_root
     api_set = frozenset({
         '14-3-3-pred/', '3DComplex/',

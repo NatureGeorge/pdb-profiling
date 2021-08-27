@@ -59,6 +59,14 @@ class UnsyncFetch(Abclog):
         * https://tenacity.readthedocs.io/en/latest/
     '''
 
+    @staticmethod
+    @unsync
+    @retry(**rt_kw)
+    async def get_last_modified_time(url: str) -> Optional[str]:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url) as resp:
+                return resp.headers.get('Last-Modified', None)
+
     @classmethod
     @retry(**rt_kw)
     async def http_download(cls, semaphore, method: str, info: Dict, path: str, rate: float):

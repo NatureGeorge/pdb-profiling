@@ -36,7 +36,10 @@ class ProteinsAPI(Abclog):
         'coordinates', 'coordinates/', 'coordinates/location/',
         'uniparc', 'uniparc/accession/', 'uniparc/best/guess',
         'uniparc/dbreference/', 'uniparc/proteome/', 'uniparc/sequence',  # NOTE: uniparc/sequence use POST method!
-        'uniparc/upi/', 'variation/dbsnp/', 'variation/hgvs/', 'variation/'))
+        'uniparc/upi/', 'variation/dbsnp/', 'variation/hgvs/', 'variation/',
+        'proteomics', 'proteomics/', 'proteomics-ptm', 'proteomics-ptm/',
+        'mutagenesis', 'mutagenesis/',
+        ))
     
     @classmethod
     def get_file_suffix(cls) -> str:

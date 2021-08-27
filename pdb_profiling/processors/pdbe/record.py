@@ -7,14 +7,13 @@
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
 from functools import partial, reduce
-from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
+from numpy import array, where as np_where, count_nonzero, nan, exp, square
 from pathlib import Path
 from pandas import isna, concat, DataFrame, Series, merge
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
 from aiofiles.os import remove as aiofiles_os_remove
-from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
 from io import StringIO
@@ -479,23 +478,30 @@ class PDB(Base):
                 return dfrm[dfrm.entity_id.isin(focus_entities)]
         return dfrm
 
-    @classmethod
+    @staticmethod
     @unsync
-    async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
+    async def a_read_cif(path: Union[Unfuture, Coroutine, str, Path], *args) -> MMCIF2DictPlus:
         if isawaitable(path):
             path = await path
+        if not isinstance(path, Path):
+            path = Path(path)
+        if path.suffix == '.gz':
+            async with aiofiles_open(path, 'rb') as file_io:
+                handle = StringIO(zlib.decompress((await file_io.read()), zlib.MAX_WBITS | 32).decode('utf-8'))
+                return MMCIF2DictPlus(handle, *args)
+        else:
+            async with aiofiles_open(path, 'rt') as file_io:
+                handle = await file_io.readlines()
+                return MMCIF2DictPlus((iline for iline in handle), *args)
+
+    @classmethod
+    @unsync
+    async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, Path]):
         cols = ('_atom_site.type_symbol', '_atom_site.label_atom_id',
                 '_atom_site.label_comp_id', '_atom_site.label_seq_id',
                 '_atom_site.label_asym_id', '_atom_site.Cartn_x',
                 '_atom_site.Cartn_y', '_atom_site.Cartn_z')
-        if path.suffix == '.gz':
-            async with aiofiles_open(path, 'rb') as file_io:
-                handle = StringIO(zlib.decompress((await file_io.read()), zlib.MAX_WBITS | 32).decode('utf-8'))
-                mmcif_dict = MMCIF2DictPlus(handle, cols+('_coordinate_server_result.has_error',))
-        else:
-            async with aiofiles_open(path, 'rt') as file_io:
-                handle = await file_io.readlines()
-                mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
+        mmcif_dict = await cls.a_read_cif(path, cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
         dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
@@ -528,7 +534,7 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    def cif2residue_listing(cls, path: Union[Unfuture, str, Path]):
+    async def cif2residue_listing(cls, path: Union[Unfuture, str, Path]):
         cols = ('_pdbx_poly_seq_scheme.asym_id',
                 '_pdbx_poly_seq_scheme.entity_id',
                 '_pdbx_poly_seq_scheme.seq_id',
@@ -545,12 +551,9 @@ class PDB(Base):
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        if isinstance(path, Unfuture):
-            path = path.result()
-        with gzip_open(path, 'rt') as handle:
-            mmcif_dict = MMCIF2DictPlus(handle, cols)
-            mmcif_dict['data_'] = mmcif_dict['data_'].lower()
-            dfrm = DataFrame(mmcif_dict)
+        mmcif_dict = await cls.a_read_cif(path, cols)
+        mmcif_dict['data_'] = mmcif_dict['data_'].lower()
+        dfrm = DataFrame(mmcif_dict)
         col_dict = dict(zip(cols, new_cols))
         col_dict['data_'] = 'pdb_id'
         dfrm.rename(columns=col_dict, inplace=True)
@@ -561,18 +564,16 @@ class PDB(Base):
         dfrm.author_insertion_code = dfrm.author_insertion_code.apply(lambda x: '' if x == '.' else x)
         return dfrm
 
-    @staticmethod
+    @classmethod
     @unsync
-    async def assg_oper_cif_base(path):
+    async def assg_oper_cif_base(cls, path):
         assg_cols = ('_pdbx_struct_assembly_gen.asym_id_list',
                     '_pdbx_struct_assembly_gen.oper_expression',
                     '_pdbx_struct_assembly_gen.assembly_id')
         oper_cols = ('_pdbx_struct_oper_list.id',
                     '_pdbx_struct_oper_list.symmetry_operation',
                     '_pdbx_struct_oper_list.name')
-        async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.readlines()
-            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), assg_cols+oper_cols)
+        mmcif_dict = await cls.a_read_cif(path, assg_cols+oper_cols)
         if len(mmcif_dict) < 7:
             return None
         assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
