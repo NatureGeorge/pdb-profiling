@@ -9,7 +9,7 @@ from inspect import isawaitable
 from functools import partial, reduce
 from numpy import array, where as np_where, count_nonzero, nan, exp, square
 from pathlib import Path
-from pandas import isna, concat, DataFrame, Series, merge
+from pandas import isna, concat, DataFrame, Series, merge, read_csv
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
@@ -37,7 +37,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, get_str_dict_len, aa_three2one)
-from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
+from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET, FetchBase
 from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
@@ -150,6 +150,7 @@ class Base(IdentifierBase):
         tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search', '1d_coordinates'}))
         cls.sqlite_api = PDBeDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
         cls.rcsb_sqlite_api = RCSBDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"RCSBDB.db"))
+        init_folder_from_suffix(cls.folder, 'for_version_control')
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -480,7 +481,7 @@ class PDB(Base):
 
     @staticmethod
     @unsync
-    async def a_read_cif(path: Union[Unfuture, Coroutine, str, Path], *args) -> MMCIF2DictPlus:
+    async def a_load_cif(path: Union[Unfuture, Coroutine, str, Path], *args) -> MMCIF2DictPlus:
         if isawaitable(path):
             path = await path
         if not isinstance(path, Path):
@@ -501,7 +502,7 @@ class PDB(Base):
                 '_atom_site.label_comp_id', '_atom_site.label_seq_id',
                 '_atom_site.label_asym_id', '_atom_site.Cartn_x',
                 '_atom_site.Cartn_y', '_atom_site.Cartn_z')
-        mmcif_dict = await cls.a_read_cif(path, cols+('_coordinate_server_result.has_error',))
+        mmcif_dict = await cls.a_load_cif(path, cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
         dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
@@ -551,7 +552,7 @@ class PDB(Base):
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        mmcif_dict = await cls.a_read_cif(path, cols)
+        mmcif_dict = await cls.a_load_cif(path, cols)
         mmcif_dict['data_'] = mmcif_dict['data_'].lower()
         dfrm = DataFrame(mmcif_dict)
         col_dict = dict(zip(cols, new_cols))
@@ -573,7 +574,7 @@ class PDB(Base):
         oper_cols = ('_pdbx_struct_oper_list.id',
                     '_pdbx_struct_oper_list.symmetry_operation',
                     '_pdbx_struct_oper_list.name')
-        mmcif_dict = await cls.a_read_cif(path, assg_cols+oper_cols)
+        mmcif_dict = await cls.a_load_cif(path, assg_cols+oper_cols)
         if len(mmcif_dict) < 7:
             return None
         assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
@@ -1067,15 +1068,21 @@ class PDB(Base):
         if mol_df is None:
             raise PossibleObsoletedPDBEntryError(f"None dataframe: {repr(self)}, either obsoleted or API lag update")
         if 'entity_id' in kwargs:
-            cur_record = mol_df.loc[mol_df.entity_id.eq(kwargs['entity_id']).idxmax()]
+            mask = mol_df.entity_id.eq(kwargs['entity_id'])
         elif 'struct_asym_id' in kwargs:
             struct_asym_id = kwargs['struct_asym_id']
-            cur_record = mol_df.loc[mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x).idxmax()]
+            mask = mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x)
         elif 'chain_id' in kwargs:
             chain_id = kwargs['chain_id']
-            cur_record = mol_df.loc[(mol_df.molecule_type.eq('polypeptide(L)') & mol_df.in_chains.apply(lambda x: f'"{chain_id}"' in x)).idxmax()]
+            mask = mol_df.molecule_type.eq('polypeptide(L)') & mol_df.in_chains.apply(lambda x: f'"{chain_id}"' in x)
         else:
             raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
+        if not mask.any():
+            raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
+        else:
+            cur_record = mol_df.loc[mask.idxmax()]
+        if not cur_record['molecule_type'].startswith('poly'):
+            raise ValueError(f"Not polymer with specified information: {repr(self)} -> {kwargs}")
         if mode == 'fix_seq':
             return self.deal_with_pdb_sequence_indices_with_multiple_residues(
                 cur_record['pdb_sequence'], cur_record['pdb_sequence_indices_with_multiple_residues'], kwargs)
@@ -1104,7 +1111,7 @@ class PDB(Base):
             async with aiofiles_open(target_file, 'rt') as file_io:
                 handle = await file_io.readlines()
                 mmcif_dict = MMCIF2DictPlus(iline for iline in handle)
-                if (len(mmcif_dict) == 0) or (not handle.endswith('\n#\n')):
+                if (len(mmcif_dict) == 0) or (not handle[-1] == '#\n'):
                     raise PossibleConnectionError(target_file)
                 del mmcif_dict['data_']
                 cur_df = DataFrame(mmcif_dict)
@@ -3094,8 +3101,9 @@ class SIFTS(PDB):
             '''
         except AssertionError:
             warn(f"{repr(self)}: {sifts_df.shape}, {full_df.shape}", ConflictChainIDWarning)
-            full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
-            assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
+            full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']), how='left')
+            for_check = full_df[full_df.OBS_STD_COUNT.isnull()][['UniProt','pdb_id','struct_asym_id']]
+            assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape[0]} != {full_df.shape[0]}\n{for_check}"
         
         full_df[['new_pdb_range_raw', 'new_unp_range_raw']] = full_df[['new_pdb_range', 'new_unp_range']]
         full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([self.wrap_trim_range(
@@ -3847,6 +3855,18 @@ class SIFTS(PDB):
             return None
         else:
             return concat(dfs, sort=False, ignore_index=True)
+
+    sifts_version_pat = re_compile(r'# (.+) \| PDB: (.+) \| UniProt: (.+)')
+
+    @classmethod
+    def check_version(cls):
+        sifts_df = read_csv(
+            FetchBase('EBI', 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz').download(
+            cls.web_semaphore, cls.get_folder()/'for_version_control/uniprot_pdb.tsv.gz'
+        ).result(), sep='\t')
+        # 2021/08/22 - 03:28 | PDB: 33.21 | UniProt: 2021.03
+        sifts_version, sifts_pdb_version, sifts_unp_version = cls.sifts_version_pat.fullmatch(sifts_df.columns[0]).groups()
+        return sifts_df
 
 
 class Compounds(Base):
