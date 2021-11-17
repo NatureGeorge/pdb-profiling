@@ -716,11 +716,11 @@ class PDB(Base):
             self.res2eec_df = eec_df
 
     @unsync
-    async def get_res2eec_df(self):
+    async def get_res2eec_df(self, **kwargs):
         if hasattr(self, 'res2eec_df'):
             return self.res2eec_df
         else:
-            await self.set_res2eec_df()
+            await self.set_res2eec_df(**kwargs)
             return self.res2eec_df
 
     @classmethod
@@ -1768,7 +1768,10 @@ class PDBAssembly(PDB):
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
             if range_check_yes.any():
                 to_df_index = interfacelist_df[range_check_yes].index
+                #try:
                 interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+                #except ValueError:
+                #    raise ValueError("%s\n%s" % (range_check.loc[to_df_index].apply(lambda x: x.groups()), interfacelist_df.loc[to_df_index, 'structure_1.range']))
             range_check_no = ~range_check_yes
             if range_check_no.any():
                 no_index = interfacelist_df[range_check_no].index

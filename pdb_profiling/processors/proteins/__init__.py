@@ -5,7 +5,6 @@
 # @Last Modified: 2020-09-27 03:18:19 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 import orm
-from unsync import unsync
 from pdb_profiling.processors.database import SqliteDB
 
 

@@ -17,6 +17,7 @@ class RCSBDataAPI(object):
     headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
     api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/',
                          'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/'))
+    # TODO: add <https://data.rcsb.org/redoc/index.html#tag/Repository-Holdings-Service>
 
     @classmethod
     def task_unit(cls, identifier, suffix: str, folder):
