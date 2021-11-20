@@ -2102,9 +2102,9 @@ class PDBInterface(PDBAssembly):
                     res_df.author_residue_number.eq(int(author_residue_number_1)) &
                     res_df.author_insertion_code.eq(author_insertion_code_1)
                 ].residue_number.iloc[0]
-            except IndexError as e:
-                warn(f"{repr(self)}: {struct_asym_id_in_assembly_1}, {author_residue_number_1}, {author_insertion_code_1}")
-                raise e
+            except IndexError:
+                raise PISAOutOfDateError(f"{repr(self)}: {struct_asym_id_in_assembly_1}, {author_residue_number_1}, {author_insertion_code_1}")
+                #raise e
         else:
             residue_number_1 = None
         if author_residue_number_2 is not None:
@@ -2114,9 +2114,9 @@ class PDBInterface(PDBAssembly):
                     res_df.author_residue_number.eq(int(author_residue_number_2)) &
                     res_df.author_insertion_code.eq(author_insertion_code_2)
                 ].residue_number.iloc[0]
-            except IndexError as e:
-                warn(f"{repr(self)}: {struct_asym_id_in_assembly_2}, {author_residue_number_2}, {author_insertion_code_2}")
-                raise e
+            except IndexError:
+                raise PISAOutOfDateError(f"{repr(self)}: {struct_asym_id_in_assembly_2}, {author_residue_number_2}, {author_insertion_code_2}")
+                #raise e
         else:
             residue_number_2 = None
         if keep_interface_res_df:
@@ -2917,7 +2917,7 @@ class SIFTS(PDB):
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_base(self, complete_chains:bool=False, skip_pdbs=None, only_canonical:bool=False):
+    async def pipe_base(self, complete_chains:bool=False, skip_pdbs=None, only_canonical:bool=False, skip_carbohydrate_polymer:bool=False):
         init_task = await self.fetch_from_pdbe_api('api/mappings/all_isoforms/', Base.to_dataframe).then(self.check_whether_pdbe_api_lag)
         if init_task is None:
             return
@@ -2925,6 +2925,12 @@ class SIFTS(PDB):
             init_task = init_task[~init_task.pdb_id.isin(skip_pdbs)].reset_index(drop=True)
             if len(init_task) == 0:
                 return
+        if skip_carbohydrate_polymer:
+            pdbs = PDBs(frozenset(init_task.pdb_id))
+            tasks = [await task for task in pdbs.fetch(partial(PDBs.fetch_number_of_entities, 'carbohydrate_polymer')).tasks]
+            cpdf = DataFrame(tasks, columns=['pdb_id', 'num_cp'])
+            pass_pdbs = cpdf[cpdf.num_cp.eq(0)][['pdb_id']]
+            init_task = init_task.merge(pass_pdbs).reset_index(drop=True)
         if complete_chains:
             init_task = await self.complete_chains(init_task)
         if only_canonical:
@@ -2943,9 +2949,9 @@ class SIFTS(PDB):
         return sifts_df
     
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, skip_pdbs=None):
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, skip_pdbs=None, skip_carbohydrate_polymer=False):
         if sifts_df is None:
-            sifts_df = await self.pipe_base(complete_chains=complete_chains, skip_pdbs=skip_pdbs)
+            sifts_df = await self.pipe_base(complete_chains=complete_chains, skip_pdbs=skip_pdbs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sifts_df is None:
             return
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class',
@@ -3405,8 +3411,8 @@ class SIFTS(PDB):
     '''
 
     @unsync
-    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
@@ -3444,6 +3450,9 @@ class SIFTS(PDB):
                 ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
                 ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
 
+        if allow_p_df.shape[0] == 0:
+            return p_df
+
         def sele_func(dfrm):
             rank_index = dfrm.index
             p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
@@ -3466,8 +3475,8 @@ class SIFTS(PDB):
             return self.select_ho(p_df, interface_mapped_cov_cutoff, unp_range_DSC_cutoff, DSC_cutoff)
 
     @unsync
-    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         sele_df = sele_df[sele_df.Entry.eq(self.get_id().split('-')[0])]
@@ -3495,9 +3504,9 @@ class SIFTS(PDB):
             return self.select_ho_iso(self.sort_interact_cols(p_df), interface_mapped_cov_cutoff, DSC_cutoff)   
 
     @unsync
-    async def pipe_select_else_base(self, func:str, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
+    async def pipe_select_else_base(self, func:str, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
         assert func != 'pipe_protein_protein_interface'
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         include_chains = sele_df.groupby('pdb_id').struct_asym_id.apply(frozenset)
@@ -3530,8 +3539,11 @@ class SIFTS(PDB):
             allow_mask = (p_df.bs_score_1 > 0)
         elif allow_mask is True:
             allow_mask = p_df.bs_score_1.notnull()
-        allow_p_df = p_df[allow_mask & (
-            (p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        mask = allow_mask & (
+            (p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff)
+        if not mask.any():
+            return p_df
+        allow_p_df = p_df[mask]
         
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3539,7 +3551,10 @@ class SIFTS(PDB):
             return select_range(dfrm.unp_interface_range_1, rank_index, cutoff=DSC_cutoff, similarity_func=sorensen.similarity)
         
         sele_indexes = allow_p_df.groupby('UniProt_1').apply(sele_func)
-        p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
+        try:
+            p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
+        except Exception:
+            raise ValueError("{sele_indexes}\n{p_df}")
         return p_df
 
     @staticmethod
@@ -3563,6 +3578,9 @@ class SIFTS(PDB):
                 allow_mask &
                 ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
                 ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+
+        if allow_p_df.shape[0] == 0:
+            return p_df
 
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3918,6 +3936,15 @@ class PDBs(tuple):
                 ))
         return ret
     
+    @staticmethod
+    @unsync
+    async def fetch_number_of_entities(key: str, pdb_ob: PDB):
+        summary_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
+        if key:
+            return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities'][key]
+        else:
+            return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities']
+
     @staticmethod
     @unsync
     async def fetch_date(pdb_ob: PDB):
