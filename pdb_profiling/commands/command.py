@@ -189,13 +189,14 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--entry_filter', type=str, default=None)
 @click.option('--chain_filter', type=str, default=None)
 @click.option('--skip_pdbs', multiple=True, type=str)
+@click.option('--skip_carbohydrate_polymer/--no-skip_carbohydrate_polymer', default=False, is_flag=True)
 @click.option('--omit', type=int, default=0)
 @click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.option('--autotype', type=str, default='from_IDMapping')
 @click.pass_context
-def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, omit, output, iteroutput, sleep, autotype):
+def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, skip_carbohydrate_polymer, omit, output, iteroutput, sleep, autotype):
     def get_unp_id(args):
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
@@ -205,7 +206,7 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         for key,value in kwargs.items():
             kwargs[key] = eval(value)
         console.log(f"take args: {kwargs}")
-    
+    kwargs['skip_carbohydrate_polymer'] = skip_carbohydrate_polymer
     skip_pdbs = [pdbi for item in skip_pdbs for pdbi in item.split(',')]
     if skip_pdbs:
         kwargs['skip_pdbs'] = skip_pdbs

@@ -39,3 +39,7 @@ class PossibleInvalidAssemblyError(Exception):
 
 class PossibleObsoletedUniProtIsoformError(Exception):
     pass
+
+
+class PISAOutOfDateError(Exception):
+    pass
