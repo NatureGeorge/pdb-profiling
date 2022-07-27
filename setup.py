@@ -2,7 +2,7 @@
 # @Filename: setup.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2019-12-23 04:27:14 pm
+# @Last Modified: 2022-07-27 04:53:36 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
 from setuptools import setup, find_namespace_packages, Extension
 from Cython.Build import cythonize
@@ -14,7 +14,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.3.5a4',
+    version='0.3.6',
     include_package_data=True,
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},

@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-08-11 10:48:11 pm
+# @Last Modified: 2022-01-19 07:15:21 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -505,12 +505,31 @@ class PDB(Base):
         mmcif_dict = await cls.a_load_cif(path, cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
-        dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
+        try:
+            dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
+        except KeyError:
+            raise AssertionError(await path if isawaitable(path) else path)
         return dfrm
 
     @staticmethod
     def get_coordinates(x):
         return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
+
+    @unsync
+    async def get_overlap_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
+        df = (await self.fetch_from_modelServer_api('atoms',
+                                                    method='get',
+                                                    filename=f'.{struct_asym_id}({label_atom_id})',
+                                                    label_asym_id=struct_asym_id,
+                                                    label_atom_id=label_atom_id,
+                                                    model_nums=model_nums,
+                                                    encoding='cif',
+                                                    copy_all_categories=False
+                                                    ).then(PDB.cif2atom_sites_df)
+              ).drop_duplicates(subset='_atom_site.label_seq_id', keep='first')
+        if overlap_range is not None:
+            df = df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))}, dtype=str), how='right')
+        return df.reset_index(drop=True)
 
     @unsync
     async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
@@ -2931,8 +2950,12 @@ class SIFTS(PDB):
             cpdf = DataFrame(tasks, columns=['pdb_id', 'num_cp'])
             pass_pdbs = cpdf[cpdf.num_cp.eq(0)][['pdb_id']]
             init_task = init_task.merge(pass_pdbs).reset_index(drop=True)
+            if len(init_task) == 0:
+                return
         if complete_chains:
             init_task = await self.complete_chains(init_task)
+            if len(init_task) == 0:
+                return
         if only_canonical:
             init_task = init_task[init_task.is_canonical.eq(True)].reset_index(drop=True)
             if len(init_task) == 0:
@@ -3317,9 +3340,20 @@ class SIFTS(PDB):
                         oc_score = range_len(overlap_unp_segs) / min(sele_row.OBS_COUNT, cur_row.OBS_COUNT)
                         if oc_score >= oc_cutoff:
                             # same oc_cluster
-                            rmsd_score = rmsd(
-                                await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs), 
-                                await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs))
+                            sele_coords = await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs)
+                            cur_coords = await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs)
+                            if sele_coords.shape == cur_coords.shape:
+                                rmsd_score = rmsd(sele_coords, cur_coords)
+                            else:
+                                #print('did not pass coords')
+                                sele_coords_df = await PDB(sele_row.pdb_id).get_overlap_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs)
+                                cur_coords_df = await PDB(cur_row.pdb_id).get_overlap_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs)
+                                assert sele_coords_df.shape == cur_coords_df.shape
+                                mask_1 = sele_coords_df['_atom_site.Cartn_x'].notnull()
+                                mask_2 = cur_coords_df['_atom_site.Cartn_x'].notnull()
+                                sele_coords = PDB.get_coordinates(sele_coords_df[mask_1 & mask_2])
+                                cur_coords = PDB.get_coordinates(cur_coords_df[mask_1 & mask_2])
+                                rmsd_score = rmsd(sele_coords, cur_coords)
                             if rmsd_score <= rmsd_cutoff:
                                 # same oc_cluster & same rmsd_cluster
                                 to_append_oc_index = oc_cluster_index
@@ -3513,8 +3547,8 @@ class SIFTS(PDB):
         return await self.pisa_interact_protein_else(sele_df, include_chains, func, run_as_completed, progress_bar, **kwargs)
 
     @unsync
-    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         if len(sele_df.Entry.unique()) == 1:
@@ -3941,7 +3975,11 @@ class PDBs(tuple):
     async def fetch_number_of_entities(key: str, pdb_ob: PDB):
         summary_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
         if key:
-            return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities'][key]
+            try:
+                return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities'][key]
+            except KeyError:
+                warn(f"{repr(pdb_ob)}: without '{key}' key")
+                return pdb_ob.pdb_id, 0
         else:
             return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities']
 

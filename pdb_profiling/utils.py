@@ -2,7 +2,7 @@
 # @Filename: utils.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-02-17 10:25:37 am
+# @Last Modified: 2021-12-28 07:07:34 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 import os
 import gzip
@@ -879,6 +879,8 @@ def select_range(ranges, indexes, cutoff=0.2, skip_index=[], selected_ranges=Non
         cur_range = json.loads(cur_range) if isinstance(cur_range, str) else cur_range
         for selected_range in selected_ranges:
             selected_range = json.loads(selected_range) if isinstance(selected_range, str) else selected_range
+            if len(cur_range) == 0:
+                return
             score = similarity_func(lyst2range(cur_range),
                                lyst2range(selected_range))
             if score > cutoff:

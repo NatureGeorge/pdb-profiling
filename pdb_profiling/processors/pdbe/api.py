@@ -461,8 +461,8 @@ class PDBeDecoder(object):
                 'length': data[pdb]['length'],
                 'residue_number': val['start'],
                 'conservation_score': val['conservation_score'],
-                'letter_array': json.dumps(tuple(i['letter'] for i in val['amino'])).decode('utf-8'),
-                'proba_array': json.dumps(tuple(i['proba'] for i in val['amino'])).decode('utf-8')}
+                'letter_array': json.dumps(tuple(i['oneLetterCode'] for i in val['amino'])).decode('utf-8'),
+                'proba_array': json.dumps(tuple(i['probability'] for i in val['amino'])).decode('utf-8')}
                 for val in data[pdb]['data']], None
             # letter_array, proba_array = zip(*((i['letter'], i['proba']) for i in val['amino']))
 
