@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-09-28 05:43:34 pm
+# @Last Modified: 2022-07-27 05:44:55 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling.processors.recordbase import IdentifierBase
 from pdb_profiling.processors.ensembl.api import EnsemblAPI
@@ -189,14 +189,23 @@ class Identifier(Abclog, IdentifierBase):
             await self.fetch_from_proteins_api(api_suffix, **kwargs).then(a_load_json))).rename(columns={'id': 'ensemblExonId'})
 
     @unsync
-    async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', isoform=0, **kwargs):
+    async def fetch_proteins_from_ProteinsAPI(self, reviewed='true', **kwargs):
         res = await ProteinsAPI.pipe_summary(await self.fetch_from_proteins_api(
             'proteins/',
             with_source=True,
-            params=dict(offset=0, size=-1, reviewed=reviewed, isoform=isoform),
+            params=dict(offset=0, size=-1, reviewed=reviewed),  #isoform=1
             **kwargs
         ).then(a_load_json))
         if res is None:
+            """
+            res = await ProteinsAPI.pipe_summary(await self.fetch_from_proteins_api(
+                'proteins/',
+                with_source=True,
+                params=dict(offset=0, size=-1, reviewed=reviewed, isoform=0),
+                **kwargs
+            ).then(a_load_json))
+            if res is None:
+            """
             return
         else:
             self.save_ProteinsAPI_data_to_DB(res, identifier=self.identifier)

@@ -2,7 +2,7 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-09-17 12:02:45 am
+# @Last Modified: 2022-07-27 05:44:28 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from pathlib import Path
@@ -126,6 +126,17 @@ class ProteinsAPI(Abclog):
     @classmethod
     @unsync
     async def pipe_summary(cls, data: List):
+        #"""
+        if len(data) > 1:
+            flag = []
+            for idx in range(len(data)):
+                if '-' in data[idx]["accession"]:
+                    flag.append(idx)
+            if flag:
+                for idx in range(len(data)):
+                    if idx not in flag:
+                        del data[idx]
+        #"""
         if len(data) > 1:
             cls.logger.warning(f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}, {[data[i]['accession'] for i in range(len(data))]}")
             '''
