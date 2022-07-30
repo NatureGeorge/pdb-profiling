@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-11-13 03:02:39 pm
+# @Last Modified: 2022-07-27 04:48:15 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from unsync import unsync, Unfuture
 from typing import Union
@@ -199,7 +199,7 @@ class UniProts(object):
     
     @classmethod
     @unsync
-    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', via_txt:bool=False, **kwargs):
+    async def fetch_VAR_SEQ_to_DB(cls, accessions, name='VAR_SEQ', via_txt:bool=True, **kwargs):
         if via_txt:
             tasks = [cls.as_txt2tsv(ac, name_suffix=name) for ac in accessions]
             dfrm = await cls.deal_with_alternative_seq(DataFrame([await task for task in tasks], columns=['Entry', 'Alternative sequence']))

@@ -2,7 +2,7 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-09-17 12:02:45 am
+# @Last Modified: 2022-07-27 05:44:28 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
 from pathlib import Path
@@ -36,7 +36,10 @@ class ProteinsAPI(Abclog):
         'coordinates', 'coordinates/', 'coordinates/location/',
         'uniparc', 'uniparc/accession/', 'uniparc/best/guess',
         'uniparc/dbreference/', 'uniparc/proteome/', 'uniparc/sequence',  # NOTE: uniparc/sequence use POST method!
-        'uniparc/upi/', 'variation/dbsnp/', 'variation/hgvs/', 'variation/'))
+        'uniparc/upi/', 'variation/dbsnp/', 'variation/hgvs/', 'variation/',
+        'proteomics', 'proteomics/', 'proteomics-ptm', 'proteomics-ptm/',
+        'mutagenesis', 'mutagenesis/',
+        ))
     
     @classmethod
     def get_file_suffix(cls) -> str:
@@ -62,7 +65,7 @@ class ProteinsAPI(Abclog):
             for identifier, params in zip(identifiers, params_collection):
                 yield cls.task_unit(suffix, params, folder, identifier)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, suffix: str, params_collection: Iterable[Dict], folder: Union[Path, str], identifiers: Optional[Iterable[str]] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         assert suffix in cls.api_set, f"Invalid suffix! Valid set is \n{cls.api_set}"
         folder = Path(folder)
@@ -72,7 +75,7 @@ class ProteinsAPI(Abclog):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
     
     @classmethod
     def single_retrieve(cls, suffix: str, params:Dict, folder: Union[Path, str], semaphore, identifier:Optional[str]=None, rate: float = 1.5):
@@ -123,6 +126,17 @@ class ProteinsAPI(Abclog):
     @classmethod
     @unsync
     async def pipe_summary(cls, data: List):
+        #"""
+        if len(data) > 1:
+            flag = []
+            for idx in range(len(data)):
+                if '-' in data[idx]["accession"]:
+                    flag.append(idx)
+            if flag:
+                for idx in range(len(data)):
+                    if idx not in flag:
+                        del data[idx]
+        #"""
         if len(data) > 1:
             cls.logger.warning(f"Unexpected Length from ProteinsAPI.pipe_summary: {len(data)}, {[data[i]['accession'] for i in range(len(data))]}")
             '''

@@ -186,16 +186,17 @@ def check_muta_conflict(ctx, chunksize):
 @click.option('--func', type=str, default='pipe_select_mo')
 @click.option('-k', '--kwargs', multiple=True, type=str)
 @click.option('--chunksize', type=int, help="the chunksize parameter", default=50)
-@click.option('--entry_filter', type=str, default='(release_date < "20210101") and ((experimental_method in ["X-ray diffraction", "Electron Microscopy"] and resolution <= 3) or experimental_method == "Solution NMR")')
-@click.option('--chain_filter', type=str, default="UNK_COUNT < SEQRES_COUNT and ca_p_only == False and identity >=0.9 and repeated == False and reversed == False and OBS_STD_COUNT >= 20")
+@click.option('--entry_filter', type=str, default=None)
+@click.option('--chain_filter', type=str, default=None)
 @click.option('--skip_pdbs', multiple=True, type=str)
+@click.option('--skip_carbohydrate_polymer/--no-skip_carbohydrate_polymer', default=False, is_flag=True)
 @click.option('--omit', type=int, default=0)
 @click.option('-o', '--output', type=str, default='')
 @click.option('--iteroutput/--no-iteroutput', default=True, is_flag=True)
 @click.option('--sleep/--no-sleep', default=True, is_flag=True)
 @click.option('--autotype', type=str, default='from_IDMapping')
 @click.pass_context
-def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, omit, output, iteroutput, sleep, autotype):
+def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter, chain_filter, skip_pdbs, skip_carbohydrate_polymer, omit, output, iteroutput, sleep, autotype):
     def get_unp_id(args):
         Entry, isoform, is_canonical = args
         return Entry if is_canonical else isoform
@@ -205,13 +206,15 @@ def sifts_mapping(ctx, input, column, sep, func, kwargs, chunksize, entry_filter
         for key,value in kwargs.items():
             kwargs[key] = eval(value)
         console.log(f"take args: {kwargs}")
-    
+    kwargs['skip_carbohydrate_polymer'] = skip_carbohydrate_polymer
     skip_pdbs = [pdbi for item in skip_pdbs for pdbi in item.split(',')]
     if skip_pdbs:
         kwargs['skip_pdbs'] = skip_pdbs
 
-    SIFTS.entry_filter = entry_filter
-    SIFTS.chain_filter = chain_filter
+    if entry_filter is not None:
+        SIFTS.entry_filter = entry_filter
+    if chain_filter is not None:
+        SIFTS.chain_filter = chain_filter
     sqlite_api = ctx.obj['custom_db']
     output = f'{func}.tsv' if output == '' else output
     output_path = ctx.obj['folder']/output

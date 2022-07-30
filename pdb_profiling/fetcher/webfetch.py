@@ -11,10 +11,13 @@ from aiofiles import open as aiofiles_open
 from unsync import unsync, Unfuture
 from tenacity import retry, wait_random, stop_after_attempt, RetryError, retry_if_exception_type
 from rich.progress import track
-from typing import Iterable, Iterator, Union, Any, Optional, List, Dict, Coroutine, Callable
-from pathlib import Path
+from typing import Iterable, Iterator, Union, Optional, Dict, Callable
 from urllib.parse import urlparse
 from aioftp import Client as aioftp_Client
+from pathlib import Path
+#from email.utils import parsedate_to_datetime
+#from time import mktime
+#from os import utime
 from pdb_profiling.log import Abclog
 from pdb_profiling.utils import init_semaphore
 from pdb_profiling.exceptions import InvalidFileContentError, RemoteServerError
@@ -59,9 +62,18 @@ class UnsyncFetch(Abclog):
         * https://tenacity.readthedocs.io/en/latest/
     '''
 
+    @staticmethod
+    @unsync
+    @retry(**rt_kw)
+    async def get_headers_only(url: str) -> Dict:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url) as resp:
+                return resp.headers
+        # resp.headers.get('Last-Modified', None), resp.headers.get('Etag', None)
+
     @classmethod
     @retry(**rt_kw)
-    async def http_download(cls, semaphore, method: str, info: Dict, path: str, rate: float):
+    async def http_download(cls, semaphore, method: str, info: Dict, path: Union[str, Path], rate: float):
         '''
         possible exceptions:
             RemoteServerError, 
@@ -82,6 +94,10 @@ class UnsyncFetch(Abclog):
                                     await file_out.write(chunk)
                             cls.logger.debug(f"File has been saved in: '{path}'")
                             await asyncio.sleep(rate)
+                            #mod_time = resp.headers.get('Last-Modified', None)
+                            #if mod_time is not None:
+                            #    mod_time = mktime(parsedate_to_datetime(mod_time).timetuple())
+                            #    utime(path, (mod_time, mod_time))
                             return path
                         elif resp.status in (204, 300, 400, 403, 404, 405, 406):
                             cls.logger.debug(f"{resp.status} for: {info}")
@@ -124,7 +140,7 @@ class UnsyncFetch(Abclog):
     @classmethod
     @unsync
     @ensure.make_sure_complete(**msc_rt_kw)
-    async def fetch_file(cls, semaphore, method: str, info: Dict, path: str, rate: float):
+    async def fetch_file(cls, semaphore, method: str, info: Dict, path: Union[str, Path], rate: float):
         download_func = cls.download_func_dispatch(method)
         try:
             return await download_func(semaphore=semaphore, method=method, info=info, path=path, rate=rate)

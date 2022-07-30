@@ -34,6 +34,7 @@ class IdentifierBase:
         re_compile(r'(PDB-CPX-[0-9]+)'): ('PDB', 'complex'),
         re_compile(r'([0-9]+)/([0-9]+)'): ('Taxonomy', 'genome'),
         re_compile(r'([0-9]+)'): ('HGNC', 'HGNC'),
+        #re_compile(r''): ('EC', 'EC'),
         re_compile(r'([A-z0-9\-]+)'): ('PDB', 'compounds'),
     })
 

@@ -2,22 +2,22 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-08-11 10:48:11 pm
+# @Last Modified: 2022-01-19 07:15:21 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
 from functools import partial, reduce
-from numpy import array, where as np_where, count_nonzero, nan, dot, exp, square
+from numpy import array, where as np_where, count_nonzero, nan, exp, square
 from pathlib import Path
-from pandas import isna, concat, DataFrame, Series, merge
+from pandas import isna, concat, DataFrame, Series, merge, read_csv
 from unsync import unsync, Unfuture
 from asyncio import as_completed
 from aiofiles import open as aiofiles_open
 from aiofiles.os import remove as aiofiles_os_remove
-from gzip import open as gzip_open
 from re import compile as re_compile
 import orjson as json
-from zlib import compress, decompress
+from io import StringIO
+import zlib
 from bisect import bisect_left
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
@@ -37,7 +37,7 @@ from pdb_profiling.utils import (init_semaphore, init_folder_from_suffix,
                                  lyst2range, select_ho_max_range,
                                  select_he_range, init_folder_from_suffixes,
                                  a_seq_reader, dumpsParams, get_str_dict_len, aa_three2one)
-from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET
+from pdb_profiling.processors.pdbe.api import ProcessPDBe, PDBeModelServer, PDBeCoordinateServer, PDBArchive, PDBeKBAnnotations, FUNCS as API_SET, FetchBase
 from pdb_profiling.processors.uniprot.api import UniProtINFO
 from pdb_profiling.processors.pdbe import PDBeDB
 from pdb_profiling.processors.rcsb import RCSBDB
@@ -150,6 +150,7 @@ class Base(IdentifierBase):
         tuple(init_folder_from_suffixes(cls.folder/'data_rcsb', RCSBDataAPI.api_set | {'graphql', 'search', '1d_coordinates'}))
         cls.sqlite_api = PDBeDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"PDBeDB.db"))
         cls.rcsb_sqlite_api = RCSBDB("sqlite:///%s" % (init_folder_from_suffix(cls.folder, 'local_db')/"RCSBDB.db"))
+        init_folder_from_suffix(cls.folder, 'for_version_control')
 
     @classmethod
     def get_folder(cls) -> Path:
@@ -478,26 +479,57 @@ class PDB(Base):
                 return dfrm[dfrm.entity_id.isin(focus_entities)]
         return dfrm
 
-    @classmethod
+    @staticmethod
     @unsync
-    async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, str, Path]):
+    async def a_load_cif(path: Union[Unfuture, Coroutine, str, Path], *args) -> MMCIF2DictPlus:
         if isawaitable(path):
             path = await path
+        if not isinstance(path, Path):
+            path = Path(path)
+        if path.suffix == '.gz':
+            async with aiofiles_open(path, 'rb') as file_io:
+                handle = StringIO(zlib.decompress((await file_io.read()), zlib.MAX_WBITS | 32).decode('utf-8'))
+                return MMCIF2DictPlus(handle, *args)
+        else:
+            async with aiofiles_open(path, 'rt') as file_io:
+                handle = await file_io.readlines()
+                return MMCIF2DictPlus((iline for iline in handle), *args)
+
+    @classmethod
+    @unsync
+    async def cif2atom_sites_df(cls, path: Union[Unfuture, Coroutine, Path]):
         cols = ('_atom_site.type_symbol', '_atom_site.label_atom_id',
                 '_atom_site.label_comp_id', '_atom_site.label_seq_id',
                 '_atom_site.label_asym_id', '_atom_site.Cartn_x',
                 '_atom_site.Cartn_y', '_atom_site.Cartn_z')
-        async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.readlines()
-            mmcif_dict = MMCIF2DictPlus((iline for iline in handle), cols+('_coordinate_server_result.has_error',))
+        mmcif_dict = await cls.a_load_cif(path, cols+('_coordinate_server_result.has_error',))
         if '_coordinate_server_result.has_error' in mmcif_dict:
             assert mmcif_dict['_coordinate_server_result.has_error'][0] == 'no', str(mmcif_dict)
-        dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
+        try:
+            dfrm = DataFrame(zip(*[mmcif_dict[col] for col in cols]), columns=cols)
+        except KeyError:
+            raise AssertionError(await path if isawaitable(path) else path)
         return dfrm
 
     @staticmethod
     def get_coordinates(x):
         return x[['_atom_site.Cartn_x', '_atom_site.Cartn_y', '_atom_site.Cartn_z']].to_numpy(dtype=float)
+
+    @unsync
+    async def get_overlap_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
+        df = (await self.fetch_from_modelServer_api('atoms',
+                                                    method='get',
+                                                    filename=f'.{struct_asym_id}({label_atom_id})',
+                                                    label_asym_id=struct_asym_id,
+                                                    label_atom_id=label_atom_id,
+                                                    model_nums=model_nums,
+                                                    encoding='cif',
+                                                    copy_all_categories=False
+                                                    ).then(PDB.cif2atom_sites_df)
+              ).drop_duplicates(subset='_atom_site.label_seq_id', keep='first')
+        if overlap_range is not None:
+            df = df.merge(DataFrame({'_atom_site.label_seq_id': list(expand_interval(overlap_pdb_segs))}, dtype=str), how='right')
+        return df.reset_index(drop=True)
 
     @unsync
     async def get_representative_atoms(self, struct_asym_id: str, label_atom_id: str = 'CA', model_nums: int = 1, overlap_pdb_segs: Optional[Iterable] = None):
@@ -522,12 +554,12 @@ class PDB(Base):
 
     @classmethod
     @unsync
-    async def cif2residue_listing(cls, path: Union[Unfuture, Coroutine, str, Path]):
+    async def cif2residue_listing(cls, path: Union[Unfuture, str, Path]):
         cols = ('_pdbx_poly_seq_scheme.asym_id',
                 '_pdbx_poly_seq_scheme.entity_id',
                 '_pdbx_poly_seq_scheme.seq_id',
                 '_pdbx_poly_seq_scheme.mon_id',
-                '_pdbx_poly_seq_scheme.ndb_seq_num',
+                #'_pdbx_poly_seq_scheme.ndb_seq_num', # NDB residue number
                 '_pdbx_poly_seq_scheme.pdb_seq_num',
                 '_pdbx_poly_seq_scheme.pdb_strand_id',
                 '_pdbx_poly_seq_scheme.pdb_ins_code')
@@ -535,38 +567,33 @@ class PDB(Base):
                     'entity_id',
                     'residue_number',
                     'residue_name',
-                    'residue_number?',
+                    #'residue_number?',
                     'authore_residue_number',
                     'chain_id',
                     'author_insertion_code')
-        if isawaitable(path):
-            path = await path
-        with gzip_open(path, 'rt') as handle:
-            mmcif_dict = MMCIF2DictPlus(handle, cols)
-            mmcif_dict['data_'] = mmcif_dict['data_'].lower()
-            dfrm = DataFrame(mmcif_dict)
+        mmcif_dict = await cls.a_load_cif(path, cols)
+        mmcif_dict['data_'] = mmcif_dict['data_'].lower()
+        dfrm = DataFrame(mmcif_dict)
         col_dict = dict(zip(cols, new_cols))
         col_dict['data_'] = 'pdb_id'
         dfrm.rename(columns=col_dict, inplace=True)
-        assert (dfrm['residue_number'] == dfrm['residue_number?']).all(), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
-        dfrm.drop(columns=['residue_number?'], inplace=True)
+        #assert (dfrm['residue_number'] == dfrm['residue_number?']).all(), f"Unexpectd Cases: _pdbx_poly_seq_scheme.seq_id != _pdbx_poly_seq_scheme.ndb_seq_num\n{dfrm[dfrm['residue_number'] != dfrm['residue_number?']]}"
+        #dfrm.drop(columns=['residue_number?'], inplace=True)
         for col in ('residue_number', 'authore_residue_number'):
             dfrm[col] = dfrm[col].astype(int)
         dfrm.author_insertion_code = dfrm.author_insertion_code.apply(lambda x: '' if x == '.' else x)
         return dfrm
 
-    @staticmethod
+    @classmethod
     @unsync
-    async def assg_oper_cif_base(path):
+    async def assg_oper_cif_base(cls, path):
         assg_cols = ('_pdbx_struct_assembly_gen.asym_id_list',
                     '_pdbx_struct_assembly_gen.oper_expression',
                     '_pdbx_struct_assembly_gen.assembly_id')
         oper_cols = ('_pdbx_struct_oper_list.id',
                     '_pdbx_struct_oper_list.symmetry_operation',
                     '_pdbx_struct_oper_list.name')
-        async with aiofiles_open(path, 'rt') as file_io:
-            handle = await file_io.read()
-            mmcif_dict = MMCIF2DictPlus((i+'\n' for i in handle.split('\n')), assg_cols+oper_cols)
+        mmcif_dict = await cls.a_load_cif(path, assg_cols+oper_cols)
         if len(mmcif_dict) < 7:
             return None
         assg_df = DataFrame(list(zip(*[mmcif_dict[col] for col in assg_cols])), columns=assg_cols)
@@ -708,11 +735,11 @@ class PDB(Base):
             self.res2eec_df = eec_df
 
     @unsync
-    async def get_res2eec_df(self):
+    async def get_res2eec_df(self, **kwargs):
         if hasattr(self, 'res2eec_df'):
             return self.res2eec_df
         else:
-            await self.set_res2eec_df()
+            await self.set_res2eec_df(**kwargs)
             return self.res2eec_df
 
     @classmethod
@@ -966,7 +993,7 @@ class PDB(Base):
             if ratio > 0:
                 obs_index.append(index)
             obs_array.append(ratio)
-        return to_interval(obs_index), len(obs_index), compress(json.dumps(obs_array))
+        return to_interval(obs_index), len(obs_index), zlib.compress(json.dumps(obs_array))
 
     @unsync
     async def stats_chain_seq(self):
@@ -1060,15 +1087,21 @@ class PDB(Base):
         if mol_df is None:
             raise PossibleObsoletedPDBEntryError(f"None dataframe: {repr(self)}, either obsoleted or API lag update")
         if 'entity_id' in kwargs:
-            cur_record = mol_df.loc[mol_df.entity_id.eq(kwargs['entity_id']).idxmax()]
+            mask = mol_df.entity_id.eq(kwargs['entity_id'])
         elif 'struct_asym_id' in kwargs:
             struct_asym_id = kwargs['struct_asym_id']
-            cur_record = mol_df.loc[mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x).idxmax()]
+            mask = mol_df.in_struct_asyms.apply(lambda x: f'"{struct_asym_id}"' in x)
         elif 'chain_id' in kwargs:
             chain_id = kwargs['chain_id']
-            cur_record = mol_df.loc[(mol_df.molecule_type.eq('polypeptide(L)') & mol_df.in_chains.apply(lambda x: f'"{chain_id}"' in x)).idxmax()]
+            mask = mol_df.molecule_type.eq('polypeptide(L)') & mol_df.in_chains.apply(lambda x: f'"{chain_id}"' in x)
         else:
             raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
+        if not mask.any():
+            raise ValueError(f"Cannot get sequence with specified information: {kwargs}")
+        else:
+            cur_record = mol_df.loc[mask.idxmax()]
+        if not cur_record['molecule_type'].startswith('poly'):
+            raise ValueError(f"Not polymer with specified information: {repr(self)} -> {kwargs}")
         if mode == 'fix_seq':
             return self.deal_with_pdb_sequence_indices_with_multiple_residues(
                 cur_record['pdb_sequence'], cur_record['pdb_sequence_indices_with_multiple_residues'], kwargs)
@@ -1095,9 +1128,9 @@ class PDB(Base):
                 b'_pdbe_chain_remapping')
         try:
             async with aiofiles_open(target_file, 'rt') as file_io:
-                handle = await file_io.read()
-                mmcif_dict = MMCIF2DictPlus(i+'\n' for i in handle.split('\n'))
-                if (len(mmcif_dict) == 0) or (not handle.endswith('\n#\n')):
+                handle = await file_io.readlines()
+                mmcif_dict = MMCIF2DictPlus(iline for iline in handle)
+                if (len(mmcif_dict) == 0) or (not handle[-1] == '#\n'):
                     raise PossibleConnectionError(target_file)
                 del mmcif_dict['data_']
                 cur_df = DataFrame(mmcif_dict)
@@ -1754,7 +1787,10 @@ class PDBAssembly(PDB):
             assert check_m.all(), f"{interfacelist_df[~check_m].T}"
             if range_check_yes.any():
                 to_df_index = interfacelist_df[range_check_yes].index
+                #try:
                 interfacelist_df.loc[to_df_index, ['struct_asym_id_in_assembly_1', 'auth_seq_id_1']] = range_check.loc[to_df_index].apply(lambda x: x.groups()).tolist()
+                #except ValueError:
+                #    raise ValueError("%s\n%s" % (range_check.loc[to_df_index].apply(lambda x: x.groups()), interfacelist_df.loc[to_df_index, 'structure_1.range']))
             range_check_no = ~range_check_yes
             if range_check_no.any():
                 no_index = interfacelist_df[range_check_no].index
@@ -2085,9 +2121,9 @@ class PDBInterface(PDBAssembly):
                     res_df.author_residue_number.eq(int(author_residue_number_1)) &
                     res_df.author_insertion_code.eq(author_insertion_code_1)
                 ].residue_number.iloc[0]
-            except IndexError as e:
-                warn(f"{repr(self)}: {struct_asym_id_in_assembly_1}, {author_residue_number_1}, {author_insertion_code_1}")
-                raise e
+            except IndexError:
+                raise PISAOutOfDateError(f"{repr(self)}: {struct_asym_id_in_assembly_1}, {author_residue_number_1}, {author_insertion_code_1}")
+                #raise e
         else:
             residue_number_1 = None
         if author_residue_number_2 is not None:
@@ -2097,9 +2133,9 @@ class PDBInterface(PDBAssembly):
                     res_df.author_residue_number.eq(int(author_residue_number_2)) &
                     res_df.author_insertion_code.eq(author_insertion_code_2)
                 ].residue_number.iloc[0]
-            except IndexError as e:
-                warn(f"{repr(self)}: {struct_asym_id_in_assembly_2}, {author_residue_number_2}, {author_insertion_code_2}")
-                raise e
+            except IndexError:
+                raise PISAOutOfDateError(f"{repr(self)}: {struct_asym_id_in_assembly_2}, {author_residue_number_2}, {author_insertion_code_2}")
+                #raise e
         else:
             residue_number_2 = None
         if keep_interface_res_df:
@@ -2699,7 +2735,7 @@ class SIFTS(PDB):
         dfrm['pdb_sequence'] = b''
         dfrm_nr = dfrm[['pdb_id', 'entity_id']].drop_duplicates()
         for pdb_id, entity_id in zip(dfrm_nr.pdb_id, dfrm_nr.entity_id):
-            dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
+            dfrm.loc[dfrm[dfrm.pdb_sequence.eq(b'') & dfrm.pdb_id.eq(pdb_id) & dfrm.entity_id.eq(entity_id)].index, 'pdb_sequence'] = zlib.compress(bytes(await PDB(pdb_id).get_sequence(entity_id=entity_id, mode='raw_pdb_seq'), encoding='utf-8'))
             """if (pdb_id, entity_id) in already:
                 continue
             cur_cluster_df = await PDB(pdb_id).rcsb_cluster_membership(entity_id=entity_id, identity_cutoff=100)
@@ -2900,7 +2936,7 @@ class SIFTS(PDB):
                 pdb_id=pdb_id,entity_id=entity_id,UniProt=UniProt)
 
     @unsync
-    async def pipe_base(self, complete_chains:bool=False, skip_pdbs=None, only_canonical:bool=False):
+    async def pipe_base(self, complete_chains:bool=False, skip_pdbs=None, only_canonical:bool=False, skip_carbohydrate_polymer:bool=False):
         init_task = await self.fetch_from_pdbe_api('api/mappings/all_isoforms/', Base.to_dataframe).then(self.check_whether_pdbe_api_lag)
         if init_task is None:
             return
@@ -2908,8 +2944,18 @@ class SIFTS(PDB):
             init_task = init_task[~init_task.pdb_id.isin(skip_pdbs)].reset_index(drop=True)
             if len(init_task) == 0:
                 return
+        if skip_carbohydrate_polymer:
+            pdbs = PDBs(frozenset(init_task.pdb_id))
+            tasks = [await task for task in pdbs.fetch(partial(PDBs.fetch_number_of_entities, 'carbohydrate_polymer')).tasks]
+            cpdf = DataFrame(tasks, columns=['pdb_id', 'num_cp'])
+            pass_pdbs = cpdf[cpdf.num_cp.eq(0)][['pdb_id']]
+            init_task = init_task.merge(pass_pdbs).reset_index(drop=True)
+            if len(init_task) == 0:
+                return
         if complete_chains:
             init_task = await self.complete_chains(init_task)
+            if len(init_task) == 0:
+                return
         if only_canonical:
             init_task = init_task[init_task.is_canonical.eq(True)].reset_index(drop=True)
             if len(init_task) == 0:
@@ -2926,9 +2972,9 @@ class SIFTS(PDB):
         return sifts_df
     
     @unsync
-    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, skip_pdbs=None):
+    async def pipe_score(self, sifts_df=None, complete_chains:bool=False, skip_pdbs=None, skip_carbohydrate_polymer=False):
         if sifts_df is None:
-            sifts_df = await self.pipe_base(complete_chains=complete_chains, skip_pdbs=skip_pdbs)
+            sifts_df = await self.pipe_base(complete_chains=complete_chains, skip_pdbs=skip_pdbs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sifts_df is None:
             return
         exp_cols = ['pdb_id', 'resolution', 'experimental_method_class',
@@ -3061,7 +3107,7 @@ class SIFTS(PDB):
         else:
             raise TypeError("bs_score_base() with invalid positional arguments")
         new_pdb_range = json.loads(new_pdb_range) if isinstance(new_pdb_range, str) else new_pdb_range
-        OBS_RATIO_ARRAY = array(json.loads(decompress(OBS_RATIO_ARRAY))) if isinstance(OBS_RATIO_ARRAY, bytes) else OBS_RATIO_ARRAY
+        OBS_RATIO_ARRAY = array(json.loads(zlib.decompress(OBS_RATIO_ARRAY))) if isinstance(OBS_RATIO_ARRAY, bytes) else OBS_RATIO_ARRAY
         aligned_part = cls.bs_score_aligned_part(new_pdb_range, conflict_pdb_range, conflict_pdb_index, raw_pdb_index, NON_INDEX, OBS_RATIO_ARRAY)
         CN_terminal_part, outside_range_ignore_artifact = cls.bs_score_CN_terminal_part(new_pdb_range, ARTIFACT_INDEX, SEQRES_COUNT, OBS_RATIO_ARRAY)
         insertion_part = cls.bs_score_insertion_part(new_pdb_range, OBS_RATIO_ARRAY)
@@ -3087,8 +3133,9 @@ class SIFTS(PDB):
             '''
         except AssertionError:
             warn(f"{repr(self)}: {sifts_df.shape}, {full_df.shape}", ConflictChainIDWarning)
-            full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']))
-            assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape}\n{full_df.shape}\n{full_df}\n{sifts_df}\n{pec_df}"
+            full_df = sifts_df.merge(pec_df.drop(columns=['chain_id']), how='left')
+            for_check = full_df[full_df.OBS_STD_COUNT.isnull()][['UniProt','pdb_id','struct_asym_id']]
+            assert sifts_df.shape[0] == full_df.shape[0], f"\n{sifts_df.shape[0]} != {full_df.shape[0]}\n{for_check}"
         
         full_df[['new_pdb_range_raw', 'new_unp_range_raw']] = full_df[['new_pdb_range', 'new_unp_range']]
         full_df[['new_pdb_range', 'new_unp_range']] = DataFrame([self.wrap_trim_range(
@@ -3244,14 +3291,14 @@ class SIFTS(PDB):
             lambda x: overlap_range_2(*x), axis=1).apply(Series)
         cluster = await self.cluster3d_mo_algorithm(focus.drop(columns=['OBS_INDEX', 'new_pdb_range_raw', 'new_unp_range_raw']).itertuples(), oc_cutoff, rmsd_cutoff)
         selected_indexes = cluster.groupby(['oc_cluster', 'rmsd_cluster']).Index.min().sort_values()
-        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}))
-        assert not cluster.pdbekb_cluster.isnull().any()
-        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']))
-        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
         sifts_df.loc[selected_indexes, 'oc_rmsd_select_tag'] = True
+        cluster = cluster.merge(focus[['pdbekb_cluster', 'new_unp_range_obs']].reset_index().rename(columns={'index': 'Index'}), how='left')
+        assert not cluster.pdbekb_cluster.isnull().any()
         focus_oc_cluster = cluster.drop_duplicates(subset='oc_cluster', keep='first')
         selected_oc_indexes = cluster.loc[select_range(focus_oc_cluster.new_unp_range_obs, focus_oc_cluster.index, cutoff=1-oc_cutoff)].Index
         sifts_df.loc[selected_oc_indexes, 'oc_select_tag'] = True
+        sifts_df = sifts_df.merge(cluster.drop(columns=['Index', 'new_unp_range_obs']), how='left')
+        assert (not sifts_df.oc_cluster.isnull().any()) and (not sifts_df.rmsd_cluster.isnull().any())
         return sifts_df
     
     @staticmethod
@@ -3293,9 +3340,20 @@ class SIFTS(PDB):
                         oc_score = range_len(overlap_unp_segs) / min(sele_row.OBS_COUNT, cur_row.OBS_COUNT)
                         if oc_score >= oc_cutoff:
                             # same oc_cluster
-                            rmsd_score = rmsd(
-                                await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs), 
-                                await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs))
+                            sele_coords = await PDB(sele_row.pdb_id).get_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs)
+                            cur_coords = await PDB(cur_row.pdb_id).get_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs)
+                            if sele_coords.shape == cur_coords.shape:
+                                rmsd_score = rmsd(sele_coords, cur_coords)
+                            else:
+                                #print('did not pass coords')
+                                sele_coords_df = await PDB(sele_row.pdb_id).get_overlap_representative_atoms(sele_row.struct_asym_id, overlap_pdb_segs=overlap_sele_pdb_segs)
+                                cur_coords_df = await PDB(cur_row.pdb_id).get_overlap_representative_atoms(cur_row.struct_asym_id, overlap_pdb_segs=overlap_cur_pdb_segs)
+                                assert sele_coords_df.shape == cur_coords_df.shape
+                                mask_1 = sele_coords_df['_atom_site.Cartn_x'].notnull()
+                                mask_2 = cur_coords_df['_atom_site.Cartn_x'].notnull()
+                                sele_coords = PDB.get_coordinates(sele_coords_df[mask_1 & mask_2])
+                                cur_coords = PDB.get_coordinates(cur_coords_df[mask_1 & mask_2])
+                                rmsd_score = rmsd(sele_coords, cur_coords)
                             if rmsd_score <= rmsd_cutoff:
                                 # same oc_cluster & same rmsd_cluster
                                 to_append_oc_index = oc_cluster_index
@@ -3387,8 +3445,8 @@ class SIFTS(PDB):
     '''
 
     @unsync
-    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_ho_base(self, exclude_pdbs=frozenset(), run_as_completed: bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(
@@ -3426,6 +3484,9 @@ class SIFTS(PDB):
                 ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
                 ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
 
+        if allow_p_df.shape[0] == 0:
+            return p_df
+
         def sele_func(dfrm):
             rank_index = dfrm.index
             p_df.loc[rank_index, 'i_select_rank'] = range(1, len(rank_index)+1)
@@ -3448,8 +3509,8 @@ class SIFTS(PDB):
             return self.select_ho(p_df, interface_mapped_cov_cutoff, unp_range_DSC_cutoff, DSC_cutoff)
 
     @unsync
-    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_ho_iso_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         sele_df = sele_df[sele_df.Entry.eq(self.get_id().split('-')[0])]
@@ -3477,17 +3538,17 @@ class SIFTS(PDB):
             return self.select_ho_iso(self.sort_interact_cols(p_df), interface_mapped_cov_cutoff, DSC_cutoff)   
 
     @unsync
-    async def pipe_select_else_base(self, func:str, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
+    async def pipe_select_else_base(self, func:str, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
         assert func != 'pipe_protein_protein_interface'
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         include_chains = sele_df.groupby('pdb_id').struct_asym_id.apply(frozenset)
         return await self.pisa_interact_protein_else(sele_df, include_chains, func, run_as_completed, progress_bar, **kwargs)
 
     @unsync
-    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, **kwargs):
-        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs)
+    async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+        sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, complete_chains=True, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         if len(sele_df.Entry.unique()) == 1:
@@ -3512,8 +3573,11 @@ class SIFTS(PDB):
             allow_mask = (p_df.bs_score_1 > 0)
         elif allow_mask is True:
             allow_mask = p_df.bs_score_1.notnull()
-        allow_p_df = p_df[allow_mask & (
-            (p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff)]
+        mask = allow_mask & (
+            (p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff)
+        if not mask.any():
+            return p_df
+        allow_p_df = p_df[mask]
         
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3521,7 +3585,10 @@ class SIFTS(PDB):
             return select_range(dfrm.unp_interface_range_1, rank_index, cutoff=DSC_cutoff, similarity_func=sorensen.similarity)
         
         sele_indexes = allow_p_df.groupby('UniProt_1').apply(sele_func)
-        p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
+        try:
+            p_df.loc[[j for i in sele_indexes for j in i], 'i_select_tag'] = True
+        except Exception:
+            raise ValueError("{sele_indexes}\n{p_df}")
         return p_df
 
     @staticmethod
@@ -3545,6 +3612,9 @@ class SIFTS(PDB):
                 allow_mask &
                 ((p_df.unp_interface_range_1.apply(range_len)/p_df.interface_range_1.apply(range_len)) >= interface_mapped_cov_cutoff) &
                 ((p_df.unp_interface_range_2.apply(range_len)/p_df.interface_range_2.apply(range_len)) >= interface_mapped_cov_cutoff)]
+
+        if allow_p_df.shape[0] == 0:
+            return p_df
 
         def sele_func(dfrm):
             rank_index = dfrm.index
@@ -3841,6 +3911,18 @@ class SIFTS(PDB):
         else:
             return concat(dfs, sort=False, ignore_index=True)
 
+    sifts_version_pat = re_compile(r'# (.+) \| PDB: (.+) \| UniProt: (.+)')
+
+    @classmethod
+    def check_version(cls):
+        sifts_df = read_csv(
+            FetchBase('EBI', 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz').download(
+            cls.web_semaphore, cls.get_folder()/'for_version_control/uniprot_pdb.tsv.gz'
+        ).result(), sep='\t')
+        # 2021/08/22 - 03:28 | PDB: 33.21 | UniProt: 2021.03
+        sifts_version, sifts_pdb_version, sifts_unp_version = cls.sifts_version_pat.fullmatch(sifts_df.columns[0]).groups()
+        return sifts_df
+
 
 class Compounds(Base):
 
@@ -3888,6 +3970,19 @@ class PDBs(tuple):
                 ))
         return ret
     
+    @staticmethod
+    @unsync
+    async def fetch_number_of_entities(key: str, pdb_ob: PDB):
+        summary_data = await pdb_ob.fetch_from_pdbe_api('api/pdb/entry/summary/', a_load_json, json=True)
+        if key:
+            try:
+                return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities'][key]
+            except KeyError:
+                warn(f"{repr(pdb_ob)}: without '{key}' key")
+                return pdb_ob.pdb_id, 0
+        else:
+            return pdb_ob.pdb_id, summary_data[pdb_ob.pdb_id][0]['number_of_entities']
+
     @staticmethod
     @unsync
     async def fetch_date(pdb_ob: PDB):

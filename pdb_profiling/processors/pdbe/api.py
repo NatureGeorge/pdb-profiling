@@ -4,37 +4,30 @@
 # @Author: ZeFeng Zhu
 # @Last Modified: 2020-02-11 04:22:22 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from numpy import array, nan, count_nonzero
-import pandas as pd
-from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Callable, Tuple
+from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Tuple
 import orjson as json
 from pathlib import Path
 from aiofiles import open as aiofiles_open
-from collections import defaultdict
 from unsync import unsync, Unfuture
 from random import choice
-from hashlib import sha1
 from pdb_profiling.processors.recordbase import IdentifierBase
-from pdb_profiling.utils import related_dataframe, flatten_dict, pipe_out, dumpsParams
+from pdb_profiling.utils import flatten_dict, pipe_out, dumpsParams
 from pdb_profiling.log import Abclog
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from pdb_profiling.processors.transformer import Dict2Tabular
 from pdb_profiling.exceptions import WithoutExpectedKeyError, InvalidFileContentError
 from pdb_profiling.ensure import EnsureBase
-from tenacity import retry, wait_random, stop_after_attempt, retry_if_exception_type, RetryError
+from tenacity import wait_random, stop_after_attempt, retry_if_exception_type, RetryError
 
 ensure = EnsureBase()
 msc_rt_kw = dict(wait=wait_random(max=1), stop=stop_after_attempt(3), retry=retry_if_exception_type(InvalidFileContentError))
 
-BASE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
+PDBE_URL: str = 'https://www.ebi.ac.uk/pdbe/'
+EBI_FTP_URL: str = 'ftp://ftp.ebi.ac.uk/'
+HTTP_EBI_FTP_URL: str = 'https://ftp.ebi.ac.uk/'
+HTTP_WWPDB_FTP_URL: str = 'https://ftp.wwpdb.org/'
 
-FTP_URL: str = 'ftp://ftp.ebi.ac.uk/'
-
-FTP_DEFAULT_PATH: str = 'pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz'
-
-PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
-PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
-PDB_ARCHIVE_VERSIONED_URL: str = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/'
+SIFTS_FTP_DEFAULT_PATH: str = f'{HTTP_EBI_FTP_URL}pub/databases/msd/sifts/flatfiles/tsv/uniprot_pdb.tsv.gz'
 
 # https://ftp.wwpdb.org/pub/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
 # http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/obsolete/mmCIF/a0/2a01.cif.gz
@@ -108,14 +101,14 @@ class ProcessPDBe(Abclog):
         file_prefix = suffix.replace('/', '%')
         method = method.lower()
         if method == 'post':
-            url = f'{BASE_URL}{suffix}'
+            url = f'{PDBE_URL}{suffix}'
             for i in range(0, len(pdbs), chunksize):
                 params = {'headers': cls.headers, 'url': url, 'data': ','.join(pdbs[i:i+chunksize])}
                 yield method, params, folder/f'{file_prefix}+{task_id}+{i}.json'
         elif method == 'get':
             for pdb in pdbs:
                 identifier = pdb.replace('/', '%')
-                yield method, {'headers': cls.headers, 'url': f'{BASE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
+                yield method, {'headers': cls.headers, 'url': f'{PDBE_URL}{suffix}{pdb}'}, folder/f'{file_prefix}+{identifier}.json'
         else:
             raise ValueError(
                 f'Invalid method: {method}, method should either be "get" or "post"')
@@ -333,7 +326,7 @@ class PDBeDecoder(object):
                      'graph-api/mappings/isoforms/', 'graph-api/mappings/ensembl/',
                      'graph-api/mappings/homologene/', 'graph-api/mappings/sequence_domains/',
                      'api/mappings/', 'api/nucleic_mappings/', 'api/nucleic_mappings/rfam/', 
-                     'api/nucleic_mappings/sequence_domains/'
+                     'api/nucleic_mappings/sequence_domains/', 'graph-api/mappings/ec/'
                      # 'graph-api/uniprot/'
                      )
     def yieldSIFTSAnnotation(data: Dict) -> Generator:
@@ -468,8 +461,8 @@ class PDBeDecoder(object):
                 'length': data[pdb]['length'],
                 'residue_number': val['start'],
                 'conservation_score': val['conservation_score'],
-                'letter_array': json.dumps(tuple(i['letter'] for i in val['amino'])).decode('utf-8'),
-                'proba_array': json.dumps(tuple(i['proba'] for i in val['amino'])).decode('utf-8')}
+                'letter_array': json.dumps(tuple(i['oneLetterCode'] for i in val['amino'])).decode('utf-8'),
+                'proba_array': json.dumps(tuple(i['probability'] for i in val['amino'])).decode('utf-8')}
                 for val in data[pdb]['data']], None
             # letter_array, proba_array = zip(*((i['letter'], i['proba']) for i in val['amino']))
 
@@ -572,7 +565,7 @@ class PDBeModelServer(object):
     Implement ModelServer API
     '''
 
-    pdbe_root = f'{BASE_URL}model-server/v1/'
+    pdbe_root = f'{PDBE_URL}model-server/v1/'
     rcsb_root = 'https://models.rcsb.org/v1/'
     root = rcsb_root
     headers = {'Connection': 'close', 'accept': 'text/plain', 'Content-Type': 'application/json'}
@@ -607,7 +600,7 @@ class PDBeModelServer(object):
 
 class PDBeCoordinateServer(object):
 
-    roots = (f'{BASE_URL}coordinates/', 'https://cs.litemol.org/')
+    roots = (f'{PDBE_URL}coordinates/', 'https://cs.litemol.org/')
     headers = {'Connection': 'close', 'accept': 'text/plain'}
     api_set = frozenset(('ambientResidues', 'assembly', 'backbone', 'cartoon', 'chains'
                          'entities', 'full', 'het', 'ligandInteraction', 'residueRange',
@@ -640,6 +633,28 @@ class PDBeCoordinateServer(object):
             rate=rate)
 
 
+class FetchBase:
+
+    root_dispatch: Dict[str, str] = {
+        'wwPDB': HTTP_WWPDB_FTP_URL,
+        'RCSB': HTTP_WWPDB_FTP_URL,
+        'EBI': HTTP_EBI_FTP_URL,
+        'PDBe': PDBE_URL,
+        'UNP_FTP': 'https://ftp.uniprot.org/',
+        'UNP': 'https://www.uniprot.org/',
+    }
+
+    def __init__(self, root: str, path: str, root_dispatch: bool = True):
+        if root_dispatch:
+            self.url: str = self.root_dispatch[root] + path
+        else:
+            self.url: str = self.root + path
+
+    @unsync
+    async def download(self, semaphore, path: Union[str, Path], rate: float = 1.5):
+        return await UnsyncFetch.fetch_file(semaphore, method='get', info=dict(url=self.url), path=path, rate=rate)
+
+
 class PDBArchive(object):
     '''
     Download files from PDB Archive
@@ -647,7 +662,9 @@ class PDBArchive(object):
     * wwPDB/RCSB: PDB_ARCHIVE_URL_WWPDB: str = 'https://ftp.wwpdb.org/pub/pdb/data/structures/'
     * EBI: PDB_ARCHIVE_URL_EBI: str = 'http://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/'
     '''
-    root = PDB_ARCHIVE_URL_EBI
+    pdbe_root = f'{HTTP_EBI_FTP_URL}pub/databases/pdb/data/structures/'
+    rcsb_root = f'{HTTP_WWPDB_FTP_URL}pub/pdb/data/structures/'
+    root = rcsb_root
     api_set = frozenset(f'{i}/{j}/' for i in ('obsolete', 'divided')
                         for j in ('mmCIF', 'pdb', 'XML'))
     file_dict = {
@@ -682,7 +699,7 @@ class PDBArchive(object):
         for pdb in pdbs:
             yield cls.task_unit(pdb, suffix, file_suffix, folder)
 
-    @classmethod
+    """@classmethod
     def retrieve(cls, pdbs, suffix: str, folder: Path, file_suffix: Optional[str] = None, concur_req: int = 20, rate: float = 1.5, ret_res: bool = True, **kwargs):
         res = UnsyncFetch.multi_tasks(
             cls.yieldTasks(pdbs, suffix, file_suffix, folder),
@@ -690,7 +707,7 @@ class PDBArchive(object):
             rate=rate,
             ret_res=ret_res,
             semaphore=kwargs.get('semaphore', None))
-        return res
+        return res"""
 
     @classmethod
     def single_retrieve(cls, pdb, suffix: str, folder: Path, semaphore, file_suffix: Optional[str] = None, rate: float = 1.5):
@@ -713,7 +730,7 @@ class PDBVersioned(PDBArchive):
         init_folder_from_suffix(Base.get_folder(), 'pdb-versioned/entries'), 
         Base.get_web_semaphore()).result()
     '''
-    root = PDB_ARCHIVE_VERSIONED_URL
+    root = 'http://ftp-versioned.wwpdb.org/pdb_versioned/data/'
     api_set = frozenset(('entries/', 'removed/'))
 
     @classmethod
@@ -725,8 +742,8 @@ class PDBVersioned(PDBArchive):
 
 
 class PDBeKBAnnotations(object):
-    ftp_root = f"{FTP_URL}pub/databases/pdbe-kb/annotations/"
-    https_root = ftp_root.replace('ftp:', 'https:')
+    ftp_root = f"{EBI_FTP_URL}pub/databases/pdbe-kb/annotations/"
+    https_root = f"{HTTP_EBI_FTP_URL}pub/databases/pdbe-kb/annotations/"
     root = https_root
     api_set = frozenset({
         '14-3-3-pred/', '3DComplex/',

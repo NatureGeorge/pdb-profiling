@@ -2,7 +2,7 @@
 # @Filename: setup.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2019-12-23 04:27:14 pm
+# @Last Modified: 2022-07-27 04:53:36 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
 from setuptools import setup, find_namespace_packages, Extension
 from Cython.Build import cythonize
@@ -14,7 +14,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.3.4',
+    version='0.3.6',
     include_package_data=True,
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
@@ -22,16 +22,18 @@ setup(
         'aioftp>=0.18.1',
         'aiohttp>=3.7.4',
         'aiofiles>=0.6.0',
-        'unsync>=1.2.1',
+        'unsync==1.2.1',
         'tenacity>=6.3.0',
         'orjson>=3.0.2',
         'pyexcel>=0.6.4',
         'pandas>=1.1.5',
         'numpy>=1.19.2',
         'textdistance>=4.2.0',
-        'databases[sqlite]>=0.4.3',
+        'databases[sqlite]==0.4.3',
         'rich>=9.5.0',
-        'orm>=0.1.5',
+        'orm==0.1.5',
+        'typesystem==0.2.5',
+        'sqlalchemy==1.3.13',
         'scikit-learn>=0.23.2',
         'python-slugify>=4.0.0',
         'cachetools>=4.1.0',
