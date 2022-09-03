@@ -2,9 +2,9 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-07-27 05:44:28 pm
+# @Last Modified: 2022-09-03 05:08:33 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-from typing import Union, Optional, Iterator, Iterable, Set, Dict, List, Any, Generator, Callable, Tuple
+from typing import Union, Optional, Iterable, Dict, List, Generator, Tuple
 from pathlib import Path
 from numpy import nan
 from pandas import DataFrame, Series
@@ -130,7 +130,7 @@ class ProteinsAPI(Abclog):
         if len(data) > 1:
             flag = []
             for idx in range(len(data)):
-                if '-' in data[idx]["accession"]:
+                if '-' not in data[idx]["accession"]:
                     flag.append(idx)
             if flag:
                 for idx in range(len(data)):
