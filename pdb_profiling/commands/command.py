@@ -2,7 +2,7 @@
 # @Filename: command.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-09-03 12:52:24 pm
+# @Last Modified: 2020-11-23 10:29:36 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling import default_config
 from pdb_profiling.commands import CustomDB
@@ -156,9 +156,6 @@ def check_muta_conflict(ctx, chunksize):
             return seq_dict[iso][pos-1]
         except IndexError:
             return 'X'
-        except TypeError as e:
-            print(str(iso), str(seq_dict))
-            raise e
 
     custom_db = ctx.obj['custom_db']
     root_query = """SELECT DISTINCT isoform, Pos FROM IDMapping, Mutation
