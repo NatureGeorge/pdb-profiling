@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-01-19 07:15:21 pm
+# @Last Modified: 2022-09-27 03:12:54 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -370,7 +370,7 @@ class PDB(Base):
     def get_id(self):
         return self.pdb_id
 
-    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, root='random', kwargs=dict(), **params):
+    def fetch_from_coordinateServer_api(self, api_suffix: str, then_func: Optional[Callable[[Unfuture], Unfuture]] = None, root='litemol', kwargs=dict(), **params):
         assert api_suffix in PDBeCoordinateServer.api_set, f"Invlaid API SUFFIX! Valid set:\n{PDBeCoordinateServer.api_set}"
         dparams = dumpsParams(params)
         task = self.tasks.get((repr(self), 'PDBeCoordinateServer', root, api_suffix, dparams, then_func), None)
@@ -1213,7 +1213,7 @@ class PDB(Base):
         assg_oper_df = await self.fetch_from_coordinateServer_api(
             'residues', 
             then_func=self.to_assg_oper_df,
-            root='ebi',
+            #root='ebi',
             asymId=struct_asym_id, 
             seqNumber=int(residue_number), 
             modelId=1)
@@ -1258,11 +1258,11 @@ class PDB(Base):
         if profile_id_df is not None:
             return profile_id_df
         
-        if choice((1, 1, 0)):
+        if choice((1, 0, 0, 0, 0)):
             assg_oper_df = await self.rd_source_ass_oper_df()
         else:
             demo_dict = await self.pipe_assg_data_collection()
-            assg_oper_df = await (choice((self.ms_source_ass_oper_df, self.cs_source_ass_oper_df))(**demo_dict))
+            assg_oper_df = await self.ms_source_ass_oper_df(**demo_dict)  # self.cs_source_ass_oper_df
         # assg_oper_df = await self.ms_source_ass_oper_df(**demo_dict)
         res2eec_df = await self.get_res2eec_df()
         focus_res2eec_df = res2eec_df[['pdb_id', 'entity_id', 'molecule_type', 'chain_id', 'struct_asym_id']]
@@ -3190,14 +3190,23 @@ class SIFTS(PDB):
         exp_df = exp_df.merge(
             DataFrame(tasks, columns=['pdb_id', 'revision_date', 'deposition_date', 'release_date']))
         assert r_len == exp_df.shape[0]
-
+        if self.entry_filter:
+            exp_df = exp_df.query(self.entry_filter)
+            if exp_df.shape[0] == 0:
+                return
+            cur_pdbs = exp_df.pdb_id.unique()
+            sifts_df = sifts_df[sifts_df.pdb_id.isin(cur_pdbs)]
         # tasks = await PDBs(cur_pdbs).fetch('stats_chain').run()
         # tasks = [await task for task in PDBs(cur_pdbs).fetch('stats_chain').tasks]
         pec_df, _ = await PDBs(cur_pdbs).stats_chain()
         # pec_df, _ = zip(*tasks)
         # pec_df = concat(pec_df, sort=False, ignore_index=True)
-
+        
         full_df = await self.pipe_score_base(sifts_df, pec_df)
+        if self.chain_filter:
+            full_df = full_df.query(self.chain_filter)
+            if full_df.shape[0] == 0:
+                return
 
         return full_df, exp_df
 
@@ -3208,9 +3217,7 @@ class SIFTS(PDB):
         full_df, exp_df = res
         if self.source == 'UniProt':
             m_df = full_df[~full_df.pdb_id.isin(exclude_pdbs)]
-            sele_df = merge(
-                m_df.query(self.chain_filter) if self.chain_filter else m_df,
-                exp_df.query(self.entry_filter) if self.entry_filter else exp_df)
+            sele_df = merge(m_df, exp_df)
         else:
             sele_df = merge(full_df, exp_df, how='left')
         if len(sele_df) == 0:

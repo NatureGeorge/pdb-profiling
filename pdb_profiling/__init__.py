@@ -2,9 +2,9 @@
 # @Filename: __init__.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-07-27 04:55:04 pm
+# @Last Modified: 2022-09-05 09:26:25 am
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
-__version__ = '0.3.6'
+__version__ = '0.3.8'
 
 
 def default_config(folder='./'):
