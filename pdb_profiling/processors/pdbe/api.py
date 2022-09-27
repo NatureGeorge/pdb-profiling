@@ -2,7 +2,7 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-02-11 04:22:22 pm
+# @Last Modified: 2022-09-14 09:01:12 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Tuple
 import orjson as json
@@ -606,7 +606,7 @@ class PDBeCoordinateServer(object):
                          'entities', 'full', 'het', 'ligandInteraction', 'residueRange',
                          'residues', 'sidechain', 'symmetryMates', 'trace', 'water'))
 
-    def __init__(self, root: str = 'random'):
+    def __init__(self, root: str = 'litemol'):
         if root == 'random':
             self.root = choice(self.roots)
         elif root == 'ebi':
