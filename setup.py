@@ -2,7 +2,7 @@
 # @Filename: setup.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-09-05 09:26:17 am
+# @Last Modified: 2023-03-22 08:34:21 pm
 # @Copyright (c) 2019 MinghuiGroup, Soochow University
 from setuptools import setup, find_namespace_packages, Extension
 from Cython.Build import cythonize
@@ -14,7 +14,7 @@ with open("README.md", "rt") as f:
 
 setup(
     name="pdb_profiling",
-    version='0.3.8',
+    version='0.3.9',
     include_package_data=True,
     packages=find_namespace_packages(),
     entry_points={'console_scripts': ['pdb_profiling=pdb_profiling.commands.command:Interface']},
@@ -43,7 +43,7 @@ setup(
     ext_modules=cythonize([
         Extension("pdb_profiling.cython.cyrange", ["pdb_profiling/cython/cyrange.pyx"]),
         Extension("pdb_profiling.cython.py_qcprot", ["pdb_profiling/cython/py_qcprot.pyx", "pdb_profiling/cython/qcprot.c"]),
-        ]),
+        ], compiler_directives={"language_level": "3"}),
     include_dirs=[numpy.get_include()],
     license="MIT",
     author_email="hydrozzf@qq.com",
@@ -53,7 +53,7 @@ setup(
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://github.com/NatureGeorge/pdb-profiling",
-    python_requires=">=3.7.*",
+    python_requires=">=3.7",
     classifiers=[
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.7",
