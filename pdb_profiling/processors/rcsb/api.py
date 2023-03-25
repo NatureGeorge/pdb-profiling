@@ -2,7 +2,7 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2020-12-24 01:28:34 pm
+# @Last Modified: 2023-03-25 12:18:49 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from pdb_profiling.fetcher.webfetch import UnsyncFetch
 from hashlib import sha1
@@ -16,7 +16,7 @@ class RCSBDataAPI(object):
     graphql_root = f'{root}graphql'
     headers = {'Connection': 'close', 'Content-Type': 'application/json;charset=UTF-8'}
     api_set = frozenset(('entry/', 'assembly/', 'polymer_entity/', 'branched_entity/', 'nonpolymer_entity/',
-                         'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/'))
+                         'polymer_entity_instance/', 'branched_entity_instance/', 'nonpolymer_entity_instance/', 'interface/'))
     # TODO: add <https://data.rcsb.org/redoc/index.html#tag/Repository-Holdings-Service>
 
     @classmethod

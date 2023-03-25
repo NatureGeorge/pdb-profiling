@@ -4,3 +4,9 @@
 *.pdb
 *.cif
 *.bcif
+dev_test/
+*.c
+*.so
+*.o
+dist/
+*egg-info/
