@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2023-03-25 07:17:09 pm
+# @Last Modified: 2023-03-25 08:08:25 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -18,7 +18,6 @@ from re import compile as re_compile
 import orjson as json
 from io import StringIO
 import zlib
-import numpy as np
 from bisect import bisect_left
 from collections import defaultdict, namedtuple, OrderedDict
 from itertools import product, combinations_with_replacement, combinations
@@ -1524,7 +1523,7 @@ class PDB(Base):
                 continue
             if chain_pairs is not None:
                 # NOTE: discard include_chains anyway
-                mask = np.array([(frozenset(item) in chain_pairs) for item in zip(interface_df.struct_asym_id_1,interface_df.struct_asym_id_2)])
+                mask = array([(frozenset(item) in chain_pairs) for item in zip(interface_df.struct_asym_id_1,interface_df.struct_asym_id_2)])
                 if mask.any():
                     interface_df_list.append(interface_df[mask])
             else:
@@ -1914,7 +1913,7 @@ class PDBAssembly(PDB):
 
             operator = json.dumps(interface_data["rcsb_interface_operator"]).decode("utf-8")
             
-            operator_arr = np.array(interface_data["rcsb_interface_operator"]).transpose(1,0,2)
+            operator_arr = array(interface_data["rcsb_interface_operator"]).transpose(1,0,2)
             for chain_1_operator, chain_2_operator in operator_arr:
                 chain_1_operator, chain_2_operator = json.dumps(chain_1_operator.tolist()).decode("utf-8"), json.dumps(chain_2_operator.tolist()).decode("utf-8")
                 chain_1_record = profile_df[profile_df.oper_expression.eq(chain_1_operator) & profile_df.struct_asym_id.eq(partner_1[0])]
@@ -3581,7 +3580,7 @@ class SIFTS(PDB):
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(lambda x: frozenset(frozenset(item) for item in combinations_with_replacement(x, 2)))
         
         #p_df = await self.pisa_interact_integrate_with_i3d(sele_df, chain_pairs, 'ho', run_as_completed, progress_bar, **kwargs)
-        p_df = await self.retrieve_rcsb_interface('ho', sele_df, chain_pairs, **kwargs)
+        p_df = await self.retrieve_rcsb_interface('ho', sele_df, chain_pairs=chain_pairs, **kwargs)
         if p_df is None:
             return None
         p_df['unp_range_DSC'] = p_df.apply(lambda x: sorensen.similarity(
@@ -3646,7 +3645,7 @@ class SIFTS(PDB):
         chain_pairs = sele_df.groupby('pdb_id').struct_asym_id.apply(lambda x: frozenset(frozenset(item) for item in combinations_with_replacement(x, 2)))
         
         #p_df = await self.pisa_interact_integrate_with_i3d(sele_df, chain_pairs, 'ho_iso', run_as_completed, progress_bar, **kwargs)
-        p_df = await self.retrieve_rcsb_interface('ho_iso', sele_df, chain_pairs, **kwargs)
+        p_df = await self.retrieve_rcsb_interface('ho_iso', sele_df, chain_pairs=chain_pairs, **kwargs)
         if p_df is None:
             return
         else:
@@ -3667,13 +3666,14 @@ class SIFTS(PDB):
             return self.select_ho_iso(self.sort_interact_cols(p_df), interface_mapped_cov_cutoff, DSC_cutoff)   
 
     @unsync
-    async def pipe_select_else_base(self, func:str, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
+    async def pipe_select_else_base(self, func:str = "Protein/NA", exclude_pdbs=frozenset(), skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
         assert func != 'pipe_protein_protein_interface'
         sele_df = await self.pipe_select_mo(exclude_pdbs=exclude_pdbs, skip_pdbs=skip_pdbs, select_mo_kwargs=select_mo_kwargs, skip_carbohydrate_polymer=skip_carbohydrate_polymer)
         if sele_df is None:
             return
         include_chains = sele_df.groupby('pdb_id').struct_asym_id.apply(frozenset)
-        return await self.pisa_interact_protein_else(sele_df, include_chains, func, run_as_completed, progress_bar, **kwargs)
+        #return await self.pisa_interact_protein_else(sele_df, include_chains, func, run_as_completed, progress_bar, **kwargs)
+        return await self.retrieve_rcsb_interface(func, sele_df, include_chains=include_chains, **kwargs)
 
     @unsync
     async def pipe_select_he_base(self, exclude_pdbs=frozenset(), run_as_completed:bool=False, progress_bar=None, skip_pdbs=None, select_mo_kwargs={}, skip_carbohydrate_polymer=False, **kwargs):
@@ -3687,7 +3687,7 @@ class SIFTS(PDB):
         chain_pairs = chain_pairs.apply(lambda x: frozenset(frozenset(item) for item in x))
         
         #p_df = await self.pisa_interact_integrate_with_i3d(sele_df, chain_pairs, 'he', run_as_completed, progress_bar, **kwargs)
-        p_df = await self.retrieve_rcsb_interface('he', sele_df, chain_pairs, **kwargs)
+        p_df = await self.retrieve_rcsb_interface('he', sele_df, chain_pairs=chain_pairs, **kwargs)
         if p_df is None:
             return
         else:
@@ -3921,21 +3921,38 @@ class SIFTS(PDB):
 
     @unsync
     async def retrieve_rcsb_interface(self, interaction_type, sele_df, chain_pairs=None, include_chains=None, **kwargs):
-        ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_info_for_rcsb', chain_pairs=chain_pairs, include_chains=include_chains, **kwargs)
+        if chain_pairs is not None:
+            ob = PDBs(chain_pairs.index).fetch('pipe_interface_res_info_for_rcsb', chain_pairs=chain_pairs, include_chains=include_chains, **kwargs)
+        else:
+            ob = PDBs(include_chains.index).fetch('pipe_interface_res_info_for_rcsb', chain_pairs=chain_pairs, include_chains=include_chains, **kwargs)
         interfaces_dfs = [await i for i in ob.tasks]
         interfaces_dfs = [i for i in interfaces_dfs if i is not None]
         if interfaces_dfs:
             interfaces_dfs = concat(interfaces_dfs, axis=0, ignore_index=True, sort=False)
             assert interfaces_dfs.shape[0] > 0
-            p_a_df = self.parallel_interact_df(sele_df, interfaces_dfs)
-            if interaction_type == 'ho':
-                assert len(p_a_df) > 0
-            elif interaction_type == 'ho_iso':
-                p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
-            elif interaction_type == 'he':
-                p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
+            if interaction_type in ("ho", "he", "ho_iso"):
+                p_a_df = self.parallel_interact_df(sele_df, interfaces_dfs)
+                if interaction_type == 'ho':
+                    assert len(p_a_df) > 0
+                elif interaction_type == 'ho_iso':
+                    p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.UniProt_1 != p_a_df.UniProt_2) & (p_a_df.struct_asym_id_in_assembly_1 != p_a_df.struct_asym_id_in_assembly_2)].reset_index(drop=True)
+                elif interaction_type == 'he':
+                    p_a_df = p_a_df[(p_a_df.UniProt_1.eq(self.get_id()) | p_a_df.UniProt_2.eq(self.get_id())) & (p_a_df.Entry_1 != p_a_df.Entry_2)].reset_index(drop=True)
             else:
-                raise ValueError(f"Invalid interaction_type: {interaction_type}!")
+                assert (chain_pairs is None) and (include_chains is not None)
+                interfaces_dfs = interfaces_dfs[interfaces_dfs.polymer_composition.eq(interaction_type)] # e.g. "Protein/NA"
+                if len(interfaces_dfs) == 0:
+                    return
+                
+                common_cols = ('pdb_id', 'revision_date', 'deposition_date', 'release_date', 'experimental_method', 'experimental_method_class', 'multi_method', '-r_factor', '-r_free','resolution', '1/resolution')
+                rename_dict = dict(zip((f'{i}_1' for i in common_cols), common_cols))
+                sele_df = sele_df.add_suffix('_1').rename(columns=rename_dict)
+                p_a_df = interfaces_dfs.merge(sele_df)
+                same_cols = interfaces_dfs.columns.intersection(sele_df.columns)
+                assert p_a_df.shape[0] > 0, f"{interfaces_dfs[same_cols]}\n{sele_df[same_cols]}"
+                p_a_df['unp_interface_range_1'] = p_a_df.apply(lambda x: to_interval(self.convert_index(x['new_unp_range_1'], x['new_pdb_range_1'], expand_interval(x['interface_range_1']))), axis=1)
+                p_a_df['id_score_1'] = list(map(self.get_id_score_for_assembly, zip(p_a_df.struct_asym_id_1, p_a_df.asym_id_rank_1, p_a_df.assembly_id)))
+
             if len(p_a_df) == 0:
                 return
             return p_a_df
