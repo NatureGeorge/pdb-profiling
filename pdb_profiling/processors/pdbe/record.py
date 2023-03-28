@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2023-03-25 08:08:25 pm
+# @Last Modified: 2023-03-28 03:45:06 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -1311,15 +1311,18 @@ class PDB(Base):
         profile_id_df['au_subset'] = False
         profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.isin(self.subset_assembly)].index, 'au_subset'] = True
 
-        # TODO: Check
-        ass_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
-        a_df = profile_id_df[['assembly_id', 'entity_id']].drop_duplicates().query('assembly_id != 0')
-        for assembly_id, entity_id in zip(a_df.assembly_id, a_df.entity_id):
-            profile_lyst = tuple(profile_id_df[profile_id_df.assembly_id.eq(assembly_id) & profile_id_df.entity_id.eq(entity_id)].struct_asym_id_in_assembly.sort_values().tolist())
-            ass_lyst = tuple(json.loads(ass_df.loc[(ass_df.assembly_id.eq(assembly_id)&ass_df.entity_id.eq(entity_id)).idxmax(), 'in_chains']))
-            assert profile_lyst == ass_lyst, f"\n{self.pdb_id}\n{assembly_id}\n{entity_id}\n{profile_lyst},\n{ass_lyst}"
-        profile_id_df = profile_id_df.merge(ass_df[['assembly_id', 'details']].drop_duplicates(), how='left')
+        # TODO: Check -> NOTE: PDBe's 'api/pdb/entry/assembly/' may contain outdated data (e.g. 2v5w)
+        #ass_df = await self.fetch_from_pdbe_api('api/pdb/entry/assembly/', Base.to_dataframe)
+        #a_df = profile_id_df[['assembly_id', 'entity_id']].drop_duplicates().query('assembly_id != 0')
+        #for assembly_id, entity_id in zip(a_df.assembly_id, a_df.entity_id):
+        #    profile_lyst = tuple(profile_id_df[profile_id_df.assembly_id.eq(assembly_id) & profile_id_df.entity_id.eq(entity_id)].struct_asym_id_in_assembly.sort_values().tolist())
+        #    ass_lyst = tuple(json.loads(ass_df.loc[(ass_df.assembly_id.eq(assembly_id)&ass_df.entity_id.eq(entity_id)).idxmax(), 'in_chains']))
+        #    if profile_lyst != ass_lyst:
+        #        warn(f"PDBe's 'api/pdb/entry/assembly/' contain outdated data: pdb_id={self.pdb_id}, assembly_id={assembly_id}, entity_id={entity_id}, RCSB={profile_lyst}, PDBe={ass_lyst}")
+        #profile_id_df = profile_id_df.merge(ass_df[['assembly_id', 'details']].drop_duplicates(), how='left')
+        profile_id_df['details'] = 'biological_assembly'
         profile_id_df.loc[profile_id_df[profile_id_df.assembly_id.eq(0)].index, 'details'] = 'asymmetric_unit'
+        
         await self.sqlite_api.async_insert(self.sqlite_api.profile_id, profile_id_df.to_dict('records'))
         self.register_task((repr(self), 'profile_id'), profile_id_df)
         return profile_id_df
