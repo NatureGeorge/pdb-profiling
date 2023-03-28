@@ -2,7 +2,7 @@
 # @Filename: api.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2022-09-14 09:01:12 pm
+# @Last Modified: 2023-03-28 08:49:24 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Union, Optional, Iterator, Iterable, Dict, List, Any, Generator, Tuple
 import orjson as json
@@ -569,7 +569,7 @@ class PDBeModelServer(object):
     rcsb_root = 'https://models.rcsb.org/v1/'
     root = rcsb_root
     headers = {'Connection': 'close', 'accept': 'text/plain', 'Content-Type': 'application/json'}
-    api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand'
+    api_set = frozenset(('atoms', 'residueInteraction', 'assembly', 'full', 'ligand',
                          'residueSurroundings', 'symmetryMates', 'query-many'))
 
     @classmethod

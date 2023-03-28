@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2023-03-28 03:45:06 pm
+# @Last Modified: 2023-03-28 09:11:23 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -3182,16 +3182,26 @@ class SIFTS(PDB):
     @unsync
     async def clostest_distance_sum(cls, pdb_id, struct_asym_id, residue_number, radius=5, modelId=1, d=10):
         try:
-            df = await PDB(pdb_id).fetch_from_coordinateServer_api(
-                'ambientResidues', then_func=PDB.cif2atom_sites_df,
-                asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+            #df = await PDB(pdb_id).fetch_from_coordinateServer_api(
+            #    'ambientResidues', then_func=PDB.cif2atom_sites_df,
+            #    asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+            df = await PDB(pdb_id).fetch_from_modelServer_api(
+                'residueSurroundings', method='get', then_func=PDB.cif2atom_sites_df, filename=f'.{modelId}.{struct_asym_id}.{residue_number}.{radius}',
+                label_asym_id=struct_asym_id, label_seq_id=residue_number, radius=radius, model_nums=modelId, copy_all_categories=False, encoding='cif'
+            )
         except TypeError:
             df = None
         if df is None:
             try:
-                df = await PDB(pdb_id).fetch_from_coordinateServer_api(
-                    'ambientResidues', then_func=PDB.cif2atom_sites_df, root='ebi',
-                    asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+                #df = await PDB(pdb_id).fetch_from_coordinateServer_api(
+                #    'ambientResidues', then_func=PDB.cif2atom_sites_df, root='ebi',
+                #    asymId=struct_asym_id, seqNumber=residue_number, radius=radius, atomSitesOnly=1, modelId=modelId)
+                PDBeModelServer.root = PDBeModelServer.pdbe_root
+                df = await PDB(pdb_id).fetch_from_modelServer_api(
+                    'residueSurroundings', method='get', then_func=PDB.cif2atom_sites_df, filename=f'.{modelId}.{struct_asym_id}.{residue_number}.{radius}',
+                    label_asym_id=struct_asym_id, label_seq_id=residue_number, radius=radius, model_nums=modelId, copy_all_categories=False, encoding='cif'
+                )
+                PDBeModelServer.root = PDBeModelServer.rcsb_root
             except TypeError:
                 raise AssertionError(f"{pdb_id} {struct_asym_id} {residue_number}")
         df = df[df['_atom_site.label_comp_id'].ne('HOH') & df['_atom_site.type_symbol'].ne('H')].reset_index(drop=True)
