@@ -2,7 +2,7 @@
 # @Filename: record.py
 # @Email:  1730416009@stu.suda.edu.cn
 # @Author: ZeFeng Zhu
-# @Last Modified: 2023-03-28 09:11:23 pm
+# @Last Modified: 2023-03-30 01:25:26 pm
 # @Copyright (c) 2020 MinghuiGroup, Soochow University
 from typing import Iterable, Iterator, Union, Callable, Optional, Hashable, Dict, Coroutine, List, Tuple
 from inspect import isawaitable
@@ -52,6 +52,9 @@ from pdb_profiling.warnings import (WithoutCifKeyWarning, PISAErrorWarning,
                                     PeptideLinkingWarning, MultiWrittenWarning, WithoutRCSBClusterMembershipWarning,
                                     PDBeKBResidueMappingErrorWarning)
 from pdb_profiling.ensure import aio_file_exists_stat
+from pdb_profiling.fetcher.webfetch import UnsyncFetch
+from pdb_profiling.utils import a_seq_parser
+import tempfile
 from pdb_profiling.cython.py_qcprot import rmsd
 from textdistance import sorensen
 from warnings import warn
@@ -2493,11 +2496,40 @@ class SIFTS(PDB):
             task = cls.UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)
             cls.register_task((identifier, 'UniProtFASTA.single_retrieve(identifier).then(a_seq_reader)'), task)
         return task
+
+    @classmethod
+    @unsync
+    async def robust_fetch_unp_fasta(cls, identifier):
+        try:
+            task = cls.fetch_unp_fasta(identifier)
+            header, unp_seq = await task
+        except (TypeError, AssertionError, RetryError) as e:
+            warn(f'{identifier}, {e}', PossibleObsoletedUniProtWarning)
+            unp_seq = ''
+        if unp_seq == '':
+            task = cls.tasks.get((identifier, 'robust_fetch_unp_fasta'), None)
+            if task is None:
+                @unsync
+                async def set_task():
+                    try:
+                        url = f'https://rest.uniprot.org/unisave/{identifier}?format=fasta'
+                        tmp_filepath = tempfile.NamedTemporaryFile().name
+                        #print(tmp_filepath)
+                        path = await UnsyncFetch.fetch_file(semaphore=await init_semaphore(2), method='get', info=dict(url=url), path=tmp_filepath, rate=1)
+                        async for header, unp_seq in a_seq_parser(path):
+                            break
+                    except Exception as e:
+                        warn(f'{identifier}, {e}; not be able to retrieve history seq', PossibleObsoletedUniProtWarning)
+                        header, unp_seq = '.', '.'
+                    return header, unp_seq
+                task = set_task()
+                cls.register_task((identifier, 'robust_fetch_unp_fasta'), task)
+        return await task
     
     @unsync
     async def get_sequence(self, **kwargs):
         if self.source == 'UniProt':
-            return (await SIFTS.fetch_unp_fasta(self.get_id()))[1]
+            return (await SIFTS.robust_fetch_unp_fasta(self.get_id()))[1]
         else:
             return await super().get_sequence(**kwargs)
 
@@ -2774,10 +2806,10 @@ class SIFTS(PDB):
     @unsync
     async def get_residue_conflict(cls, pdb_id, entity_id, pdb_range, Entry, UniProt, unp_range):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        try:
-            _, unp_seq = await cls.fetch_unp_fasta(UniProt)
-        except TypeError:
-            raise PossibleObsoletedUniProtError(UniProt)
+        _, unp_seq = await cls.robust_fetch_unp_fasta(UniProt)
+        if unp_seq == '.':
+            return ('{}', '{}', '[]', '[]', 1) 
+            
         indexes = tuple(get_diff_index(pdb_seq, pdb_range, unp_seq, unp_range))
         if len(indexes) > 0:
             pdb_diff_index, unp_diff_index = zip(*indexes)
@@ -3050,10 +3082,9 @@ class SIFTS(PDB):
     @unsync
     async def a_re_align(cls, range_diff, pdb_range, unp_range, pdb_id, entity_id, UniProt):
         pdb_seq = await PDB(pdb_id).get_sequence(entity_id=entity_id)
-        try:
-            _, unp_seq = await cls.fetch_unp_fasta(UniProt)
-        except TypeError:
-            raise PossibleObsoletedUniProtError(UniProt)
+        _, unp_seq = await cls.robust_fetch_unp_fasta(UniProt)
+        if unp_seq == '.':
+            unp_seq = pdb_seq
         pdb_range = json.loads(pdb_range) if isinstance(pdb_range, str) else pdb_range
         unp_range = json.loads(unp_range) if isinstance(unp_range, str) else unp_range
         return cls.re_alignment(range_diff, pdb_seq, pdb_range, unp_seq, unp_range, 
